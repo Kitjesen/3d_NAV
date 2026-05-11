@@ -2,7 +2,7 @@
 // Extracts command handling logic from ChatPanel.tsx and adds a
 // metadata table that powers the /-command dropdown (Claude-Code style).
 
-import type { SSEState } from '../types'
+import type { PlanPreviewResponse, SSEState } from '../types'
 import * as api from '../services/api'
 
 const NAV_STATE_ZH: Record<string, string> = {
@@ -66,6 +66,30 @@ export const SLASH_COMMANDS: SlashCommandSpec[] = [
 const HELP_TEXT =
   '可用指令：\n' +
   SLASH_COMMANDS.map(c => `${c.usage.padEnd(16)} — ${c.description}`).join('\n')
+
+function formatPlanSafetySummary(preview: PlanPreviewResponse | null | undefined): string {
+  if (!preview) return ''
+  const safety = preview.path_safety ?? {}
+  const planner = preview.selected_planner ?? preview.planner
+  const safetyOk = safety.ok === true ? 'ok' : safety.ok === false ? 'blocked' : ''
+  return [
+    planner ? `planner=${planner}` : null,
+    preview.plan_safety_policy ? `policy=${preview.plan_safety_policy}` : null,
+    safetyOk ? `safety=${safetyOk}` : null,
+    preview.fallback_reason ? `fallback=${preview.fallback_reason}` : null,
+    preview.rejected_plans?.length ? `rejected=${preview.rejected_plans.length}` : null,
+  ].filter((v): v is string => Boolean(v)).join(' | ')
+}
+
+function formatPlanPreviewFailure(
+  preview: PlanPreviewResponse | null | undefined,
+  reasons: string[] = [],
+  error?: string | null,
+): string {
+  const safety = formatPlanSafetySummary(preview)
+  const reason = reasons.slice(0, 3).join(' / ') || error || preview?.error || '目标预检未通过'
+  return safety ? `${reason} (${safety})` : reason
+}
 
 /**
  * Return commands whose name matches the user's current partial input.
@@ -140,7 +164,11 @@ export async function executeSlashCommand(raw: string, sseState: SSEState): Prom
         label: 'slash_go',
       })
       if (!candidate.ok || candidate.preview?.feasible === false) {
-        const reason = candidate.reasons.slice(0, 3).join(' / ') || candidate.error || '目标预检未通过'
+        const reason = formatPlanPreviewFailure(
+          candidate.preview,
+          candidate.reasons,
+          candidate.error,
+        )
         return `目标不可达：${reason}`
       }
       const res = await api.sendGoal(x, y, {
