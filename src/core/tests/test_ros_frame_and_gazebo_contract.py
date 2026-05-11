@@ -226,3 +226,41 @@ def test_tf_contract_smoke_is_read_only_and_checks_runtime_chain():
     assert "create_publisher" not in smoke
     assert '"/nav/cmd_vel"' not in smoke
     assert '"/nav/goal_pose"' not in smoke
+
+
+def test_sim_navigation_launch_can_reuse_native_chain_with_gazebo_odometry():
+    launch = _read("tests/planning/sim_navigation.launch.py")
+
+    assert "use_sim_robot" in launch
+    assert "use_terrain_passthrough" in launch
+    assert "IfCondition(use_sim_robot)" in launch
+    assert "IfCondition(use_terrain_passthrough)" in launch
+    assert "terrain_passthrough_node.py" in launch
+    assert "Gazebo-only: map_cloud -> terrain_map topics" in launch
+    assert "use_sim_robot_arg" in launch
+    assert "use_terrain_passthrough_arg" in launch
+
+
+def test_gazebo_nav_loop_gate_publishes_only_goal_and_checks_motion():
+    smoke = _read("tests/integration/gazebo_nav_loop_smoke.py")
+    gate = _read("sim/scripts/gazebo_runtime_gate.py")
+    passthrough = _read("tests/planning/terrain_passthrough_node.py")
+
+    assert '"lingtu.gazebo_nav_loop.v1"' in smoke
+    assert '"/nav/goal_pose"' in smoke
+    assert '"/nav/global_path"' in smoke
+    assert '"/nav/local_path"' in smoke
+    assert '"/nav/cmd_vel"' in smoke
+    assert '"/nav/odometry"' in smoke
+    assert "cmd_vel_sent_to_hardware" in smoke
+    assert "goal_pub.publish(goal)" in smoke
+    assert "create_publisher(PoseStamped, \"/nav/goal_pose\"" in smoke
+    assert "create_publisher(Twist" not in smoke
+    assert "--check-nav-loop" in gate
+    assert "use_sim_robot:=false" in gate
+    assert "use_terrain_passthrough:=true" in gate
+    assert "gazebo_nav_loop_smoke.py" in gate
+    assert "nav_loop" in gate
+    assert '"/nav/map_cloud"' in passthrough
+    assert '"/nav/terrain_map"' in passthrough
+    assert '"/nav/terrain_map_ext"' in passthrough

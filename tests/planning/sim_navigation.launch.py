@@ -31,6 +31,7 @@ import sys
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -88,6 +89,16 @@ def generate_launch_description():
     # 可选: 建筑 PCD 可视化 + 场景名称
     pcd_path_arg   = DeclareLaunchArgument('pcd_path',   default_value='', description='建筑 PCD 路径 (可视化用)')
     scene_name_arg = DeclareLaunchArgument('scene_name', default_value='Building2_9', description='场景名称')
+    use_sim_robot_arg = DeclareLaunchArgument(
+        'use_sim_robot',
+        default_value='true',
+        description='Start sim_robot_node. Set false when Gazebo supplies odometry/clouds.',
+    )
+    use_terrain_passthrough_arg = DeclareLaunchArgument(
+        'use_terrain_passthrough',
+        default_value='false',
+        description='Copy /nav/map_cloud to terrain topics for Gazebo navigation gates.',
+    )
 
     map_path   = LaunchConfiguration('map_path')
     goal_x     = LaunchConfiguration('goal_x')
@@ -102,6 +113,8 @@ def generate_launch_description():
     pcd_path       = LaunchConfiguration('pcd_path')
     scene_name     = LaunchConfiguration('scene_name')
     tomogram_ground_h = LaunchConfiguration('tomogram_ground_h')
+    use_sim_robot = LaunchConfiguration('use_sim_robot')
+    use_terrain_passthrough = LaunchConfiguration('use_terrain_passthrough')
 
     # ── global_planner.py (真实 ele_planner.so C++ 规划器, 与 RViz demo 同一套) ─
     pct_share          = get_package_share_directory('pct_planner')
@@ -311,6 +324,7 @@ def generate_launch_description():
     sim_robot = ExecuteProcess(
         cmd=['python3', sim_script],
         output='screen',
+        condition=IfCondition(use_sim_robot),
         # 通过环境变量传入 launch 参数 (LaunchConfiguration 支持 Substitution)
         additional_env={
             'SIM_GOAL_X':       goal_x,
@@ -346,6 +360,17 @@ def generate_launch_description():
         name='robot_state_publisher',
         output='screen',
         parameters=[{'robot_description': _robot_description}],
+        condition=IfCondition(use_sim_robot),
+    )
+
+    terrain_passthrough_script = os.path.join(
+        os.path.dirname(__file__), 'terrain_passthrough_node.py'
+    )
+    terrain_passthrough = ExecuteProcess(
+        cmd=['python3', terrain_passthrough_script],
+        output='screen',
+        condition=IfCondition(use_terrain_passthrough),
+        additional_env={'PYTHONUNBUFFERED': '1'},
     )
 
     # ── foxglove_bridge (备用 Web 可视化: ws://robot_ip:8765) ────────────────
@@ -389,6 +414,7 @@ def generate_launch_description():
     nodes = [
         clear_latch,            # 先清残留 latch
         sim_robot,              # 提供 odometry + terrain + /robot_description
+        terrain_passthrough,    # Gazebo-only: map_cloud -> terrain_map topics
         robot_state_pub_node,   # URDF TF (base_link → wheels)
         # 全局规划器延迟 2s 启动, 确保 sim_robot_node 先发布 TF
         TimerAction(period=2.0, actions=[global_planner_proc]),
@@ -404,5 +430,6 @@ def generate_launch_description():
         map_path_arg, goal_x_arg, goal_y_arg, goal_z_arg, start_x_arg, start_y_arg,
         map_x_min_arg, map_x_max_arg, map_y_min_arg, map_y_max_arg,
         tomo_gh_arg, pcd_path_arg, scene_name_arg,
+        use_sim_robot_arg, use_terrain_passthrough_arg,
         *nodes,
     ])
