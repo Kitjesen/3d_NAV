@@ -49,6 +49,9 @@ def test_p0_scripts_use_current_gateway_contracts():
     mapping = (REPO_ROOT / "docs/07-testing/p0_mapping.sh").read_text(
         encoding="utf-8"
     )
+    explore = (REPO_ROOT / "docs/07-testing/p0_explore.sh").read_text(
+        encoding="utf-8"
+    )
 
     assert "/api/v1/navigation/status" in goto
     assert "/api/v1/nav/status" not in goto
@@ -70,6 +73,12 @@ def test_p0_scripts_use_current_gateway_contracts():
     assert "NAV_MAP_DIR" in mapping
     assert "~/data/nova/maps" in mapping
     assert "data/inovxio/data/maps" not in mapping
+
+    assert "/api/v1/explore/status" in explore
+    assert "/api/v1/explore/start" in explore
+    assert "/api/v1/explore/stop" in explore
+    assert "explore or tare_explore" in explore
+    assert "exploring=true" in explore
 
 
 def test_l2_hook_runs_stub_build_and_offline_start_smoke():
@@ -99,6 +108,7 @@ def test_p0_field_runbook_matches_script_contracts():
         REPO_ROOT / "docs/07-testing/p0_all.sh",
         REPO_ROOT / "docs/07-testing/p0_cold_boot.sh",
         REPO_ROOT / "docs/07-testing/p0_estop.sh",
+        REPO_ROOT / "docs/07-testing/p0_explore.sh",
         REPO_ROOT / "docs/07-testing/p0_goto.sh",
         REPO_ROOT / "docs/07-testing/p0_mapping.sh",
     ]
@@ -106,6 +116,8 @@ def test_p0_field_runbook_matches_script_contracts():
     assert "/api/v1/navigation/status" in readme
     assert "POST /api/v1/stop" in readme
     assert "/api/v1/state" in readme
+    assert "/api/v1/explore/status" in readme
+    assert "LINGTU_P0_RUN_EXPLORE=1" in readme
     assert "CmdVelMux` outputs `Twist.zero()`" not in readme
     assert "watchdog log entry" not in readme
 

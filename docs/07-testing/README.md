@@ -111,6 +111,7 @@ Each P0 script is self-contained, uses `set -e`, and writes its log to `~/data/n
 | `p0_mapping.sh` | Map -> save -> activate | Walk the robot for ~3 min | MapManager `/api/v1/maps` save and `set_active` succeed; `map.pcd` + `tomogram.pickle` + `occupancy.npz` + `map.pgm` / `map.yaml` are produced |
 | `p0_goto.sh` | Point goal -> arrive | Pre-loaded active map | `/api/v1/navigation/status` reports `state="SUCCESS"` |
 | `p0_estop.sh` | Gateway stop reflex | Operator starts non-zero robot motion, then presses Enter in the script | `POST /api/v1/stop` succeeds and `/api/v1/state` reports navigation speed below `0.01 m/s` for 3 consecutive ticks within 2 seconds |
+| `p0_explore.sh` | Exploration start/stop | `explore` or `tare_explore` profile in a safe open area | `/api/v1/explore/status` is ready, `/api/v1/explore/start` reports active exploration, and `/api/v1/explore/stop` leaves `exploring=false` |
 
 ### Run on Sunrise (S100P)
 
@@ -119,6 +120,17 @@ ssh sunrise@192.168.66.190
 cd ~/data/SLAM/navigation
 git pull --ff-only origin main
 bash docs/07-testing/p0_all.sh | tee ~/data/nav_logs/$(date +%Y%m%d_%H%M%S)_p0_all.log
+```
+
+Exploration is opt-in for the aggregate script because it requires a dedicated
+runtime profile and an open test area:
+
+```bash
+python lingtu.py explore --daemon   # or start the systemd unit with explore/tare_explore
+bash docs/07-testing/p0_explore.sh 30
+
+LINGTU_P0_RUN_EXPLORE=1 LINGTU_P0_EXPLORE_DURATION=30 \
+  bash docs/07-testing/p0_all.sh
 ```
 
 After the run:
