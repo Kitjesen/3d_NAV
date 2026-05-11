@@ -34,6 +34,9 @@ def test_server_setup_runs_multifloor_closure_without_robot_motion():
     assert "artifacts/server_sim_closure/multifloor_exploration/report.json" in script
     assert "cmd_vel" in script
     assert "physical hardware" in script
+    assert 'if [[ "${RUN_PCT}" == "1" ]]; then\n    log "PCT runtime inspection"' in script
+    assert 'focused_tests=(\n    src/core/tests/test_gateway_commands.py' in script
+    assert 'focused_tests+=(src/core/tests/test_pct_runnable_runtime.py)' in script
 
 
 def test_p0_scripts_use_current_gateway_contracts():

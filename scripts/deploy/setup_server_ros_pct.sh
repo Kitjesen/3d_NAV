@@ -301,19 +301,23 @@ run_verification() {
   # verification lane plugin-clean unless the caller opts out explicitly.
   export PYTEST_DISABLE_PLUGIN_AUTOLOAD="${PYTEST_DISABLE_PLUGIN_AUTOLOAD:-1}"
 
-  log "PCT runtime inspection"
-  python3 - <<'PY'
+  if [[ "${RUN_PCT}" == "1" ]]; then
+    log "PCT runtime inspection"
+    python3 - <<'PY'
 from global_planning.PCT_planner_runnable.runtime import inspect_pct_runtime
 import json
 print(json.dumps(inspect_pct_runtime(), indent=2, ensure_ascii=False))
 PY
+  fi
 
   log "focused API/runtime tests"
   local focused_tests=(
-    src/core/tests/test_pct_runnable_runtime.py
     src/core/tests/test_gateway_commands.py
     src/core/tests/test_gateway_route_split.py
   )
+  if [[ "${RUN_PCT}" == "1" ]]; then
+    focused_tests+=(src/core/tests/test_pct_runnable_runtime.py)
+  fi
   if [[ "${RUN_MUJOCO}" == "1" ]]; then
     focused_tests+=(src/core/tests/test_sim_runtime_compat.py)
   fi
