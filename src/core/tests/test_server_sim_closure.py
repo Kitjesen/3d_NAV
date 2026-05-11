@@ -95,6 +95,42 @@ def test_gateway_goal_dry_run_gate_publishes_goal_without_cmd_vel():
     assert report["published"]["cmd_vel"] == 0
 
 
+def test_routecheck_preflight_gate_writes_non_motion_summary(tmp_path: Path):
+    pytest.importorskip("fastapi")
+    from sim.scripts.routecheck_preflight_gate import run_gate
+
+    summary_path = tmp_path / "routecheck" / "summary.json"
+    report = run_gate(
+        map_name="pytest_map",
+        x=1.2,
+        y=-0.4,
+        yaw=0.1,
+        planner="pct",
+        json_out=summary_path,
+        client_id="pytest",
+    )
+
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(report), encoding="utf-8")
+    ok, blockers, evidence = server_sim_closure._eval_routecheck_preflight(report)
+
+    assert ok is True
+    assert blockers == []
+    assert report["mode"] == "routecheck_non_motion"
+    assert report["outcome"] == "pass"
+    assert report["exit_status"] == 0
+    assert report["non_motion"] is True
+    assert report["simulation_only"] is True
+    assert report["real_robot_motion"] is False
+    assert report["cmd_vel_sent_to_hardware"] is False
+    assert report["published"] == {"goal_pose": 0, "cmd_vel": 0, "stop_cmd": 0}
+    assert report["phases"]["baseline"]["feasible"] is True
+    assert report["phases"]["candidate"]["feasible"] is True
+    assert evidence["phases"]["baseline"]["selected_planner"] == "pct"
+    assert Path(report["artifacts"]["baseline_files"]["plan"]).exists()
+    assert Path(report["artifacts"]["candidate_files"]["plan_summary"]).exists()
+
+
 def test_server_sim_closure_finds_default_large_terrain_report_path():
     spec = next(item for item in server_sim_closure.GATES if item.name == "large_terrain")
 
@@ -137,9 +173,10 @@ def test_server_sim_closure_saved_map_relocalize_command_uses_contract_gate():
 def test_server_sim_closure_routecheck_command_is_non_motion_preflight():
     spec = next(item for item in server_sim_closure.GATES if item.name == "routecheck_preflight")
 
-    assert "scripts/lingtu routecheck" in spec.command
-    assert "--artifact-dir artifacts/server_sim_closure/routecheck" in spec.command
-    assert "goal" in spec.command.lower()
+    assert "sim/scripts/routecheck_preflight_gate.py" in spec.command
+    assert "scripts/lingtu routecheck" not in spec.command
+    assert "--json-out artifacts/server_sim_closure/routecheck/summary.json" in spec.command
+    assert "--strict" in spec.command
 
 
 def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):

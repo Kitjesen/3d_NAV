@@ -632,14 +632,15 @@ GATES: tuple[GateSpec, ...] = (
     ),
     GateSpec(
         "routecheck_preflight",
-        "Robot-side non-motion route preflight comparing baseline and candidate SLAM planning",
+        "Gateway non-motion route preflight comparing baseline and candidate planning",
         (
             "artifacts/server_sim_closure/routecheck/summary.json",
             "artifacts/super_lio_route_preflight_*/summary.json",
             "artifacts/routecheck*/summary.json",
         ),
-        "bash scripts/lingtu routecheck --map <saved-map> --goal X Y YAW "
-        "--artifact-dir artifacts/server_sim_closure/routecheck",
+        "PYTHONPATH=src:. python3 sim/scripts/routecheck_preflight_gate.py "
+        "--map server_sim_demo --goal-x 1.0 --goal-y 0.0 --goal-yaw 0.0 "
+        "--json-out artifacts/server_sim_closure/routecheck/summary.json --strict",
         _eval_routecheck_preflight,
     ),
     GateSpec(
