@@ -102,6 +102,116 @@ def _command_snapshot(gw: Any) -> dict[str, Any]:
     }
 
 
+def _load_topic_contract() -> dict[str, Any]:
+    from nav.services.nav_services.yaml_helpers import load_yaml
+
+    path = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / "config"
+        / "topic_contract.yaml"
+    )
+    data = load_yaml(path, default={})
+    if not isinstance(data, dict):
+        data = {}
+    return {
+        "path": str(path),
+        "exists": path.is_file(),
+        "data": data,
+    }
+
+
+def _first_path_frame(path: Any) -> str | None:
+    if not path:
+        return None
+    first = path[0]
+    if isinstance(first, dict):
+        frame = first.get("frame_id") or first.get("frame")
+        if frame:
+            return str(frame)
+        header = first.get("header")
+        if isinstance(header, dict):
+            frame = header.get("frame_id") or header.get("frame")
+            if frame:
+                return str(frame)
+    return None
+
+
+def _frame_contract_snapshot(gw: Any) -> dict[str, Any]:
+    from gateway.services.runtime_status import build_navigation_status
+
+    contract = _load_topic_contract()
+    contract_data = contract["data"]
+    tf_contract = contract_data.get("tf", {}) if isinstance(contract_data, dict) else {}
+    if not isinstance(tf_contract, dict):
+        tf_contract = {}
+
+    nav_status = build_navigation_status(gw)
+    frames = nav_status.get("frames", {})
+    if not isinstance(frames, dict):
+        frames = {}
+
+    with gw._state_lock:
+        odom = dict(gw._odom) if isinstance(gw._odom, dict) else gw._odom
+        mission = dict(gw._mission) if isinstance(gw._mission, dict) else gw._mission
+        localization = (
+            dict(gw._localization_status)
+            if isinstance(gw._localization_status, dict)
+            else gw._localization_status
+        )
+        path = list(gw._last_path or [])
+
+    links = tf_contract.get("links", {})
+    if not isinstance(links, dict):
+        links = {}
+
+    return {
+        "schema_version": 1,
+        "contract": contract,
+        "expected": {
+            "map_frame": tf_contract.get("map_frame", "map"),
+            "odom_frame": tf_contract.get("odom_frame", "odom"),
+            "body_frame": tf_contract.get("body_frame", "body"),
+            "links": links,
+        },
+        "observed": {
+            "odometry_frame_id": (
+                odom.get("frame_id") if isinstance(odom, dict) else None
+            ),
+            "odometry_child_frame_id": (
+                odom.get("child_frame_id") if isinstance(odom, dict) else None
+            ),
+            "mission_frame_id": (
+                mission.get("frame_id") if isinstance(mission, dict) else None
+            ),
+            "mission_planning_frame_id": (
+                mission.get("planning_frame_id")
+                if isinstance(mission, dict)
+                else None
+            ),
+            "mission_odom_frame_id": (
+                mission.get("odom_frame_id") if isinstance(mission, dict) else None
+            ),
+            "path_frame_id": _first_path_frame(path),
+            "path_point_count": len(path),
+            "has_map_odom_tf": bool(getattr(gw, "_has_map_odom_tf", False)),
+            "localization_backend": (
+                localization.get("backend")
+                if isinstance(localization, dict)
+                else None
+            ),
+            "localization_state": (
+                localization.get("state")
+                if isinstance(localization, dict)
+                else None
+            ),
+        },
+        "navigation_frames": frames,
+        "mismatches": frames.get("mismatches", []),
+        "ok": bool(frames.get("ok", True)),
+        "ts": time.time(),
+    }
+
+
 def _build_app_web_snapshots(gw: Any) -> dict[str, dict[str, Any]]:
     from gateway.services.app_bootstrap import (
         build_app_bootstrap,
@@ -175,6 +285,10 @@ def _build_app_web_snapshots(gw: Any) -> dict[str, dict[str, Any]]:
         ),
         "maps": _snapshot_or_error("maps", lambda: _maps_snapshot(gw)),
         "commands": _snapshot_or_error("commands", lambda: _command_snapshot(gw)),
+        "frame_contract": _snapshot_or_error(
+            "frame_contract",
+            lambda: _frame_contract_snapshot(gw),
+        ),
     }
 
 

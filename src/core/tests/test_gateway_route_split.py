@@ -292,6 +292,7 @@ def test_diagnostic_routes_export_tarball(monkeypatch):
             assert "diag/app_web/session.json" in names
             assert "diag/app_web/maps.json" in names
             assert "diag/app_web/commands.json" in names
+            assert "diag/app_web/frame_contract.json" in names
             modules_file = tar.extractfile("diag/modules.json")
             assert modules_file is not None
             modules = json.loads(modules_file.read().decode("utf-8"))
@@ -330,6 +331,7 @@ def test_diagnostic_app_web_snapshots_cover_client_startup_surfaces():
         "session",
         "maps",
         "commands",
+        "frame_contract",
     }
 
     assert expected <= set(snapshots)
@@ -353,6 +355,38 @@ def test_diagnostic_app_web_snapshots_cover_client_startup_surfaces():
     assert snapshots["maps"]["ok"] is True
     assert snapshots["commands"]["ok"] is True
     assert snapshots["commands"]["data"]["idempotency_supported"] is True
+    assert snapshots["frame_contract"]["ok"] is True
+    frame_contract = snapshots["frame_contract"]["data"]
+    assert frame_contract["contract"]["exists"] is True
+    assert frame_contract["expected"]["map_frame"] == "map"
+    assert frame_contract["expected"]["odom_frame"] == "odom"
+    assert frame_contract["expected"]["body_frame"] == "body"
+    assert frame_contract["navigation_frames"]["planning_frame_id"] == "map"
+
+
+def test_diagnostic_frame_contract_reports_navigation_mismatches():
+    from gateway.gateway_module import GatewayModule
+    from gateway.routes.diagnostics import _frame_contract_snapshot
+
+    gateway = GatewayModule()
+    gateway.setup()
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0, "y": 0.0, "frame_id": "odom"}
+        gateway._mission = {
+            "state": "EXECUTING",
+            "planning_frame_id": "map",
+            "goal_frame_id": "map",
+        }
+
+    snapshot = _frame_contract_snapshot(gateway)
+
+    assert snapshot["ok"] is False
+    assert snapshot["expected"]["map_frame"] == "map"
+    assert {
+        "source": "odometry",
+        "expected_frame": "map",
+        "received_frame": "odom",
+    } in snapshot["mismatches"]
 
 
 def test_gateway_module_builds_split_routes_once():
