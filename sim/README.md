@@ -197,6 +197,9 @@ own; run the command shown in each failed gate before treating the closure as
 complete. A passing full summary must report `ok=true`,
 `simulation_only=true`, `real_robot_motion=false`,
 `cmd_vel_sent_to_hardware=false`, and `missing_or_failed=[]`.
+When `--required` names only a subset, non-required failures are reported in
+`optional_missing_or_failed` and `optional_gaps`; do not treat those as full
+closure evidence.
 
 Current full closure gates:
 

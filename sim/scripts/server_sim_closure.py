@@ -737,6 +737,11 @@ def summarize(*, report_overrides: dict[str, Path], required: set[str]) -> dict[
         for name in sorted(required_names)
         if not bool((gates.get(name) or {}).get("ok"))
     ]
+    optional_missing_or_failed = [
+        name
+        for name in sorted(set(gates) - required_names)
+        if not bool((gates.get(name) or {}).get("ok"))
+    ]
     verified = {name: bool(item.get("ok")) for name, item in gates.items()}
     return {
         "schema_version": "lingtu.server_sim_closure.v1",
@@ -748,10 +753,15 @@ def summarize(*, report_overrides: dict[str, Path], required: set[str]) -> dict[
         "required": sorted(required_names),
         "verified": verified,
         "missing_or_failed": missing_or_failed,
+        "optional_missing_or_failed": optional_missing_or_failed,
         "gates": gates,
         "remaining_gaps": [
             f"{name}: {', '.join((gates.get(name) or {}).get('blockers') or ['not verified'])}"
             for name in missing_or_failed
+        ],
+        "optional_gaps": [
+            f"{name}: {', '.join((gates.get(name) or {}).get('blockers') or ['not verified'])}"
+            for name in optional_missing_or_failed
         ],
     }
 

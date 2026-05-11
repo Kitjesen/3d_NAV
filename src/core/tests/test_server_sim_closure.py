@@ -526,6 +526,43 @@ def test_server_sim_closure_reports_remaining_gaps(tmp_path: Path):
     assert any("missing_fastlio.json" in gap for gap in summary["remaining_gaps"])
 
 
+def test_server_sim_closure_separates_optional_gaps(tmp_path: Path, monkeypatch):
+    large = _write_json(
+        tmp_path / "large.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "cases": [
+                {
+                    "route": "terrain_long",
+                    "path_safety": {"ok": True},
+                    "planning": [
+                        {
+                            "planner": "pct",
+                            "native_backend_used": True,
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(server_sim_closure, "ROOT", tmp_path)
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"large_terrain": large},
+        required={"large_terrain"},
+    )
+
+    assert summary["ok"] is True
+    assert summary["missing_or_failed"] == []
+    assert summary["remaining_gaps"] == []
+    assert "large_terrain" not in summary["optional_missing_or_failed"]
+    assert "routecheck_preflight" in summary["optional_missing_or_failed"]
+    assert any("routecheck_preflight" in gap for gap in summary["optional_gaps"])
+
+
 def test_server_sim_closure_rejects_weak_dynamic_obstacle_report(tmp_path: Path):
     weak = _write_json(
         tmp_path / "dynamic_weak.json",

@@ -55,8 +55,12 @@ PYTHONPATH=src:. python sim/scripts/server_sim_closure.py \
 ```
 
 The summary is an aggregator. If it reports `missing_or_failed`, run the
-command printed for each failed gate, then rerun the summary. The current full
-gate set covers:
+command printed for each failed gate, then rerun the summary.
+When a command uses `--required` to validate only a subset, non-required
+failures appear as `optional_missing_or_failed`; that output is useful setup
+evidence but not a full closure pass.
+
+The current full gate set covers:
 
 - multi-floor exploration, LiDAR localization contract, native PCT, local planning, and nav_core tracking;
 - large-terrain global planning and path-safety checks;
