@@ -870,6 +870,14 @@ class MapLifecycleResponse(GatewayResponseModel):
     old_name: str | None = None
     new_name: str | None = None
     path: str | None = None
+    map_dir: str | None = None
+    pcd: str | None = None
+    tomogram: str | None = None
+    tomogram_ok: bool | None = None
+    tomogram_message: str | None = None
+    occupancy: str | None = None
+    occupancy_ok: bool | None = None
+    occupancy_message: str | None = None
     size: str | None = None
     restored_size: int | None = None
     replaced_backups_kept: int | None = None

@@ -294,6 +294,41 @@ class TestMapManagerModule(unittest.TestCase):
         "gateway.gateway_module._apply_dynamic_filter_step1half",
         return_value=None,
     )
+    def test_map_save_localizer_requires_navigation_tomogram(
+        self,
+        _filter,
+        run,
+    ):
+        run.return_value = MagicMock(returncode=0, stderr="")
+
+        with patch.object(
+            self.mod,
+            "_build_tomogram",
+            return_value={
+                "success": False,
+                "message": "tomogram source has no occupied structure",
+            },
+        ):
+            with patch.object(self.mod, "_build_occupancy_snapshot") as occupancy:
+                resp = self.mod._map_save(
+                    "bad_nav_map",
+                    slam_profile="localizer",
+                )
+
+        self.assertFalse(resp["success"], resp)
+        self.assertEqual(resp["slam_profile"], "localizer")
+        self.assertTrue(resp["map_save_supported"])
+        self.assertEqual(resp["map_save_source"], "slam_service")
+        self.assertFalse(resp["tomogram_ok"])
+        self.assertIn("not ready for navigation", resp["message"])
+        self.assertIn("tomogram source", resp["tomogram_message"])
+        occupancy.assert_not_called()
+
+    @patch("subprocess.run")
+    @patch(
+        "gateway.gateway_module._apply_dynamic_filter_step1half",
+        return_value=None,
+    )
     def test_simulation_only_map_save_closes_active_artifact_loop(
         self,
         _filter,
