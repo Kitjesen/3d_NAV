@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P0-02: 建图 → 保存 → 激活 → 定位
+# P0-02: map -> save -> activate -> localize.
 #
 # Interactive: requires a human walking the robot around for ~3 minutes.
 # Pre-condition: LingTu already running (map profile or fastlio2 profile).
@@ -16,13 +16,13 @@ mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$(date +%Y%m%d_%H%M%S)_p0_mapping.log"
 exec > >(tee -a "$LOG") 2>&1
 
-echo "=== P0-02 Mapping — $(date) — map=$MAP_NAME ==="
+echo "=== P0-02 Mapping - $(date) - map=$MAP_NAME ==="
 
 # 1. Sanity: is SLAM running?
-echo "[1/6] Sanity check — Gateway + SLAM responsive ..."
+echo "[1/6] Sanity check - Gateway + SLAM responsive ..."
 SLAM_HZ="$(curl -sf http://localhost:5050/api/v1/health | python3 -c 'import json,sys; print(json.load(sys.stdin).get("slam_hz", 0))')"
 if [[ "$(python3 -c "print($SLAM_HZ > 0.5)")" != "True" ]]; then
-  echo "FAIL: SLAM rate $SLAM_HZ Hz — is fastlio2 profile running?"
+  echo "FAIL: SLAM rate $SLAM_HZ Hz - is fastlio2 profile running?"
   exit 2
 fi
 echo "  SLAM Hz = $SLAM_HZ"
@@ -52,9 +52,9 @@ echo "[4/6] Verifying artifacts at $MAP_DIR"
 for f in map.pcd tomogram.pickle occupancy.npz map.pgm map.yaml; do
   if [[ -f "$MAP_DIR/$f" ]]; then
     SZ=$(stat -c%s "$MAP_DIR/$f")
-    echo "  ✓ $f  ($SZ bytes)"
+    echo "  OK $f  ($SZ bytes)"
   else
-    echo "  ✗ $f  MISSING"
+    echo "  MISSING $f"
     exit 4
   fi
 done
@@ -71,9 +71,9 @@ if [[ "$(readlink "$ACTIVE_LINK")" != *"$MAP_NAME"* ]]; then
   exit 5
 fi
 
-# 6. Done — localizer profile switch is manual (reboot systemd unit)
+# 6. Done - localizer profile switch is manual (reboot systemd unit)
 echo ""
-echo "=== PASS — map '$MAP_NAME' saved + activated ==="
+echo "=== PASS - map '$MAP_NAME' saved + activated ==="
 echo "Next:"
 echo "  sudo systemctl stop lingtu"
 echo "  sudo systemctl edit lingtu --full  # switch profile=s100p (localizer)"

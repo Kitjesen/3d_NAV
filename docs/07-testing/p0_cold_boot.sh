@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P0-01: S100P 冷启动 — 20+ modules OK, Gateway stable 3 minutes.
+# P0-01: S100P cold boot - 20+ modules OK, Gateway stable 3 minutes.
 #
 # Run on sunrise (not local dev):
 #   ssh sunrise@192.168.66.190
@@ -13,7 +13,7 @@ mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$(date +%Y%m%d_%H%M%S)_p0_cold_boot.log"
 exec > >(tee -a "$LOG") 2>&1
 
-echo "=== P0-01 Cold Boot — $(date) ==="
+echo "=== P0-01 Cold Boot - $(date) ==="
 
 # 1. Ensure service is down first, then launch fresh
 echo "[1/5] Stopping any running LingTu ..."
@@ -36,13 +36,13 @@ while ! curl -sf http://localhost:5050/api/v1/health > /dev/null; do
   sleep 2
 done
 
-# 4. Assert ≥20 modules ok
+# 4. Assert 20+ modules ok
 HEALTH_JSON="$(curl -s http://localhost:5050/api/v1/health)"
 MODULES_OK="$(echo "$HEALTH_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["modules_ok"])')"
 MODULES_FAIL="$(echo "$HEALTH_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["modules_fail"])')"
 echo "[4/5] modules_ok=$MODULES_OK  modules_fail=$MODULES_FAIL"
 if [[ "$MODULES_OK" -lt 20 ]]; then
-  echo "FAIL: only $MODULES_OK modules up (need ≥20)"
+  echo "FAIL: only $MODULES_OK modules up (need 20+)"
   exit 3
 fi
 if [[ "$MODULES_FAIL" -gt 0 ]]; then
@@ -51,7 +51,7 @@ if [[ "$MODULES_FAIL" -gt 0 ]]; then
   exit 4
 fi
 
-# 5. 3-minute stability watch — no module must flip to fail
+# 5. 3-minute stability watch - no module must flip to fail
 echo "[5/5] 3-minute stability watch (polling every 15s) ..."
 for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
   sleep 15
@@ -64,5 +64,5 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
 done
 
 echo ""
-echo "=== PASS — LingTu cold boot stable 3 minutes, $MODULES_OK modules ==="
+echo "=== PASS - LingTu cold boot stable 3 minutes, $MODULES_OK modules ==="
 echo "Log: $LOG"

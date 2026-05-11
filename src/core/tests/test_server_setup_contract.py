@@ -49,3 +49,25 @@ def test_p0_scripts_use_current_gateway_contracts():
     assert "GET /api/v1/state" in estop
     assert "/api/v1/safety/state" not in estop
     assert "curl -sf http://localhost:5050/api/v1/cmd_vel" not in estop
+
+
+def test_p0_field_runbook_matches_script_contracts():
+    readme = (REPO_ROOT / "docs/07-testing/README.md").read_text(
+        encoding="utf-8"
+    )
+    p0_scripts = [
+        REPO_ROOT / "docs/07-testing/p0_all.sh",
+        REPO_ROOT / "docs/07-testing/p0_cold_boot.sh",
+        REPO_ROOT / "docs/07-testing/p0_estop.sh",
+        REPO_ROOT / "docs/07-testing/p0_goto.sh",
+        REPO_ROOT / "docs/07-testing/p0_mapping.sh",
+    ]
+
+    assert "/api/v1/navigation/status" in readme
+    assert "POST /api/v1/stop" in readme
+    assert "/api/v1/state" in readme
+    assert "CmdVelMux` outputs `Twist.zero()`" not in readme
+    assert "watchdog log entry" not in readme
+
+    for script in p0_scripts:
+        script.read_text(encoding="utf-8").encode("ascii")

@@ -93,8 +93,8 @@ Each P0 script is self-contained, uses `set -e`, and writes its log to `~/data/n
 |---|---|---|---|
 | `p0_cold_boot.sh` | System cold start | None | At least 20 modules up, Gateway `/api/v1/health` returns `status="ok"` and is stable for 3 minutes |
 | `p0_mapping.sh` | Map -> save -> activate | Walk the robot for ~3 min | `map.pcd` + `tomogram.pickle` + `occupancy.npz` + `map.pgm` / `map.yaml` produced |
-| `p0_goto.sh` | Click goal -> arrive | Pre-loaded active map | `mission_status=SUCCESS` or `EV_PATH_COMPLETE` event |
-| `p0_estop.sh` | E-stop reflex | Operator presses dashboard E-stop | Within 100 ms `CmdVelMux` outputs `Twist.zero()`; watchdog log entry present |
+| `p0_goto.sh` | Point goal -> arrive | Pre-loaded active map | `/api/v1/navigation/status` reports `state="SUCCESS"` |
+| `p0_estop.sh` | Gateway stop reflex | Operator starts non-zero robot motion, then presses Enter in the script | `POST /api/v1/stop` succeeds and `/api/v1/state` reports navigation speed below `0.01 m/s` for 3 consecutive ticks within 2 seconds |
 
 ### Run on Sunrise (S100P)
 
@@ -152,15 +152,15 @@ The detailed runbook is in `sim/README.md`.
 
 ## Script inventory
 
-- `install_hooks.sh` — install L1 / L2 git hooks.
-- `p0_cold_boot.sh` — P0-01 cold start.
-- `p0_mapping.sh` — P0-02 mapping.
-- `p0_goto.sh` — P0-03 navigate to a point.
-- `p0_estop.sh` — P0-04 emergency stop.
-- `p0_all.sh` — chain P0-01 through P0-04.
-- `p1_tare_explore.sh` — P1-01 TARE exploration (TBD).
-- `p1_gnss_fusion.sh` — P1-02 GNSS fusion (TBD).
-- `p1_follow_person.sh` — P1-04 OSNet person follow (TBD).
-- `p1_degraded.sh` — P1-05 sensor degradation (TBD).
+- `install_hooks.sh` - install L1 / L2 git hooks.
+- `p0_cold_boot.sh` - P0-01 cold start.
+- `p0_mapping.sh` - P0-02 mapping.
+- `p0_goto.sh` - P0-03 navigate to a point.
+- `p0_estop.sh` - P0-04 emergency stop.
+- `p0_all.sh` - chain P0-01 through P0-04.
+- `p1_tare_explore.sh` - P1-01 TARE exploration (TBD).
+- `p1_gnss_fusion.sh` - P1-02 GNSS fusion (TBD).
+- `p1_follow_person.sh` - P1-04 OSNet person follow (TBD).
+- `p1_degraded.sh` - P1-05 sensor degradation (TBD).
 
 The single tracked baseline document remaining in this folder is `SUPERVISION_BENCHMARK_BASELINE_2026-04-05.md` (frozen for the supervision tracker migration).

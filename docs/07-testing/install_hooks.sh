@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_hooks.sh — install L1 pre-commit + L2 pre-push hooks into .git/hooks/
+# install_hooks.sh - install L1 pre-commit + L2 pre-push hooks into .git/hooks/
 #
 # Idempotent. Re-running overwrites previous versions.
 
@@ -10,14 +10,14 @@ REPO_ROOT="$(pwd)"
 HOOK_DIR="$REPO_ROOT/.git/hooks"
 
 if [[ ! -d "$HOOK_DIR" ]]; then
-  echo "ERROR: $HOOK_DIR not found — are you inside a git repo?"
+  echo "ERROR: $HOOK_DIR not found - are you inside a git repo?"
   exit 1
 fi
 
-# ─── pre-commit: pytest must be green ───────────────────────────────────────
+# pre-commit: pytest must be green
 cat > "$HOOK_DIR/pre-commit" <<'HOOK'
 #!/usr/bin/env bash
-# LingTu L1 — block commit if any framework test fails.
+# LingTu L1 - block commit if any framework test fails.
 set -e
 echo "[L1 pre-commit] running pytest src/core/tests/ ..."
 cd "$(git rev-parse --show-toplevel)"
@@ -25,10 +25,10 @@ PYTHONIOENCODING=utf-8 python -m pytest src/core/tests/ -q --tb=no 2>&1 | tail -
 echo "[L1 pre-commit] OK"
 HOOK
 
-# ─── pre-push: pytest + stub blueprint smoke ────────────────────────────────
+# pre-push: pytest + stub blueprint smoke
 cat > "$HOOK_DIR/pre-push" <<'HOOK'
 #!/usr/bin/env bash
-# LingTu L2 — block push if L1 or stub build fails.
+# LingTu L2 - block push if L1 or stub build fails.
 set -e
 cd "$(git rev-parse --show-toplevel)"
 echo "[L2 pre-push] running pytest src/core/tests/ ..."
@@ -38,10 +38,10 @@ PYTHONIOENCODING=utf-8 python -c "
 import sys
 sys.path.insert(0, 'src')
 from core.blueprints.full_stack import full_stack_blueprint
-# full_stack_blueprint() has no 'profile' kwarg — that arg used to be silently
+# full_stack_blueprint() has no 'profile' kwarg - that arg used to be silently
 # absorbed by **config (so we got a full hardware stack instead of a stub).
 # Build a real lightweight stub: stub driver, no SLAM, no native C++ nodes,
-# no semantic stack — purely the framework wire-up smoke check.
+# no semantic stack - purely the framework wire-up smoke check.
 bp = full_stack_blueprint(
     robot='stub',
     slam_profile='none',
@@ -49,7 +49,7 @@ bp = full_stack_blueprint(
     enable_semantic=False,
 )
 system = bp.build()
-print('[L2] stub profile build OK — %d modules' % len(system._modules))
+print('[L2] stub profile build OK - %d modules' % len(system._modules))
 "
 echo "[L2 pre-push] OK"
 HOOK

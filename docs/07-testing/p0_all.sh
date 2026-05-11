@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# p0_all.sh — run all four P0 scripts in sequence. Each one logs to its own
+# p0_all.sh - run all four P0 scripts in sequence. Each one logs to its own
 # file; this script collates a summary.
 
 set -e
@@ -11,7 +11,7 @@ mkdir -p "$LOG_DIR"
 SUMMARY="$LOG_DIR/${STAMP}_p0_all_summary.log"
 exec > >(tee -a "$SUMMARY") 2>&1
 
-echo "=== P0 ALL — $(date) ==="
+echo "=== P0 ALL - $(date) ==="
 
 ran=0
 passed=0
@@ -22,7 +22,7 @@ run_one() {
   shift 2
   ran=$((ran + 1))
   echo ""
-  echo "──────────── $name ────────────"
+  echo "------------ $name ------------"
   if bash "$script" "$@"; then
     echo "[SUMMARY] $name  PASS"
     passed=$((passed + 1))
