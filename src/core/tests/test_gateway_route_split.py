@@ -544,6 +544,12 @@ def test_routecheck_latest_diagnostic_reads_latest_summary(tmp_path, monkeypatch
         "mode": "routecheck_non_motion",
         "outcome": "pass",
         "non_motion": True,
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "gateway_used": True,
+        "driver_used": False,
+        "published": {"goal_pose": 0, "cmd_vel": 0, "stop_cmd": 0},
         "phases": {"baseline": {"selected_planner": "pct"}},
     }
     (new_dir / "summary.json").write_text(
@@ -557,6 +563,15 @@ def test_routecheck_latest_diagnostic_reads_latest_summary(tmp_path, monkeypatch
     assert payload["ok"] is True
     assert payload["count"] == 2
     assert payload["artifact_dir"] == str(new_dir)
+    assert payload["report_mtime"] == 2
+    assert payload["report_age_s"] >= 0.0
+    assert payload["non_motion"] is True
+    assert payload["simulation_only"] is True
+    assert payload["real_robot_motion"] is False
+    assert payload["cmd_vel_sent_to_hardware"] is False
+    assert payload["gateway_used"] is True
+    assert payload["driver_used"] is False
+    assert payload["published"] == {"goal_pose": 0, "cmd_vel": 0, "stop_cmd": 0}
     assert payload["latest"]["outcome"] == "pass"
     assert payload["latest"]["phases"]["baseline"]["selected_planner"] == "pct"
 
@@ -568,6 +583,9 @@ def test_routecheck_latest_diagnostic_reads_latest_summary(tmp_path, monkeypatch
     body = response.json()
     assert body["schema_version"] == 1
     assert body["ok"] is True
+    assert body["report_mtime"] == 2
+    assert body["non_motion"] is True
+    assert body["published"]["cmd_vel"] == 0
     assert body["latest"]["outcome"] == "pass"
 
 

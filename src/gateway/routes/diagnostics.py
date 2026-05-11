@@ -147,7 +147,9 @@ def build_routecheck_latest_summary(
         }
 
     summaries.sort(key=lambda item: item[0], reverse=True)
-    _mtime, summary_path, latest = summaries[0]
+    report_mtime, summary_path, latest = summaries[0]
+    generated_at = time.time()
+    published = latest.get("published") if isinstance(latest.get("published"), dict) else None
     return {
         "schema_version": 1,
         "ok": True,
@@ -155,9 +157,18 @@ def build_routecheck_latest_summary(
         "count": len(summaries),
         "artifact_dir": str(summary_path.parent),
         "summary_path": str(summary_path),
+        "report_mtime": report_mtime,
+        "report_age_s": max(0.0, generated_at - report_mtime),
+        "non_motion": latest.get("non_motion"),
+        "simulation_only": latest.get("simulation_only"),
+        "real_robot_motion": latest.get("real_robot_motion"),
+        "cmd_vel_sent_to_hardware": latest.get("cmd_vel_sent_to_hardware"),
+        "gateway_used": latest.get("gateway_used"),
+        "driver_used": latest.get("driver_used"),
+        "published": published,
         "latest": latest,
         "reason": None,
-        "ts": time.time(),
+        "ts": generated_at,
     }
 
 

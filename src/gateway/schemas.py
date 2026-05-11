@@ -56,6 +56,15 @@ class RoutecheckLatestResponse(GatewayResponseModel):
     count: int = 0
     artifact_dir: str | None = None
     summary_path: str | None = None
+    report_mtime: float | None = None
+    report_age_s: float | None = None
+    non_motion: bool | None = None
+    simulation_only: bool | None = None
+    real_robot_motion: bool | None = None
+    cmd_vel_sent_to_hardware: bool | None = None
+    gateway_used: bool | None = None
+    driver_used: bool | None = None
+    published: dict[str, Any] | None = None
     latest: dict[str, Any] | None = None
     reason: str | None = None
     ts: float
