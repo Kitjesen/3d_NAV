@@ -202,7 +202,11 @@ class ControlCommandService:
             )
 
         preview = self.preview_navigation_plan(preview_body)
-        if bool(preview.get("feasible", False)):
+        if (
+            bool(preview.get("ok", True))
+            and bool(preview.get("feasible", False))
+            and not _path_safety_blocks_motion(preview)
+        ):
             return None
         return self.rejected_response(
             command,
@@ -243,6 +247,11 @@ class ControlCommandService:
             "distance_m": None,
             "plan_ms": None,
             "planner": None,
+            "selected_planner": None,
+            "plan_safety_policy": None,
+            "path_safety": None,
+            "fallback_reason": "",
+            "rejected_plans": [],
             "source": source,
             "reasons": list(dict.fromkeys(reasons)),
             "error": error,
@@ -288,3 +297,13 @@ def _point_payload(
         "ts": ts,
         "metadata": {},
     }
+
+
+def _path_safety_blocks_motion(preview: dict[str, Any]) -> bool:
+    policy = str(preview.get("plan_safety_policy") or "").lower()
+    if policy not in {"reject", "fallback_astar"}:
+        return False
+    path_safety = preview.get("path_safety")
+    if not isinstance(path_safety, dict):
+        return False
+    return path_safety.get("ok") is False

@@ -42,12 +42,18 @@ class _FakePlanPreviewNav:
     def __init__(
         self,
         *,
+        ok: bool = True,
         feasible: bool = True,
         reasons: list[str] | None = None,
+        plan_safety_policy: str | None = None,
+        path_safety: dict | None = None,
     ) -> None:
         self.calls: list[tuple[float, float, float]] = []
+        self.ok = ok
         self.feasible = feasible
         self.reasons = list(reasons or [])
+        self.plan_safety_policy = plan_safety_policy
+        self.path_safety = path_safety
 
     def preview_plan(self, x: float, y: float, z: float) -> dict:
         self.calls.append((x, y, z))
@@ -55,7 +61,7 @@ class _FakePlanPreviewNav:
         if not self.feasible:
             return {
                 "schema_version": 1,
-                "ok": True,
+                "ok": self.ok,
                 "feasible": False,
                 "frame_id": "map",
                 "start": {"x": 0.0, "y": 0.0, "z": 0.0, "frame_id": "map", "ts": ts},
@@ -66,6 +72,11 @@ class _FakePlanPreviewNav:
                 "distance_m": None,
                 "plan_ms": 0.5,
                 "planner": "fake",
+                "selected_planner": "fake",
+                "plan_safety_policy": self.plan_safety_policy,
+                "path_safety": self.path_safety,
+                "fallback_reason": "",
+                "rejected_plans": [],
                 "source": "navigation_preview",
                 "reasons": self.reasons or ["blocked_by_costmap"],
                 "error": None,
@@ -73,7 +84,7 @@ class _FakePlanPreviewNav:
             }
         return {
             "schema_version": 1,
-            "ok": True,
+            "ok": self.ok,
             "feasible": True,
             "frame_id": "map",
             "start": {"x": 0.0, "y": 0.0, "z": 0.0, "frame_id": "map", "ts": ts},
@@ -87,6 +98,11 @@ class _FakePlanPreviewNav:
             "distance_m": 1.0,
             "plan_ms": 0.5,
             "planner": "fake",
+            "selected_planner": "fake",
+            "plan_safety_policy": self.plan_safety_policy,
+            "path_safety": self.path_safety,
+            "fallback_reason": "",
+            "rejected_plans": [],
             "source": "navigation_preview",
             "reasons": [],
             "error": None,
@@ -527,6 +543,50 @@ def test_goal_route_rejects_infeasible_plan_preview_without_publishing():
     assert event["data"]["command"]["accepted"] is False
     assert event["data"]["command"]["request_id"] == "blocked-goal"
     assert event["data"]["detail"]["path"] == "/api/v1/navigation/plan"
+    assert nav.calls == [(1.0, 2.0, 0.0)]
+    assert sent_goals == []
+    assert gateway.goal_pose.msg_count == 0
+
+
+@pytest.mark.parametrize(
+    "nav",
+    [
+        _FakePlanPreviewNav(ok=False, feasible=True),
+        _FakePlanPreviewNav(
+            feasible=True,
+            plan_safety_policy="reject",
+            path_safety={"ok": False, "blocked_sample_count": 3},
+        ),
+    ],
+)
+def test_goal_route_rejects_inconsistent_or_unsafe_feasible_preview(nav):
+    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.schemas import GatewayErrorResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway.on_system_modules({"NavigationModule": nav})
+    _mark_navigation_ready(gateway)
+    sent_goals = []
+    gateway.goal_pose._add_callback(sent_goals.append)
+    post_goal = _endpoint(gateway, "/api/v1/goal")
+
+    response = asyncio.run(
+        post_goal(
+            GoalRequest(
+                x=1.0,
+                y=2.0,
+                z=0.0,
+                request_id="unsafe-feasible-goal",
+                client_id="web",
+            )
+        )
+    )
+    model = GatewayErrorResponse.model_validate(_payload(response))
+
+    assert response.status_code == 409
+    assert model.error == "navigation_plan_infeasible"
+    assert model.detail["preview"]["feasible"] is True
     assert nav.calls == [(1.0, 2.0, 0.0)]
     assert sent_goals == []
     assert gateway.goal_pose.msg_count == 0
