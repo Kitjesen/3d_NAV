@@ -30,3 +30,22 @@ def test_server_setup_runs_multifloor_closure_without_robot_motion():
     assert "artifacts/server_sim_closure/multifloor_exploration/report.json" in script
     assert "cmd_vel" in script
     assert "physical hardware" in script
+
+
+def test_p0_scripts_use_current_gateway_contracts():
+    goto = (REPO_ROOT / "docs/07-testing/p0_goto.sh").read_text(
+        encoding="utf-8"
+    )
+    estop = (REPO_ROOT / "docs/07-testing/p0_estop.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "/api/v1/navigation/status" in goto
+    assert "/api/v1/nav/status" not in goto
+    assert '\\"frame_id\\":\\"map\\"' in goto
+    assert '\\"client_id\\":\\"p0_goto\\"' in goto
+
+    assert "POST /api/v1/stop" in estop
+    assert "GET /api/v1/state" in estop
+    assert "/api/v1/safety/state" not in estop
+    assert "curl -sf http://localhost:5050/api/v1/cmd_vel" not in estop
