@@ -81,9 +81,9 @@ done
 
 # 5. Activate
 echo "[5/6] Activating map"
-curl -sf -X POST http://localhost:5050/api/v1/map/activate \
+curl -sf -X POST http://localhost:5050/api/v1/maps \
   -H 'Content-Type: application/json' \
-  -d "{\"name\":\"$MAP_NAME\"}" | python3 -m json.tool
+  -d "{\"action\":\"set_active\",\"name\":\"$MAP_NAME\"}" | python3 -m json.tool
 
 ACTIVE_LINK="$MAP_ROOT/active"
 if [[ "$(readlink "$ACTIVE_LINK")" != *"$MAP_NAME"* ]]; then

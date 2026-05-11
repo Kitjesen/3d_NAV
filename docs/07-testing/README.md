@@ -92,7 +92,7 @@ Each P0 script is self-contained, uses `set -e`, and writes its log to `~/data/n
 | Script | Coverage | Input | Pass criteria |
 |---|---|---|---|
 | `p0_cold_boot.sh` | System cold start | None | At least 20 modules up, Gateway `/api/v1/health` returns `status="ok"` and is stable for 3 minutes |
-| `p0_mapping.sh` | Map -> save -> activate | Walk the robot for ~3 min | MapManager `/api/v1/maps` save succeeds and `map.pcd` + `tomogram.pickle` + `occupancy.npz` + `map.pgm` / `map.yaml` are produced |
+| `p0_mapping.sh` | Map -> save -> activate | Walk the robot for ~3 min | MapManager `/api/v1/maps` save and `set_active` succeed; `map.pcd` + `tomogram.pickle` + `occupancy.npz` + `map.pgm` / `map.yaml` are produced |
 | `p0_goto.sh` | Point goal -> arrive | Pre-loaded active map | `/api/v1/navigation/status` reports `state="SUCCESS"` |
 | `p0_estop.sh` | Gateway stop reflex | Operator starts non-zero robot motion, then presses Enter in the script | `POST /api/v1/stop` succeeds and `/api/v1/state` reports navigation speed below `0.01 m/s` for 3 consecutive ticks within 2 seconds |
 
