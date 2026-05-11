@@ -1,6 +1,6 @@
 # LingTu Regression Suite
 
-Three layers, from local commit to S100P field run.
+Four layers, from local commit to simulation closure to S100P field run.
 
 Commit and push acceptance criteria live in
 [`COMMIT_PUSH_POLICY.md`](COMMIT_PUSH_POLICY.md). The short version is:
@@ -12,6 +12,7 @@ the touched subsystem.
 |---|---|---|---|---|
 | L1 pre-commit hook | `git commit` | `pytest src/core/tests/ -q` must pass | ~90 s | Yes |
 | L2 pre-push hook | `git push` | L1 plus `stub` profile smoke build | ~30 s extra | Yes |
+| L2.5 server simulation closure | Before field claims or navigation demos | `server_sim_closure.py` strict summary over the relevant simulation gates | Host-dependent | Yes for simulation-backed navigation claims |
 | L3 S100P weekly | Friday afternoon, manual | Run `p0_*.sh` four scripts and capture video | ~30 min | Yes |
 
 ---
@@ -35,6 +36,48 @@ git push --no-verify
 ```
 
 The PR description must state the reason; the reviewer will challenge it.
+
+---
+
+## L2.5 server simulation closure
+
+Use this layer before claiming that navigation, localization, planning,
+tracking, exploration, or Gateway command safety works beyond unit tests. It is
+hardware-free evidence only: it must report `simulation_only=true`,
+`real_robot_motion=false`, and `cmd_vel_sent_to_hardware=false`.
+
+Full closure summary:
+
+```bash
+PYTHONPATH=src:. python sim/scripts/server_sim_closure.py \
+  --json-out artifacts/server_sim_closure_summary_all.json \
+  --strict
+```
+
+The summary is an aggregator. If it reports `missing_or_failed`, run the
+command printed for each failed gate, then rerun the summary. The current full
+gate set covers:
+
+- multi-floor exploration, LiDAR localization contract, native PCT, local planning, and nav_core tracking;
+- large-terrain global planning and path-safety checks;
+- native PCT through ROS2 local planner/path follower into MuJoCo motion;
+- dynamic-obstacle local planner replanning;
+- live MuJoCo LiDAR/IMU through Fast-LIO2 and SlamBridge;
+- ONNX policy navigation dataflow;
+- Gateway dry-run command safety;
+- routecheck preflight without publishing goal, cmd_vel, or stop;
+- ROS-native Gazebo frame/topic smoke;
+- saved-map relocalization contract.
+
+Server bootstrap verification uses the setup-safe subset it produces itself:
+
+```bash
+bash scripts/deploy/setup_server_ros_pct.sh
+```
+
+That script writes `artifacts/server_sim_closure_summary_setup.json` for the
+multi-floor and routecheck-preflight gates. It is not a substitute for the full
+closure summary unless those are the only changed surfaces.
 
 ---
 
