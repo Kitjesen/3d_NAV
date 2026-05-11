@@ -273,6 +273,7 @@ def apply_full_stack_wires(
             WireSpec("TerrainModule", "terrain_map", "LocalPlannerModule", "terrain_map"),
             WireSpec("LocalPlannerModule", "local_path", "PathFollowerModule", "local_path"),
             WireSpec("LocalPlannerModule", "local_path", "SafetyRingModule", "path"),
+            WireSpec("LocalPlannerModule", "control_hint", "PathFollowerModule", "control_hint"),
             WireSpec("SemanticPlannerModule", "servo_target", "VisualServoModule", "servo_target"),
             WireSpec("VisualServoModule", "goal_pose", "NavigationModule", "goal_pose"),
             WireSpec("VisualServoModule", "nav_stop", "NavigationModule", "stop_signal"),

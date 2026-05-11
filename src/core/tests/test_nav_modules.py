@@ -394,6 +394,52 @@ class TestPathFollowerModule(unittest.TestCase):
         self.assertEqual(m._nc_state.nav_fwd, 0)
         self.assertEqual(m._nc_state.pathPointID, 0)
 
+    def test_nav_core_applies_local_planner_control_hint(self):
+        from base_autonomy.modules.path_follower_module import PathFollowerModule
+
+        class RecordingNavCore(_FakeNavCore):
+            last_slow_factor = None
+            last_safety_stop = None
+
+            @staticmethod
+            def compute_control(*args):
+                RecordingNavCore.last_slow_factor = args[5]
+                RecordingNavCore.last_safety_stop = args[6]
+                return _FakeNavCore.ControlOut(_FakeNavCore.Cmd(1.0, 0.0, 0.4))
+
+        m = PathFollowerModule(backend="nav_core")
+        m._nc = RecordingNavCore
+        m._nc_params = object()
+        m._nc_state = RecordingNavCore.PathFollowerState()
+        outputs = []
+        m.cmd_vel._add_callback(outputs.append)
+
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.0, 0.0, 0.0)), ts=1.0))
+        m._on_path(Path(
+            poses=[
+                PoseStamped(pose=Pose(position=Vector3(0.0, 0.0, 0.0))),
+                PoseStamped(pose=Pose(position=Vector3(2.0, 0.0, 0.0))),
+            ],
+            frame_id="map",
+        ))
+        m._on_control_hint({"slow_down": 2, "ts": time.time(), "reason": "test"})
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.1, 0.0, 0.0)), ts=1.1))
+
+        self.assertEqual(RecordingNavCore.last_slow_factor, 0.40)
+        self.assertEqual(RecordingNavCore.last_safety_stop, 0)
+        self.assertGreater(outputs[-1].linear.x, 0.0)
+
+        m._on_control_hint({
+            "near_field_stop": True,
+            "safety_stop": True,
+            "ts": time.time(),
+            "reason": "near_field",
+        })
+
+        self.assertEqual(outputs[-1].linear.x, 0.0)
+        self.assertEqual(outputs[-1].angular.z, 0.0)
+        self.assertTrue(m.health()["path_follower"]["control_hint"]["safety_stop"])
+
     def test_nav_core_resets_path_reference_on_map_frame_jump(self):
         from base_autonomy.modules.path_follower_module import PathFollowerModule
 

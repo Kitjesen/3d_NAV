@@ -45,6 +45,7 @@ class PathFollowerModule(Module, layer=2):
     # -- Inputs --
     odometry: In[Odometry]
     local_path: In[Path]
+    control_hint: In[dict]
     map_frame_jump_event: In[dict]
 
     # -- Outputs --
@@ -90,10 +91,16 @@ class PathFollowerModule(Module, layer=2):
         self._cos_yaw_rec = 1.0
         self._sin_yaw_rec = 0.0
         self._odom_frame_id = "map"
+        self._control_hint_timeout = float(kw.get("control_hint_timeout", 0.75))
+        self._control_hint_ts = 0.0
+        self._control_slow_down = 0
+        self._control_safety_stop = False
+        self._control_hint_reason = ""
 
     def setup(self):
         self.odometry.subscribe(self._on_odom)
         self.local_path.subscribe(self._on_path)
+        self.control_hint.subscribe(self._on_control_hint)
         self.map_frame_jump_event.subscribe(self._on_map_frame_jump)
 
         if self._backend == "nav_core":
@@ -276,6 +283,38 @@ class PathFollowerModule(Module, layer=2):
         self._sin_yaw_rec = math.sin(self._yaw_rec)
         self._publish_zero(reset_nav_core_state=reset_nav_core_state)
 
+    def _on_control_hint(self, hint: dict) -> None:
+        if not isinstance(hint, dict):
+            return
+        try:
+            slow_down = int(hint.get("slow_down", 0) or 0)
+        except (TypeError, ValueError):
+            slow_down = 0
+        self._control_slow_down = max(0, min(3, slow_down))
+        self._control_safety_stop = bool(
+            hint.get("safety_stop") or hint.get("near_field_stop")
+        )
+        self._control_hint_reason = str(hint.get("reason") or "")
+        self._control_hint_ts = float(hint.get("ts") or time.time())
+        if self._control_safety_stop:
+            self._publish_zero(reset_nav_core_state=False)
+
+    def _active_control_guard(self) -> tuple[float, bool]:
+        if self._control_hint_ts <= 0:
+            return 1.0, False
+        if time.time() - self._control_hint_ts > self._control_hint_timeout:
+            self._control_slow_down = 0
+            self._control_safety_stop = False
+            self._control_hint_reason = ""
+            return 1.0, False
+        slow_factor_by_level = {
+            0: 1.0,
+            1: 0.65,
+            2: 0.40,
+            3: 0.20,
+        }
+        return slow_factor_by_level.get(self._control_slow_down, 1.0), self._control_safety_stop
+
     def _on_map_frame_jump(self, event: dict) -> None:
         if isinstance(event, dict):
             self._reset_path_tracking(reset_nav_core_state=True)
@@ -382,8 +421,11 @@ class PathFollowerModule(Module, layer=2):
 
         # joy_speed normalized [0, 1] — use 1.0 (max_speed already in params)
         joy_speed = 1.0
-        slow_factor = 1.0
-        safety_stop = 0
+        slow_factor, safety_stop_active = self._active_control_guard()
+        safety_stop = 1 if safety_stop_active else 0
+        if safety_stop_active:
+            self._publish_zero(reset_nav_core_state=False)
+            return
 
         out = nc.compute_control(
             vehicle_rel,
@@ -413,6 +455,10 @@ class PathFollowerModule(Module, layer=2):
         """Simple Pure Pursuit in Python for testing."""
         if self._path_points is None or len(self._path_points) < 2:
             self._publish_zero()
+            return
+        slow_factor, safety_stop_active = self._active_control_guard()
+        if safety_stop_active:
+            self._publish_zero(reset_nav_core_state=False)
             return
 
         robot = np.array([self._robot_x, self._robot_y])
@@ -453,6 +499,7 @@ class PathFollowerModule(Module, layer=2):
         wz = max(-yaw_limit, min(yaw_limit, yaw_err * 0.5))
         turn_factor = max(0.2, math.cos(yaw_err))
         vx = min(self._max_speed, max(self._min_speed, dist * 0.25)) * turn_factor
+        vx *= slow_factor
 
         alpha = 0.2
         self._smooth_vx = (1 - alpha) * self._smooth_vx + alpha * vx
@@ -472,6 +519,16 @@ class PathFollowerModule(Module, layer=2):
             "has_path": bool(self._nc_path) if self._backend == "nav_core"
                         else self._path_points is not None,
             "max_yaw_rate": self._max_yaw_rate,
+            "control_hint": {
+                "slow_down": self._control_slow_down,
+                "safety_stop": self._control_safety_stop,
+                "reason": self._control_hint_reason,
+                "age_ms": (
+                    round((time.time() - self._control_hint_ts) * 1000)
+                    if self._control_hint_ts > 0
+                    else None
+                ),
+            },
         }
         if self._backend == "nav_core" and self._nc_state is not None:
             h["vehicle_speed"] = self._nc_state.vehicle_speed

@@ -333,6 +333,7 @@ class LocalPlannerModule(Module, layer=2):
 
     # -- Outputs --
     local_path: Out[Path]
+    control_hint: Out[dict]
     alive:      Out[bool]
 
     def __init__(self, backend: str = "cmu", **kw):
@@ -631,6 +632,7 @@ class LocalPlannerModule(Module, layer=2):
     def _clear_local_plan(self) -> None:
         self._latest_waypoint = None
         self._global_path_points = None
+        self._publish_control_hint(reason="clear_path")
         self.local_path.publish(Path(poses=[], frame_id=self._path_frame_id))
 
     def _on_map_frame_jump(self, event: dict) -> None:
@@ -694,6 +696,7 @@ class LocalPlannerModule(Module, layer=2):
                 for p in path_points
             ]
             self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
+            self._publish_control_hint(reason="simple_path")
 
     def _on_clear_path(self, clear: bool) -> None:
         if not clear:
@@ -759,41 +762,67 @@ class LocalPlannerModule(Module, layer=2):
         obs_flat = merged.ravel().tolist() if merged.shape[0] > 0 else []
 
         result = self._core.plan(obs_flat, timestamp)
+        self._publish_control_hint(
+            slow_down=int(getattr(result, "slow_down", 0) or 0),
+            near_field_stop=bool(getattr(result, "near_field_stop", False)),
+            path_found=bool(getattr(result, "path_found", True)),
+            recovery_state=int(getattr(result, "recovery_state", 0) or 0),
+            reason="nanobind",
+        )
 
-        if result.path:
-            raw_xy = np.asarray([[float(v.x), float(v.y)] for v in result.path], dtype=float)
-            xy_length = (
-                float(np.sum(np.linalg.norm(np.diff(raw_xy, axis=0), axis=1)))
-                if len(raw_xy) > 1
-                else 0.0
+        if not result.path:
+            self._publish_control_hint(
+                slow_down=int(getattr(result, "slow_down", 0) or 0),
+                near_field_stop=bool(getattr(result, "near_field_stop", False)),
+                path_found=bool(getattr(result, "path_found", False)),
+                recovery_state=int(getattr(result, "recovery_state", 0) or 0),
+                safety_stop=True,
+                reason="no_local_path",
             )
-            xy_span = float(np.linalg.norm(raw_xy[-1] - raw_xy[0])) if len(raw_xy) > 1 else 0.0
-            path_found = bool(getattr(result, "path_found", True))
-            recovery_state = int(getattr(result, "recovery_state", 0))
-            trackable = (
-                len(result.path) >= 2
-                and max(xy_length, xy_span) >= _MIN_TRACKABLE_LOCAL_PATH_XY
-                and (path_found or recovery_state in (1, 2))
-            )
-            if not trackable:
-                self.local_path.publish(Path(poses=[], frame_id=self._path_frame_id))
-                return
+            self.local_path.publish(Path(poses=[], frame_id=self._path_frame_id))
+            return
 
-            poses = []
-            cos_yaw = math.cos(self._robot_yaw)
-            sin_yaw = math.sin(self._robot_yaw)
-            for v in result.path:
-                wx = v.x * cos_yaw - v.y * sin_yaw + self._robot_pos[0]
-                wy = v.x * sin_yaw + v.y * cos_yaw + self._robot_pos[1]
-                wz = v.z + self._robot_pos[2]
-                poses.append(PoseStamped(
-                    pose=Pose(
-                        position=Vector3(wx, wy, wz),
-                        orientation=Quaternion(0, 0, 0, 1),
-                    ),
-                    frame_id=self._path_frame_id,
-                ))
-            self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
+        raw_xy = np.asarray([[float(v.x), float(v.y)] for v in result.path], dtype=float)
+        xy_length = (
+            float(np.sum(np.linalg.norm(np.diff(raw_xy, axis=0), axis=1)))
+            if len(raw_xy) > 1
+            else 0.0
+        )
+        xy_span = float(np.linalg.norm(raw_xy[-1] - raw_xy[0])) if len(raw_xy) > 1 else 0.0
+        path_found = bool(getattr(result, "path_found", True))
+        recovery_state = int(getattr(result, "recovery_state", 0))
+        trackable = (
+            len(result.path) >= 2
+            and max(xy_length, xy_span) >= _MIN_TRACKABLE_LOCAL_PATH_XY
+            and (path_found or recovery_state in (1, 2))
+        )
+        if not trackable:
+            self._publish_control_hint(
+                slow_down=int(getattr(result, "slow_down", 0) or 0),
+                near_field_stop=bool(getattr(result, "near_field_stop", False)),
+                path_found=path_found,
+                recovery_state=recovery_state,
+                safety_stop=True,
+                reason="untrackable_local_path",
+            )
+            self.local_path.publish(Path(poses=[], frame_id=self._path_frame_id))
+            return
+
+        poses = []
+        cos_yaw = math.cos(self._robot_yaw)
+        sin_yaw = math.sin(self._robot_yaw)
+        for v in result.path:
+            wx = v.x * cos_yaw - v.y * sin_yaw + self._robot_pos[0]
+            wy = v.x * sin_yaw + v.y * cos_yaw + self._robot_pos[1]
+            wz = v.z + self._robot_pos[2]
+            poses.append(PoseStamped(
+                pose=Pose(
+                    position=Vector3(wx, wy, wz),
+                    orientation=Quaternion(0, 0, 0, 1),
+                ),
+                frame_id=self._path_frame_id,
+            ))
+        self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
 
     # ------------------------------------------------------------------ #
     # CMU Python scorer                                                    #
@@ -866,6 +895,11 @@ class LocalPlannerModule(Module, layer=2):
 
         if selected_group_id < 0 or max_score <= 0.0:
             # No feasible local path: publish empty so downstream stops instead of tracking into obstacles.
+            self._publish_control_hint(
+                safety_stop=True,
+                path_found=False,
+                reason="no_feasible_local_path",
+            )
             self.local_path.publish(Path(poses=[], frame_id=self._path_frame_id))
             return
 
@@ -905,6 +939,7 @@ class LocalPlannerModule(Module, layer=2):
             )
 
         self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
+        self._publish_control_hint(reason="cmu_py_path")
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
@@ -917,6 +952,33 @@ class LocalPlannerModule(Module, layer=2):
             return [start, goal]
         n = max(int(dist / step), 2)
         return [start + diff * (i / n) for i in range(1, n + 1)]
+
+    def _publish_control_hint(
+        self,
+        *,
+        slow_down: int = 0,
+        near_field_stop: bool = False,
+        safety_stop: bool | None = None,
+        path_found: bool | None = None,
+        recovery_state: int | None = None,
+        reason: str = "",
+    ) -> None:
+        slow_down = max(0, min(3, int(slow_down or 0)))
+        near_field_stop = bool(near_field_stop)
+        stop = near_field_stop if safety_stop is None else bool(safety_stop)
+        payload: dict[str, Any] = {
+            "ts": time.time(),
+            "source": "LocalPlannerModule",
+            "slow_down": slow_down,
+            "near_field_stop": near_field_stop,
+            "safety_stop": stop,
+            "reason": reason,
+        }
+        if path_found is not None:
+            payload["path_found"] = bool(path_found)
+        if recovery_state is not None:
+            payload["recovery_state"] = int(recovery_state)
+        self.control_hint.publish(payload)
 
     def health(self) -> dict[str, Any]:
         info = super().port_summary()

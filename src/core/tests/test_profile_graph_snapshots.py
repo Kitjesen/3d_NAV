@@ -53,6 +53,7 @@ def test_profile_graph_snapshot_locks_safety_gateway_and_mux_edges():
         assert "NavigationModule.mission_status->MCPServerModule.mission_status" in wires
         assert "NavigationModule.clear_path->LocalPlannerModule.clear_path" in wires
         assert "NavigationModule.global_path->LocalPlannerModule.global_path" in wires
+        assert "LocalPlannerModule.control_hint->PathFollowerModule.control_hint" in wires
         assert "GatewayModule.cancel->NavigationModule.cancel" in wires
         assert f"CmdVelMux.driver_cmd_vel->{driver}.cmd_vel" in wires
 
