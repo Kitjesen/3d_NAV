@@ -399,8 +399,21 @@ cmd_map() {
             local name="${2:-}"
             [ -z "$name" ] && { echo "Usage: lingtu map restore <name>"; exit 1; }
             echo -e "${D}Restoring map.pcd from DUFOMap pre-filter backup...${N}"
-            curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"$name\"}" \
-                "$GW/api/v1/map/restore_predufo" | python3 -m json.tool ;;
+            local restore_json restore_ok rebuild_action rebuild_json rebuild_ok
+            restore_json=$(curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"$name\"}" \
+                "$GW/api/v1/map/restore_predufo" 2>/dev/null || echo '{}')
+            echo "$restore_json" | python3 -m json.tool 2>/dev/null || echo "$restore_json"
+            restore_ok=$(pjson "$restore_json" 'print(str(d.get("success", False)).lower())')
+            [ "$restore_ok" = "true" ] || { echo -e "${R}FAIL${N}: restore_predufo failed"; exit 1; }
+            for rebuild_action in build_tomogram build_occupancy; do
+                echo -e "${D}Rebuilding ${rebuild_action#build_} for $name...${N}"
+                rebuild_json=$(curl -s -X POST -H "Content-Type: application/json" \
+                    -d "{\"action\":\"$rebuild_action\",\"name\":\"$name\"}" \
+                    "$GW/api/v1/maps" 2>/dev/null || echo '{}')
+                echo "$rebuild_json" | python3 -m json.tool 2>/dev/null || echo "$rebuild_json"
+                rebuild_ok=$(pjson "$rebuild_json" 'print(str(d.get("success", False)).lower())')
+                [ "$rebuild_ok" = "true" ] || { echo -e "${R}FAIL${N}: $rebuild_action failed"; exit 1; }
+            done ;;
         *) echo "Usage: lingtu map [start|save <name>|end|list|restore <name>]"; exit 1 ;;
     esac
 }

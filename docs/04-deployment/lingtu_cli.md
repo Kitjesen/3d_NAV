@@ -94,8 +94,9 @@ lingtu map restore lab_0423   # restore predufo backup -> map.pcd (DUFOMap was t
 
 `restore` use case: DUFOMap removed static structure by mistake. `map.pcd.predufo` is
 restored to `map.pcd`; the discarded `map.pcd` is preserved as
-`map.pcd.replaced-<ts>` (double safety). After restoring, rebuild the tomogram and
-occupancy grid:
+`map.pcd.replaced-<ts>` (double safety). The `lingtu map restore <name>` command
+then rebuilds the tomogram and occupancy grid automatically. To run those rebuild
+steps manually:
 
 ```bash
 curl -X POST -H 'Content-Type: application/json' \

@@ -1121,6 +1121,10 @@ def test_lingtu_map_save_uses_map_manager_lifecycle():
     assert '\\"action\\":\\"save\\"' in cmd_map
     assert '"$GW/api/v1/maps"' in cmd_map
     assert '"$GW/api/v1/map/save"' not in cmd_map
+    assert "restore_ok=" in cmd_map
+    assert "for rebuild_action in build_tomogram build_occupancy" in cmd_map
+    assert '\\"action\\":\\"$rebuild_action\\"' in cmd_map
+    assert "rebuild_ok=" in cmd_map
 
 
 def test_lingtu_slamcheck_sets_active_map_symlink_and_runtime_env():
