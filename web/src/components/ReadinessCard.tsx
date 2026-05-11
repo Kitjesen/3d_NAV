@@ -28,6 +28,46 @@ function calibrationWarnings(readiness: ReadinessResponse | null): string[] {
   return stringList((calibration as Record<string, unknown>).warnings)
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function plannerSafetyLines(nav: SSEState['navigationStatus']): string[] {
+  const diagnostics = nav?.diagnostics
+  const report = asRecord(diagnostics?.last_plan_report)
+  const safety = asRecord(report.selected_path_safety)
+  const rejectedCount = Array.isArray(report.rejected_plans)
+    ? report.rejected_plans.length
+    : 0
+  const planner = stringValue(report.selected_planner)
+  const policy = diagnostics?.plan_safety_policy ?? stringValue(report.policy)
+  const safetyState = safety.ok === true
+    ? 'ok'
+    : safety.ok === false
+      ? 'blocked'
+      : null
+  const blockedSamples = typeof safety.blocked_sample_count === 'number'
+    ? safety.blocked_sample_count
+    : null
+  const fallback = stringValue(report.fallback_reason)
+
+  const lines = [
+    planner ? `Planner: ${planner}` : null,
+    policy ? `Policy: ${policy}` : null,
+    safetyState ? `Path safety: ${safetyState}` : null,
+    blockedSamples != null ? `Blocked samples: ${blockedSamples}` : null,
+    fallback ? `Fallback: ${fallback}` : null,
+    rejectedCount > 0 ? `Rejected plans: ${rejectedCount}` : null,
+  ].filter((v): v is string => Boolean(v))
+  return lines.length > 0 ? lines : ['No planner safety report yet']
+}
+
 export function ReadinessCard({ sseState }: ReadinessCardProps) {
   const [clientReadiness, setClientReadiness] = useState<ReadinessResponse | null>(null)
   const nav = sseState.navigationStatus
@@ -37,6 +77,7 @@ export function ReadinessCard({ sseState }: ReadinessCardProps) {
   const motion = nav?.motion
   const progress = nav?.progress
   const target = nav?.target
+  const plannerLines = plannerSafetyLines(nav)
 
   const goalReady = readiness?.can_accept_goal ?? nav?.can_accept_goal ?? false
   const canExecute = readiness?.can_execute_autonomy ?? false
@@ -109,6 +150,24 @@ export function ReadinessCard({ sseState }: ReadinessCardProps) {
         <ul className={styles.list}>
           {advisories.map(item => (
             <li key={item} className={styles.mutedItem}>{item}</li>
+          ))}
+        </ul>
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionTitle}>Planner Safety</div>
+        <ul className={styles.list}>
+          {plannerLines.map(item => (
+            <li
+              key={item}
+              className={
+                item.includes('blocked') || item.includes('Fallback')
+                  ? styles.alertItem
+                  : styles.mutedItem
+              }
+            >
+              {item}
+            </li>
           ))}
         </ul>
       </section>
