@@ -274,11 +274,17 @@ def _eval_gateway_dry_run(report: dict[str, Any]) -> tuple[bool, list[str], dict
         blockers.append("real_robot_motion is not false")
     if not _bool_false(report, "cmd_vel_sent_to_hardware"):
         blockers.append("cmd_vel_sent_to_hardware is not false")
+    if report.get("gateway_used") is not True:
+        blockers.append("gateway_used is not true")
+    if not _bool_false(report, "driver_used"):
+        blockers.append("driver_used is not false")
     published = report.get("published") or {}
-    if int(published.get("goal_pose", 0)) != 1:
-        blockers.append("goal_pose publish count is not 1")
-    if int(published.get("cmd_vel", 0)) != 0:
-        blockers.append("cmd_vel was published")
+    expected = {"goal_pose": 1, "cmd_vel": 0, "stop_cmd": 0}
+    for name, count in expected.items():
+        if name not in published:
+            blockers.append(f"published.{name} is missing")
+        elif int(published.get(name, 0)) != count:
+            blockers.append(f"published.{name} is not {count}")
 
     return not blockers, blockers, {
         "published": published,

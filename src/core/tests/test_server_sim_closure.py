@@ -309,7 +309,9 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
             "simulation_only": True,
             "real_robot_motion": False,
             "cmd_vel_sent_to_hardware": False,
-            "published": {"goal_pose": 1, "cmd_vel": 0},
+            "gateway_used": True,
+            "driver_used": False,
+            "published": {"goal_pose": 1, "cmd_vel": 0, "stop_cmd": 0},
             "frames": {"published_goal": "map", "cmd_vel": "not_published"},
         },
     )
@@ -496,6 +498,35 @@ def test_server_sim_closure_rejects_weak_multifloor_exploration_report(tmp_path:
     assert "exploration.closed_loop is not true" in gaps
     assert "exploration probe is not frontier_navigation_closed_loop" in gaps
     assert "cross_floor floor-graph composition not verified" in gaps
+
+
+def test_server_sim_closure_rejects_weak_gateway_dry_run_report(tmp_path: Path):
+    weak = _write_json(
+        tmp_path / "gateway_weak.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "gateway_used": False,
+            "driver_used": True,
+            "published": {"goal_pose": 1, "cmd_vel": 1},
+            "frames": {"published_goal": "map", "cmd_vel": "base_link"},
+        },
+    )
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"gateway_dry_run": weak},
+        required={"gateway_dry_run"},
+    )
+
+    assert summary["ok"] is False
+    assert summary["verified"]["gateway_dry_run"] is False
+    gaps = "\n".join(summary["remaining_gaps"])
+    assert "gateway_used is not true" in gaps
+    assert "driver_used is not false" in gaps
+    assert "published.cmd_vel is not 0" in gaps
+    assert "published.stop_cmd is missing" in gaps
 
 
 def test_server_sim_closure_reports_remaining_gaps(tmp_path: Path):
