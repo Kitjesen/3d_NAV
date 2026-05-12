@@ -104,6 +104,7 @@ def test_gazebo_launch_is_optional_but_ros_native():
     assert 'os.path.join(repo_root, "src")' in launch
     assert "headless" in launch
     assert "-r -s" in launch
+    assert 'else f"-r {world}"' in launch
     assert "sim.engine.bridge.gazebo_cmd_vel_adapter" in launch
     assert "sim.engine.bridge.gazebo_runtime_adapter" in launch
     assert "additional_env=adapter_env" in launch

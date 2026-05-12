@@ -61,7 +61,7 @@ def _optional_gazebo_actions(context, *_args, **_kwargs):
     for path in (repo_root, os.path.join(repo_root, "src")):
         if path not in sys.path:
             sys.path.insert(0, path)
-    gz_args = f"-r -s {world}" if headless else world
+    gz_args = f"-r -s {world}" if headless else f"-r {world}"
 
     try:
         get_package_share_directory("ros_gz_sim")
