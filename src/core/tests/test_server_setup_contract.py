@@ -144,6 +144,9 @@ def test_l25_fresh_closure_wrapper_enforces_report_age():
 
     assert "LINGTU_L25_MAX_REPORT_AGE_S:-21600" in script
     assert "sim/scripts/server_sim_closure.py" in script
+    assert 'PYTHON_BIN="${PYTHON:-}"' in script
+    assert 'command -v python3' in script
+    assert '"$PYTHON_BIN" sim/scripts/server_sim_closure.py' in script
     assert "--max-report-age-s" in script
     assert "--strict" in script
     assert "artifacts/server_sim_closure_summary_all.json" in script
