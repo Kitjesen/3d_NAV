@@ -16,7 +16,7 @@ mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$(date +%Y%m%d_%H%M%S)_p0_goto.log"
 exec > >(tee -a "$LOG") 2>&1
 
-echo "=== P0-03 Goto - $(date) - goal=($GOAL_X, $GOAL_Y) timeout=${TIMEOUT}s ==="
+echo "=== P0-04 Goto - $(date) - goal=($GOAL_X, $GOAL_Y) timeout=${TIMEOUT}s ==="
 
 echo "[1/4] Sanity"
 HEALTH="$(curl -sf http://localhost:5050/api/v1/health)"

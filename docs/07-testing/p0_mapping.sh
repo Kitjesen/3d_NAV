@@ -27,6 +27,19 @@ exec > >(tee -a "$LOG") 2>&1
 
 echo "=== P0-02 Mapping - $(date) - map=$MAP_NAME ==="
 
+json_payload() {
+  python3 - "$@" <<'PY'
+import json
+import sys
+
+items = {}
+for arg in sys.argv[1:]:
+    key, value = arg.split("=", 1)
+    items[key] = value
+json.dump(items, sys.stdout)
+PY
+}
+
 # 1. Sanity: is SLAM running?
 echo "[1/6] Sanity check - Gateway + SLAM responsive ..."
 SLAM_HZ="$(curl -sf http://localhost:5050/api/v1/health | python3 -c 'import json,sys; print(json.load(sys.stdin).get("slam_hz", 0))')"
@@ -46,7 +59,7 @@ read -r
 echo "[3/6] Triggering MapManager save pipeline: $MAP_NAME"
 SAVE_RESP="$(curl -sf -X POST http://localhost:5050/api/v1/maps \
   -H 'Content-Type: application/json' \
-  -d "{\"action\":\"save\",\"name\":\"$MAP_NAME\"}")"
+  -d "$(json_payload action=save "name=$MAP_NAME")")"
 echo "$SAVE_RESP" | python3 -m json.tool
 
 SUCCESS="$(echo "$SAVE_RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("success", False))')"
@@ -83,10 +96,11 @@ done
 echo "[5/6] Activating map"
 curl -sf -X POST http://localhost:5050/api/v1/maps \
   -H 'Content-Type: application/json' \
-  -d "{\"action\":\"set_active\",\"name\":\"$MAP_NAME\"}" | python3 -m json.tool
+  -d "$(json_payload action=set_active "name=$MAP_NAME")" | python3 -m json.tool
 
 ACTIVE_LINK="$MAP_ROOT/active"
-if [[ "$(readlink "$ACTIVE_LINK")" != *"$MAP_NAME"* ]]; then
+ACTIVE_TARGET="$(readlink "$ACTIVE_LINK" || true)"
+if [[ "$(basename "$ACTIVE_TARGET")" != "$MAP_NAME" ]]; then
   echo "FAIL: active symlink not pointing at $MAP_NAME"
   exit 5
 fi
@@ -95,9 +109,7 @@ fi
 echo ""
 echo "=== PASS - map '$MAP_NAME' saved + activated ==="
 echo "Next:"
-echo "  sudo systemctl stop lingtu"
-echo "  sudo systemctl edit lingtu --full  # switch profile=s100p (localizer)"
-echo "  sudo systemctl start lingtu"
-echo "  then verify /api/v1/health reports localizer mode"
+echo "  POST /api/v1/session/start with mode=navigating, slam_profile=localizer, map_name=$MAP_NAME"
+echo "  or run p0_all.sh, which starts that Gateway session before route checks."
 echo ""
 echo "Log: $LOG"

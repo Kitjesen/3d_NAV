@@ -119,13 +119,14 @@ Each P0 script is self-contained, uses `set -e`, and writes its log to `~/data/n
 ssh sunrise@192.168.66.190
 cd ~/data/SLAM/navigation
 git pull --ff-only origin main
-bash docs/07-testing/p0_all.sh | tee ~/data/nav_logs/$(date +%Y%m%d_%H%M%S)_p0_all.log
+LINGTU_P0_GOAL_X=2.0 LINGTU_P0_GOAL_Y=0.0 bash docs/07-testing/p0_all.sh
 ```
 
-The aggregate script pauses after cold boot so the operator can switch LingTu
-to a mapping profile, then pauses again after mapping so the operator can
-switch to the nav/localizer profile with the newly active map before
-route-safety and goto checks run.
+The aggregate script starts Gateway sessions through `/api/v1/session/start`:
+`mapping` with `slam_profile=fastlio2`, then `navigating` with
+`slam_profile=localizer` and the map saved by P0-02. It refuses to choose a
+motion target automatically; set `LINGTU_P0_GOAL_X` and `LINGTU_P0_GOAL_Y`, then
+type `RUN` after the no-motion route preview shows a safe path.
 
 Exploration is opt-in for the aggregate script because it requires a dedicated
 runtime profile and an open test area:

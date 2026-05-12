@@ -12,7 +12,19 @@ mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$(date +%Y%m%d_%H%M%S)_p0_estop.log"
 exec > >(tee -a "$LOG") 2>&1
 
-echo "=== P0-04 E-stop reflex - $(date) ==="
+echo "=== P0-05 E-stop reflex - $(date) ==="
+
+read_speed() {
+  curl -sf http://localhost:5050/api/v1/state 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+motion = d.get("navigation", {}).get("motion", {})
+value = motion.get("current_speed_mps")
+if value is None:
+    raise SystemExit(2)
+print(value)
+'
+}
 
 echo "[1/4] Baseline health"
 curl -sf http://localhost:5050/api/v1/health > /dev/null || {
@@ -23,6 +35,16 @@ curl -sf http://localhost:5050/api/v1/health > /dev/null || {
 echo "[2/4] Please manually drive the robot so reported speed is non-zero."
 echo "      Press [Enter] when ready to issue Gateway stop."
 read -r
+PRE_STOP_SPEED="$(read_speed 2>/dev/null || echo "")"
+if [[ -z "$PRE_STOP_SPEED" ]]; then
+  echo "FAIL: cannot read pre-stop navigation.motion.current_speed_mps"
+  exit 3
+fi
+if [[ "$(python3 -c "print(abs(float('$PRE_STOP_SPEED')) >= 0.03)")" != "True" ]]; then
+  echo "FAIL: pre-stop speed is not non-zero enough for an estop test (speed=$PRE_STOP_SPEED)"
+  exit 4
+fi
+echo "  pre-stop speed: $PRE_STOP_SPEED m/s"
 
 echo "[3/4] Sending stop command and measuring RPC latency ..."
 T0=$(date +%s%3N)
@@ -39,13 +61,7 @@ ZERO_TICKS=0
 DEADLINE=$((SECONDS + 2))
 LAST_SPEED="?"
 while [[ $SECONDS -lt $DEADLINE ]]; do
-  SPEED="$(curl -sf http://localhost:5050/api/v1/state 2>/dev/null | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-motion = d.get("navigation", {}).get("motion", {})
-value = motion.get("current_speed_mps", 1.0)
-print(0.0 if value is None else value)
-' 2>/dev/null || echo "1.0")"
+  SPEED="$(read_speed 2>/dev/null || echo "1.0")"
   LAST_SPEED="$SPEED"
   if [[ "$(python3 -c "print(abs(float('$SPEED')) < 0.01)")" == "True" ]]; then
     ZERO_TICKS=$((ZERO_TICKS + 1))
@@ -58,9 +74,9 @@ done
 
 if [[ "$ZERO_TICKS" -lt 3 ]]; then
   echo "FAIL: reported navigation speed did not reach zero within 2s (speed=$LAST_SPEED)"
-  exit 3
+  exit 5
 fi
 
 echo ""
-echo "=== PASS - stop accepted (rpc=${RTT}ms), reported navigation speed zeroed ==="
+echo "=== PASS - stop accepted (rpc=${RTT}ms), speed ${PRE_STOP_SPEED} -> zero ==="
 echo "Log: $LOG"

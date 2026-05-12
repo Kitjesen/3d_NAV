@@ -14,6 +14,17 @@ exec > >(tee -a "$SUMMARY") 2>&1
 
 echo "=== P0 ALL - $(date) ==="
 
+MAP_NAME="${LINGTU_P0_MAP_NAME:-p0_${STAMP}}"
+GOAL_X="${LINGTU_P0_GOAL_X:-${1:-}}"
+GOAL_Y="${LINGTU_P0_GOAL_Y:-${2:-}}"
+GOTO_TIMEOUT="${LINGTU_P0_GOTO_TIMEOUT:-${3:-60}}"
+if [[ -z "$GOAL_X" || -z "$GOAL_Y" ]]; then
+  echo "FAIL: set LINGTU_P0_GOAL_X and LINGTU_P0_GOAL_Y, or pass GOAL_X GOAL_Y [TIMEOUT]."
+  echo "      The aggregate P0 flow will not choose a motion target automatically."
+  exit 2
+fi
+echo "map=$MAP_NAME goal=($GOAL_X, $GOAL_Y) goto_timeout=${GOTO_TIMEOUT}s"
+
 ran=0
 passed=0
 
@@ -42,14 +53,60 @@ pause_for_profile() {
   read -r
 }
 
+json_payload() {
+  python3 - "$@" <<'PY'
+import json
+import sys
+
+items = {}
+for arg in sys.argv[1:]:
+    key, value = arg.split("=", 1)
+    items[key] = value
+json.dump(items, sys.stdout)
+PY
+}
+
+session_end() {
+  curl -sf -X POST http://localhost:5050/api/v1/session/end >/dev/null 2>&1 || true
+}
+
+session_start() {
+  local mode="$1"
+  local slam_profile="$2"
+  local map_name="${3:-}"
+  local payload
+  if [[ -n "$map_name" ]]; then
+    payload="$(json_payload "mode=$mode" "slam_profile=$slam_profile" "map_name=$map_name")"
+  else
+    payload="$(json_payload "mode=$mode" "slam_profile=$slam_profile")"
+  fi
+  echo "Starting Gateway session: $payload"
+  curl -sf -X POST http://localhost:5050/api/v1/session/start \
+    -H 'Content-Type: application/json' \
+    -d "$payload" | python3 -m json.tool
+}
+
+confirm_after_preview() {
+  echo ""
+  echo "Route preview passed for goal=($GOAL_X, $GOAL_Y)."
+  echo "Confirm the displayed path is safe in the real test area before motion."
+  echo "Type RUN to send the goal through /api/v1/goal:"
+  read -r answer
+  if [[ "$answer" != "RUN" ]]; then
+    echo "FAIL: operator did not confirm motion goal"
+    exit 3
+  fi
+}
+
 run_one "P0-01 cold boot"   p0_cold_boot.sh
-pause_for_profile "mapping/fastlio2" \
-  "Switch LingTu to the map or fastlio2 profile before walking the robot for map capture."
-run_one "P0-02 mapping"     p0_mapping.sh
-pause_for_profile "navigation/localizer" \
-  "Switch LingTu to the nav/localizer profile using the saved active map."
-run_one "P0-03 route safety" p0_route_safety.sh 2.0 0.0
-run_one "P0-04 goto"        p0_goto.sh 2.0 0.0 60
+session_end
+session_start "mapping" "fastlio2"
+run_one "P0-02 mapping"     p0_mapping.sh "$MAP_NAME"
+session_end
+session_start "navigating" "localizer" "$MAP_NAME"
+run_one "P0-03 route safety" p0_route_safety.sh "$GOAL_X" "$GOAL_Y"
+confirm_after_preview
+run_one "P0-04 goto"        p0_goto.sh "$GOAL_X" "$GOAL_Y" "$GOTO_TIMEOUT"
 run_one "P0-05 estop"       p0_estop.sh
 if [[ "${LINGTU_P0_RUN_EXPLORE:-0}" == "1" ]]; then
   pause_for_profile "explore/tare_explore" \

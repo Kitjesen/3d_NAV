@@ -60,19 +60,26 @@ def test_p0_scripts_use_current_gateway_contracts():
     assert "/api/v1/nav/status" not in goto
     assert '\\"frame_id\\":\\"map\\"' in goto
     assert '\\"client_id\\":\\"p0_goto\\"' in goto
+    assert "P0-04 Goto" in goto
 
     assert "POST /api/v1/stop" in estop
     assert "GET /api/v1/state" in estop
+    assert "PRE_STOP_SPEED" in estop
+    assert "current_speed_mps" in estop
+    assert "P0-05 E-stop" in estop
     assert "/api/v1/safety/state" not in estop
     assert "curl -sf http://localhost:5050/api/v1/cmd_vel" not in estop
 
     assert "/api/v1/maps" in mapping
-    assert '\\"action\\":\\"save\\"' in mapping
-    assert '\\"action\\":\\"set_active\\"' in mapping
+    assert "action=save" in mapping
+    assert "action=set_active" in mapping
     assert "/api/v1/map/save" not in mapping
     assert "/api/v1/map/activate" not in mapping
     assert "SAVE_PATH=" in mapping
     assert 'd.get("map_dir") or d.get("path")' in mapping
+    assert "json_payload action=save" in mapping
+    assert "json_payload action=set_active" in mapping
+    assert 'basename "$ACTIVE_TARGET"' in mapping
     assert "NAV_MAP_DIR" in mapping
     assert "~/data/nova/maps" in mapping
     assert "data/inovxio/data/maps" not in mapping
@@ -152,8 +159,9 @@ def test_p0_field_runbook_matches_script_contracts():
     assert "/api/v1/navigation/status" in readme
     assert "/api/v1/navigation/plan" in readme
     assert "path_safety.ok=true" in readme
-    assert "pauses after cold boot" in readme
-    assert "pauses again after mapping" in readme
+    assert "/api/v1/session/start" in readme
+    assert "LINGTU_P0_GOAL_X" in readme
+    assert "type `RUN`" in readme
     assert "POST /api/v1/stop" in readme
     assert "/api/v1/state" in readme
     assert "/api/v1/explore/status" in readme
@@ -163,9 +171,10 @@ def test_p0_field_runbook_matches_script_contracts():
     assert "P0-06 exploration start/stop" in readme
     assert "CmdVelMux` outputs `Twist.zero()`" not in readme
     assert "watchdog log entry" not in readme
-    assert "pause_for_profile" in p0_all
-    assert "mapping/fastlio2" in p0_all
-    assert "navigation/localizer" in p0_all
+    assert "session_start \"mapping\" \"fastlio2\"" in p0_all
+    assert "session_start \"navigating\" \"localizer\" \"$MAP_NAME\"" in p0_all
+    assert "confirm_after_preview" in p0_all
+    assert "LINGTU_P0_GOAL_X" in p0_all
     assert "explore/tare_explore" in p0_all
 
     for script in p0_scripts:
