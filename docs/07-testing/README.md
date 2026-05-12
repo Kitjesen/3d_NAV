@@ -8,6 +8,9 @@ commit messages follow the Lore protocol in `AGENTS.md`, local commits must pass
 the L1 test gate, and pushes must pass the L2 gate plus any focused checks for
 the touched subsystem.
 
+Current P0 readiness evidence and remaining product-claim blockers are tracked
+in [`P0_READINESS_AUDIT.md`](P0_READINESS_AUDIT.md).
+
 | Layer | Trigger | Content | Time | Required |
 |---|---|---|---|---|
 | L1 pre-commit hook | `git commit` | `pytest src/core/tests/ -q` must pass | ~90 s | Yes |
