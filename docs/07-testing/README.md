@@ -49,9 +49,7 @@ hardware-free evidence only: it must report `simulation_only=true`,
 Full closure summary:
 
 ```bash
-PYTHONPATH=src:. python sim/scripts/server_sim_closure.py \
-  --json-out artifacts/server_sim_closure_summary_all.json \
-  --strict
+bash docs/07-testing/l25_fresh_closure.sh
 ```
 
 The summary is an aggregator. If it reports `missing_or_failed`, run the
@@ -59,9 +57,10 @@ command printed for each failed gate, then rerun the summary.
 When a command uses `--required` to validate only a subset, non-required
 failures appear as `optional_missing_or_failed`; that output is useful setup
 evidence but not a full closure pass.
-Each accepted report includes `report_mtime` and `report_age_s`. Add
-`--max-report-age-s <seconds>` when a review or release gate needs to reject
-stale artifacts instead of only displaying their age.
+Each accepted report includes `report_mtime` and `report_age_s`. The wrapper
+enforces `--max-report-age-s`, defaulting to 21600 seconds; override with
+`LINGTU_L25_MAX_REPORT_AGE_S` only when the review explicitly accepts older
+simulation evidence.
 
 The current full gate set covers:
 
@@ -187,6 +186,7 @@ The detailed runbook is in `sim/README.md`.
 ## Script inventory
 
 - `install_hooks.sh` - install L1 / L2 git hooks.
+- `l25_fresh_closure.sh` - L2.5 strict closure summary with freshness enforcement.
 - `p0_cold_boot.sh` - P0-01 cold start.
 - `p0_mapping.sh` - P0-02 mapping.
 - `p0_route_safety.sh` - P0-03 no-motion route safety preview.

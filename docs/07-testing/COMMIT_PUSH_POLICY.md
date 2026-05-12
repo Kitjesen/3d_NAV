@@ -73,14 +73,12 @@ Recommended server simulation closure check when navigation behavior is part of
 the claim:
 
 ```bash
-PYTHONPATH=src:. python sim/scripts/server_sim_closure.py \
-  --json-out artifacts/server_sim_closure_summary_all.json \
-  --strict
+bash docs/07-testing/l25_fresh_closure.sh
 ```
 
-Closure summaries include `report_age_s` per gate. Add
-`--max-report-age-s <seconds>` when a review requires freshly regenerated
-simulation evidence rather than an older passing artifact.
+Closure summaries include `report_age_s` per gate. The wrapper enforces
+`--max-report-age-s`, defaulting to 21600 seconds, so older passing artifacts do
+not silently support new simulation-backed claims.
 
 For setup-only validation, `scripts/deploy/setup_server_ros_pct.sh` writes the
 setup-safe subset summary to `artifacts/server_sim_closure_summary_setup.json`.

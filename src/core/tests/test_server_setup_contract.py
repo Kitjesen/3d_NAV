@@ -110,6 +110,27 @@ def test_l2_hook_runs_stub_build_and_offline_start_smoke():
     assert 'profile="stub"' not in hook
 
 
+def test_l25_fresh_closure_wrapper_enforces_report_age():
+    script = (REPO_ROOT / "docs/07-testing/l25_fresh_closure.sh").read_text(
+        encoding="utf-8"
+    )
+    readme = (REPO_ROOT / "docs/07-testing/README.md").read_text(
+        encoding="utf-8"
+    )
+    policy = (REPO_ROOT / "docs/07-testing/COMMIT_PUSH_POLICY.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "LINGTU_L25_MAX_REPORT_AGE_S:-21600" in script
+    assert "sim/scripts/server_sim_closure.py" in script
+    assert "--max-report-age-s" in script
+    assert "--strict" in script
+    assert "artifacts/server_sim_closure_summary_all.json" in script
+    assert "bash docs/07-testing/l25_fresh_closure.sh" in readme
+    assert "LINGTU_L25_MAX_REPORT_AGE_S" in readme
+    assert "bash docs/07-testing/l25_fresh_closure.sh" in policy
+
+
 def test_p0_field_runbook_matches_script_contracts():
     readme = (REPO_ROOT / "docs/07-testing/README.md").read_text(
         encoding="utf-8"
@@ -118,6 +139,7 @@ def test_p0_field_runbook_matches_script_contracts():
         encoding="utf-8"
     )
     p0_scripts = [
+        REPO_ROOT / "docs/07-testing/l25_fresh_closure.sh",
         REPO_ROOT / "docs/07-testing/p0_all.sh",
         REPO_ROOT / "docs/07-testing/p0_cold_boot.sh",
         REPO_ROOT / "docs/07-testing/p0_estop.sh",
