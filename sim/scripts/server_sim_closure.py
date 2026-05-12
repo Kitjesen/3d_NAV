@@ -424,6 +424,59 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
         if int(nav_samples.get(topic) or 0) <= 0:
             blockers.append(f"nav_loop {topic} samples missing")
 
+    frontier = report.get("frontier_exploration") or {}
+    if frontier.get("ok") is not True:
+        blockers.append("frontier_exploration.ok is not true")
+    if frontier.get("simulation_only") is not True:
+        blockers.append("frontier_exploration.simulation_only is not true")
+    if not _bool_false(frontier, "real_robot_motion"):
+        blockers.append("frontier_exploration.real_robot_motion is not false")
+    if not _bool_false(frontier, "cmd_vel_sent_to_hardware"):
+        blockers.append("frontier_exploration.cmd_vel_sent_to_hardware is not false")
+    for key in (
+        "frontier_started",
+        "frontier_goal_seen",
+        "frontier_goal_published",
+        "odometry_seen",
+        "map_cloud_seen",
+        "global_path_seen",
+        "local_path_seen",
+        "cmd_vel_seen",
+        "cmd_vel_nonzero",
+    ):
+        if frontier.get(key) is not True:
+            blockers.append(f"frontier_exploration.{key} is not true")
+    frontier_odom_delta = _safe_float(frontier.get("odom_delta_m"), default=0.0)
+    if frontier_odom_delta < 0.05:
+        blockers.append("frontier_exploration.odom_delta_m < 0.05")
+    frontier_area_delta = _safe_float(frontier.get("explored_area_delta_m2"), default=0.0)
+    if frontier_area_delta <= 0.0:
+        blockers.append("frontier_exploration.explored_area_delta_m2 <= 0")
+    if int(frontier.get("known_cells_delta") or 0) <= 0:
+        blockers.append("frontier_exploration.known_cells_delta <= 0")
+    if int(frontier.get("frontier_count_max") or 0) <= 0:
+        blockers.append("frontier_exploration.frontier_count_max <= 0")
+    frontier_samples = frontier.get("samples") or {}
+    for topic in ("/nav/goal_pose", "/nav/global_path", "/nav/local_path", "/nav/cmd_vel", "/nav/odometry"):
+        if int(frontier_samples.get(topic) or 0) <= 0:
+            blockers.append(f"frontier_exploration {topic} samples missing")
+
+    tare = report.get("tare_exploration") or {}
+    if tare.get("ok") is not True:
+        blockers.append("tare_exploration.ok is not true")
+    if tare.get("simulation_only") is not True:
+        blockers.append("tare_exploration.simulation_only is not true")
+    if not _bool_false(tare, "real_robot_motion"):
+        blockers.append("tare_exploration.real_robot_motion is not false")
+    if not _bool_false(tare, "cmd_vel_sent_to_hardware"):
+        blockers.append("tare_exploration.cmd_vel_sent_to_hardware is not false")
+    if tare.get("source_contract_ok") is not True:
+        blockers.append("tare_exploration.source_contract_ok is not true")
+    if tare.get("backend") != "tare":
+        blockers.append("tare_exploration.backend is not tare")
+    if tare.get("runtime_required") is True and tare.get("runtime_available") is not True:
+        blockers.append("tare_exploration runtime required but unavailable")
+
     return not blockers, blockers, {
         "samples": report.get("samples"),
         "topic_samples": samples,
@@ -441,6 +494,25 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
             "odom_start_xy": nav_loop.get("odom_start_xy"),
             "odom_last_xy": nav_loop.get("odom_last_xy"),
             "topic_samples": nav_samples,
+        },
+        "frontier_exploration": {
+            "ok": frontier.get("ok"),
+            "frontier_started": frontier.get("frontier_started"),
+            "frontier_goal": frontier.get("frontier_goal"),
+            "frontier_goal_published": frontier.get("frontier_goal_published"),
+            "frontier_count_max": frontier.get("frontier_count_max"),
+            "odom_delta_m": frontier.get("odom_delta_m"),
+            "known_cells_delta": frontier.get("known_cells_delta"),
+            "explored_area_delta_m2": frontier.get("explored_area_delta_m2"),
+            "topic_samples": frontier_samples,
+        },
+        "tare_exploration": {
+            "ok": tare.get("ok"),
+            "backend": tare.get("backend"),
+            "source_contract_ok": tare.get("source_contract_ok"),
+            "runtime_required": tare.get("runtime_required"),
+            "runtime_available": tare.get("runtime_available"),
+            "gazebo_runtime_verified": tare.get("gazebo_runtime_verified"),
         },
     }
 
@@ -708,8 +780,9 @@ GATES: tuple[GateSpec, ...] = (
     ),
     GateSpec(
         "gazebo_runtime",
-        "ROS-native Gazebo TF, point-cloud, PCT path, local path, cmd_vel, and odometry motion loop",
+        "ROS-native Gazebo TF, point-cloud, navigation loop, wavefront frontier exploration, and TARE contract",
         (
+            "artifacts/server_sim_closure/gazebo_runtime_explore/report.json",
             "artifacts/server_sim_closure/gazebo_runtime_nav/report.json",
             "artifacts/server_sim_closure/gazebo_runtime/report.json",
         ),
@@ -718,8 +791,9 @@ GATES: tuple[GateSpec, ...] = (
         "PYTHONPATH=src:.:/opt/ros/humble/local/lib/python3.10/dist-packages:"
         "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
         "python3 sim/scripts/gazebo_runtime_gate.py --check-nav-loop "
-        "--json-out artifacts/server_sim_closure/gazebo_runtime_nav/report.json "
-        "--launch-log artifacts/server_sim_closure/gazebo_runtime_nav/launch.log'",
+        "--check-frontier-exploration --check-tare-contract "
+        "--json-out artifacts/server_sim_closure/gazebo_runtime_explore/report.json "
+        "--launch-log artifacts/server_sim_closure/gazebo_runtime_explore/launch.log'",
         _eval_gazebo_runtime,
     ),
     GateSpec(

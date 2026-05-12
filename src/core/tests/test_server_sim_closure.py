@@ -127,6 +127,52 @@ def _complete_gazebo_report() -> dict:
                 "/nav/odometry": 16,
             },
         },
+        "frontier_exploration": {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "frontier_started": True,
+            "frontier_goal_seen": True,
+            "frontier_goal_published": True,
+            "odometry_seen": True,
+            "map_cloud_seen": True,
+            "global_path_seen": True,
+            "local_path_seen": True,
+            "cmd_vel_seen": True,
+            "cmd_vel_nonzero": True,
+            "odom_start_xy": [0.0, 0.0],
+            "odom_last_xy": [0.08, 0.02],
+            "odom_delta_m": 0.082,
+            "known_cells_initial": 101,
+            "known_cells_final": 140,
+            "known_cells_delta": 39,
+            "explored_area_initial_m2": 1.01,
+            "explored_area_final_m2": 1.40,
+            "explored_area_delta_m2": 0.39,
+            "frontier_goal": [1.8, 0.0, 0.0],
+            "frontier_count_max": 3,
+            "samples": {
+                "/nav/frontier_goal": 1,
+                "/nav/goal_pose": 1,
+                "/nav/global_path": 2,
+                "/nav/local_path": 12,
+                "/nav/cmd_vel": 18,
+                "/nav/odometry": 16,
+                "/nav/map_cloud": 3,
+            },
+        },
+        "tare_exploration": {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "backend": "tare",
+            "source_contract_ok": True,
+            "runtime_required": False,
+            "runtime_available": False,
+            "gazebo_runtime_verified": False,
+        },
     }
 
 
@@ -203,8 +249,10 @@ def test_server_sim_closure_gazebo_runtime_command_starts_runtime_gate():
 
     assert "sim/scripts/gazebo_runtime_gate.py" in spec.command
     assert "--check-nav-loop" in spec.command
-    assert "gazebo_runtime_nav/report.json" in spec.command
-    assert "--launch-log artifacts/server_sim_closure/gazebo_runtime_nav/launch.log" in spec.command
+    assert "--check-frontier-exploration" in spec.command
+    assert "--check-tare-contract" in spec.command
+    assert "gazebo_runtime_explore/report.json" in spec.command
+    assert "--launch-log artifacts/server_sim_closure/gazebo_runtime_explore/launch.log" in spec.command
     assert "tf_contract_smoke.py" not in spec.command
     assert "source /opt/ros/humble/setup.bash" in spec.command
 
@@ -930,6 +978,76 @@ def test_server_sim_closure_rejects_gazebo_without_navigation_loop(tmp_path: Pat
     assert "nav_loop.odom_delta_m < 0.05" in gaps
     assert "nav_loop /nav/global_path samples missing" in gaps
     assert "nav_loop /nav/local_path samples missing" in gaps
+
+
+def test_server_sim_closure_rejects_gazebo_without_frontier_exploration(tmp_path: Path):
+    weak = _complete_gazebo_report()
+    weak["frontier_exploration"] = {
+        "ok": True,
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "frontier_started": True,
+        "frontier_goal_seen": False,
+        "frontier_goal_published": False,
+        "odometry_seen": True,
+        "map_cloud_seen": True,
+        "global_path_seen": False,
+        "local_path_seen": False,
+        "cmd_vel_seen": True,
+        "cmd_vel_nonzero": False,
+        "odom_delta_m": 0.01,
+        "known_cells_delta": 0,
+        "explored_area_delta_m2": 0.0,
+        "frontier_count_max": 0,
+        "samples": {
+            "/nav/cmd_vel": 4,
+            "/nav/odometry": 4,
+        },
+    }
+    report = _write_json(tmp_path / "gazebo_weak_frontier.json", weak)
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"gazebo_runtime": report},
+        required={"gazebo_runtime"},
+    )
+
+    assert summary["ok"] is False
+    assert summary["verified"]["gazebo_runtime"] is False
+    gaps = "\n".join(summary["remaining_gaps"])
+    assert "frontier_exploration.frontier_goal_seen is not true" in gaps
+    assert "frontier_exploration.global_path_seen is not true" in gaps
+    assert "frontier_exploration.cmd_vel_nonzero is not true" in gaps
+    assert "frontier_exploration.explored_area_delta_m2 <= 0" in gaps
+    assert "frontier_exploration.known_cells_delta <= 0" in gaps
+    assert "frontier_exploration.frontier_count_max <= 0" in gaps
+
+
+def test_server_sim_closure_rejects_gazebo_when_tare_contract_missing(tmp_path: Path):
+    weak = _complete_gazebo_report()
+    weak["tare_exploration"] = {
+        "ok": False,
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "backend": "tare",
+        "source_contract_ok": False,
+        "runtime_required": True,
+        "runtime_available": False,
+    }
+    report = _write_json(tmp_path / "gazebo_weak_tare.json", weak)
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"gazebo_runtime": report},
+        required={"gazebo_runtime"},
+    )
+
+    assert summary["ok"] is False
+    assert summary["verified"]["gazebo_runtime"] is False
+    gaps = "\n".join(summary["remaining_gaps"])
+    assert "tare_exploration.ok is not true" in gaps
+    assert "tare_exploration.source_contract_ok is not true" in gaps
+    assert "tare_exploration runtime required but unavailable" in gaps
 
 
 def test_server_sim_closure_rejects_non_pct_native_motion_report(tmp_path: Path):

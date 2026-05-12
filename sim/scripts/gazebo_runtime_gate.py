@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -77,6 +78,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
     launch_log.parent.mkdir(parents=True, exist_ok=True)
     smoke_tmp = out_path.with_suffix(".smoke.tmp.json")
     nav_tmp = out_path.with_suffix(".nav.tmp.json")
+    frontier_tmp = out_path.with_suffix(".frontier.tmp.json")
 
     launch_cmd = [
         "ros2",
@@ -124,6 +126,15 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         "--json",
         "--json-out",
         str(nav_tmp),
+    ]
+    frontier_smoke_cmd = [
+        sys.executable,
+        str(ROOT / "tests" / "integration" / "gazebo_frontier_exploration_smoke.py"),
+        "--timeout-sec",
+        str(args.frontier_timeout_sec),
+        "--json",
+        "--json-out",
+        str(frontier_tmp),
     ]
 
     env = os.environ.copy()
@@ -175,7 +186,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
                 report["gate"]["smoke_stdout_tail"] = smoke.stdout[-2000:]
             if smoke.stderr:
                 report["gate"]["smoke_stderr_tail"] = smoke.stderr[-2000:]
-            if args.check_nav_loop and report["ok"]:
+            if (args.check_nav_loop or args.check_frontier_exploration) and report["ok"]:
                 nav_proc = subprocess.Popen(
                     nav_launch_cmd,
                     cwd=str(ROOT),
@@ -185,39 +196,85 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
                     start_new_session=(os.name == "posix"),
                 )
                 time.sleep(args.nav_warmup_sec)
-                nav_smoke = subprocess.run(
-                    nav_smoke_cmd,
-                    cwd=str(ROOT),
-                    env=env,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=args.nav_timeout_sec + 10.0,
-                )
-                nav_report = _load_report(nav_tmp, "lingtu.gazebo_nav_loop.v1")
-                nav_errors = list(nav_report.get("errors") or [])
-                if nav_proc.poll() is not None:
-                    nav_errors.append(
-                        f"navigation launch exited early with code {nav_proc.returncode}"
+                if args.check_nav_loop:
+                    nav_smoke = subprocess.run(
+                        nav_smoke_cmd,
+                        cwd=str(ROOT),
+                        env=env,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=args.nav_timeout_sec + 10.0,
                     )
-                if nav_smoke.returncode != 0 and nav_report.get("ok") is not True:
-                    nav_errors.append(
-                        f"gazebo_nav_loop_smoke exited with code {nav_smoke.returncode}"
+                    nav_report = _load_report(nav_tmp, "lingtu.gazebo_nav_loop.v1")
+                    nav_errors = list(nav_report.get("errors") or [])
+                    if nav_proc.poll() is not None:
+                        nav_errors.append(
+                            f"navigation launch exited early with code {nav_proc.returncode}"
+                        )
+                    if nav_smoke.returncode != 0 and nav_report.get("ok") is not True:
+                        nav_errors.append(
+                            f"gazebo_nav_loop_smoke exited with code {nav_smoke.returncode}"
+                        )
+                    nav_report["ok"] = bool(nav_report.get("ok")) and not nav_errors
+                    nav_report["errors"] = nav_errors
+                    if nav_smoke.stdout:
+                        nav_report["stdout_tail"] = nav_smoke.stdout[-2000:]
+                    if nav_smoke.stderr:
+                        nav_report["stderr_tail"] = nav_smoke.stderr[-2000:]
+                    report["nav_loop"] = nav_report
+                    report["ok"] = bool(report["ok"]) and bool(nav_report.get("ok"))
+                    report["errors"] = list(report.get("errors") or []) + [
+                        f"nav_loop: {err}" for err in nav_errors
+                    ]
+                    report["gate"]["nav_smoke_cmd"] = nav_smoke_cmd
+                    report["gate"]["nav_smoke_returncode"] = nav_smoke.returncode
+                if args.check_frontier_exploration and report["ok"]:
+                    frontier_smoke = subprocess.run(
+                        frontier_smoke_cmd,
+                        cwd=str(ROOT),
+                        env=env,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=args.frontier_timeout_sec + 10.0,
                     )
-                nav_report["ok"] = bool(nav_report.get("ok")) and not nav_errors
-                nav_report["errors"] = nav_errors
-                if nav_smoke.stdout:
-                    nav_report["stdout_tail"] = nav_smoke.stdout[-2000:]
-                if nav_smoke.stderr:
-                    nav_report["stderr_tail"] = nav_smoke.stderr[-2000:]
-                report["nav_loop"] = nav_report
-                report["ok"] = bool(report["ok"]) and bool(nav_report.get("ok"))
-                report["errors"] = list(report.get("errors") or []) + [
-                    f"nav_loop: {err}" for err in nav_errors
-                ]
+                    frontier_report = _load_report(
+                        frontier_tmp,
+                        "lingtu.gazebo_frontier_exploration.v1",
+                    )
+                    frontier_errors = list(frontier_report.get("errors") or [])
+                    if nav_proc.poll() is not None:
+                        frontier_errors.append(
+                            f"navigation launch exited early with code {nav_proc.returncode}"
+                        )
+                    if frontier_smoke.returncode != 0 and frontier_report.get("ok") is not True:
+                        frontier_errors.append(
+                            "gazebo_frontier_exploration_smoke exited "
+                            f"with code {frontier_smoke.returncode}"
+                        )
+                    frontier_report["ok"] = bool(frontier_report.get("ok")) and not frontier_errors
+                    frontier_report["errors"] = frontier_errors
+                    if frontier_smoke.stdout:
+                        frontier_report["stdout_tail"] = frontier_smoke.stdout[-2000:]
+                    if frontier_smoke.stderr:
+                        frontier_report["stderr_tail"] = frontier_smoke.stderr[-2000:]
+                    report["frontier_exploration"] = frontier_report
+                    report["ok"] = bool(report["ok"]) and bool(frontier_report.get("ok"))
+                    report["errors"] = list(report.get("errors") or []) + [
+                        f"frontier_exploration: {err}" for err in frontier_errors
+                    ]
+                    report["gate"]["frontier_smoke_cmd"] = frontier_smoke_cmd
+                    report["gate"]["frontier_smoke_returncode"] = frontier_smoke.returncode
                 report["gate"]["nav_launch_cmd"] = nav_launch_cmd
-                report["gate"]["nav_smoke_cmd"] = nav_smoke_cmd
-                report["gate"]["nav_smoke_returncode"] = nav_smoke.returncode
+            if args.check_tare_contract and report["ok"]:
+                tare_report = _tare_contract_report(require_runtime=args.require_tare_runtime)
+                report["tare_exploration"] = tare_report
+                report["ok"] = bool(report["ok"]) and bool(tare_report.get("ok"))
+                report["errors"] = list(report.get("errors") or []) + [
+                    f"tare_exploration: {err}"
+                    for err in list(tare_report.get("errors") or [])
+                ]
             with out_path.open("w", encoding="utf-8") as f:
                 json.dump(report, f, indent=2, ensure_ascii=False)
             return report
@@ -235,6 +292,46 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
                     nav_tmp.unlink()
                 except OSError:
                     pass
+            if frontier_tmp.exists():
+                try:
+                    frontier_tmp.unlink()
+                except OSError:
+                    pass
+
+
+def _tare_contract_report(*, require_runtime: bool) -> dict[str, Any]:
+    source_root = ROOT / "src" / "exploration"
+    tare_root = source_root / "tare_planner"
+    installed_binary = ROOT / "install" / "tare_planner" / "lib" / "tare_planner" / "tare_planner_node"
+    binary = shutil.which("tare_planner_node") or (
+        str(installed_binary) if installed_binary.exists() else ""
+    )
+    checks = {
+        "source_package": (tare_root / "package.xml").exists(),
+        "launch_files": (tare_root / "launch" / "explore_forest.launch").exists(),
+        "bridge_module": (source_root / "tare_explorer_module.py").exists(),
+        "native_factory": (source_root / "native_factories.py").exists(),
+        "supervisor_module": (source_root / "exploration_supervisor_module.py").exists(),
+    }
+    runtime_available = bool(binary)
+    errors = [f"{name} missing" for name, ok in checks.items() if not ok]
+    if require_runtime and not runtime_available:
+        errors.append("tare_planner_node runtime binary missing")
+    return {
+        "schema_version": "lingtu.gazebo_tare_exploration_contract.v1",
+        "ok": not errors,
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "backend": "tare",
+        "source_contract_ok": all(checks.values()),
+        "runtime_required": bool(require_runtime),
+        "runtime_available": runtime_available,
+        "binary": binary,
+        "checks": checks,
+        "gazebo_runtime_verified": False,
+        "errors": errors,
+    }
 
 
 def main() -> int:
@@ -252,11 +349,15 @@ def main() -> int:
     parser.add_argument("--min-samples", type=int, default=3)
     parser.add_argument("--require-camera", action="store_true")
     parser.add_argument("--check-nav-loop", action="store_true")
+    parser.add_argument("--check-frontier-exploration", action="store_true")
+    parser.add_argument("--check-tare-contract", action="store_true")
+    parser.add_argument("--require-tare-runtime", action="store_true")
     parser.add_argument("--nav-warmup-sec", type=float, default=8.0)
     parser.add_argument("--nav-timeout-sec", type=float, default=30.0)
     parser.add_argument("--nav-goal-x", type=float, default=2.0)
     parser.add_argument("--nav-goal-y", type=float, default=0.0)
     parser.add_argument("--nav-goal-z", type=float, default=0.0)
+    parser.add_argument("--frontier-timeout-sec", type=float, default=45.0)
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--use-bridge", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--spawn-robot", action=argparse.BooleanOptionalAction, default=True)
