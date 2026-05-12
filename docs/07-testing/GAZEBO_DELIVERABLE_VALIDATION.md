@@ -22,14 +22,20 @@ Passed claim:
   `cmd_vel`.
 - Frontier-driven Gazebo odometry moves by at least `0.05 m`.
 - Exploration coverage grows during the Gazebo run.
+- A Gazebo + RViz diagnostic recording shows visible obstacles, live
+  odom-projected LiDAR cloud, paths, frontier-driven motion evidence, and RViz
+  global status `Ok`.
 - The run is simulation-only: no real robot motion and no hardware `cmd_vel`.
 
 Not yet claimed:
 
-- A customer-facing Gazebo demo video or scripted exploratory coverage report.
 - TARE Gazebo runtime planning. The current gate checks the TARE source,
   launch, bridge, and supervisor contract; it does not require a built
   `tare_planner_node` binary unless `--require-tare-runtime` is set.
+- SLAM-quality mapping. In the current Gazebo gate, `/nav/map_cloud` is a live
+  odom-projected LiDAR cloud from the Gazebo runtime adapter, not a fused SLAM
+  map, and frontier coverage comes from the smoke test's internal coverage
+  grid.
 - S100P field validation from this Gazebo run.
 
 Wavefront frontier exploration is now Gazebo-validated through the runtime gate.
@@ -94,6 +100,19 @@ Additional recorded demo evidence:
 - Video summary: `frames=44`, `duration_sec=5.5`, `frontier_ok=true`
 - Long frontier run: `odom_delta_m=5.1354`, `known_cells_delta=1420`,
   `explored_area_delta_m2=14.2`
+- Gazebo + RViz video:
+  `artifacts/server_sim_closure/gazebo_rviz_obstacle_recording5/gazebo_rviz_frontier.mp4`
+- Gazebo + RViz report:
+  `artifacts/server_sim_closure/gazebo_rviz_obstacle_recording5/report.json`
+- Gazebo + RViz frame evidence:
+  `artifacts/server_sim_closure/gazebo_rviz_obstacle_recording5/frame_100.png`
+  shows visible Gazebo obstacles and RViz `Global Status: Ok` with
+  `/nav/map_cloud`; `frame_260.png` shows path, goal/odometry markers, and the
+  live odom-projected cloud during the frontier run.
+- Gazebo + RViz run: `/nav/map_cloud=12798` points,
+  `/nav/registered_cloud=23040` points, frontier goal
+  `[0.7366, -0.3315, 0.0]`, `odom_delta_m=2.9651`,
+  `known_cells_delta=1547`, `explored_area_delta_m2=15.47`.
 
 Additional topic synchronization evidence:
 

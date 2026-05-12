@@ -427,6 +427,7 @@ def generate_launch_description():
         name='rviz2',
         output='screen',
         arguments=['-d', _rviz_cfg] if os.path.exists(_rviz_cfg) else [],
+        parameters=[{'use_sim_time': True}],
     ) if _use_rviz else None
 
     # ── 启动时清除 TRANSIENT_LOCAL 路径 latch（防止上次 session 残留路径污染新 run）─

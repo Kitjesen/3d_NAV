@@ -46,6 +46,108 @@
       </link>
     </model>
 
+    <model name="frontier_demo_wall_left">
+      <static>true</static>
+      <pose>3.0 1.4 0.45 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>2.6 0.18 0.9</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>2.6 0.18 0.9</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.15 0.28 0.38 1</ambient>
+            <diffuse>0.18 0.42 0.58 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="frontier_demo_wall_right">
+      <static>true</static>
+      <pose>3.0 -1.4 0.45 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>2.6 0.18 0.9</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>2.6 0.18 0.9</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.24 0.12 1</ambient>
+            <diffuse>0.62 0.42 0.18 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="frontier_demo_block">
+      <static>true</static>
+      <pose>5.0 0.0 0.55 0 0 0.35</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.8 0.8 1.1</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.8 0.8 1.1</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.42 0.16 0.16 1</ambient>
+            <diffuse>0.72 0.22 0.22 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="frontier_demo_column">
+      <static>true</static>
+      <pose>1.6 -0.35 0.6 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <cylinder>
+              <radius>0.22</radius>
+              <length>1.2</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <cylinder>
+              <radius>0.22</radius>
+              <length>1.2</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.18 0.34 0.18 1</ambient>
+            <diffuse>0.26 0.58 0.28 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
     <physics name="lingtu_physics" type="ode">
       <max_step_size>0.005</max_step_size>
       <real_time_factor>1.0</real_time_factor>

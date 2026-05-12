@@ -19,6 +19,8 @@ from __future__ import annotations
 import copy
 import math
 import sys
+import time
+from collections import deque
 from dataclasses import dataclass
 
 
@@ -31,6 +33,16 @@ class Pose3:
     qy: float
     qz: float
     qw: float
+
+
+@dataclass(frozen=True)
+class TimedPose:
+    stamp_sec: float
+    pose: Pose3
+
+
+def _stamp_sec(stamp) -> float:
+    return float(stamp.sec) + float(stamp.nanosec) * 1e-9
 
 
 def _quat_rotate(point: tuple[float, float, float], quat: tuple[float, float, float, float]) -> tuple[float, float, float]:
@@ -89,13 +101,23 @@ def main() -> int:
             self.declare_parameter("lidar_to_body_x", 0.28)
             self.declare_parameter("lidar_to_body_y", 0.0)
             self.declare_parameter("lidar_to_body_z", 0.20)
+            self.declare_parameter("prefer_point_cloud_over_scan", True)
+            self.declare_parameter("scan_fallback_after_sec", 0.75)
             self._raw_lidar_frame = str(self.get_parameter("raw_lidar_frame").value)
             self._lidar_to_body = (
                 float(self.get_parameter("lidar_to_body_x").value),
                 float(self.get_parameter("lidar_to_body_y").value),
                 float(self.get_parameter("lidar_to_body_z").value),
             )
+            self._prefer_point_cloud_over_scan = bool(
+                self.get_parameter("prefer_point_cloud_over_scan").value
+            )
+            self._scan_fallback_after_sec = float(
+                self.get_parameter("scan_fallback_after_sec").value
+            )
             self._latest_body_pose = Pose3(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+            self._pose_history: deque[TimedPose] = deque(maxlen=300)
+            self._last_point_cloud_wall_time = 0.0
 
             self._odom_pub = self.create_publisher(Odometry, self._cfg.lingtu_odometry, 10)
             self._map_cloud_pub = self.create_publisher(PointCloud2, self._cfg.lingtu_map_cloud, 2)
@@ -162,7 +184,7 @@ def main() -> int:
             out.header.frame_id = "odom"
             out.child_frame_id = "body"
             self._odom_pub.publish(out)
-            self._latest_body_pose = Pose3(
+            pose = Pose3(
                 out.pose.pose.position.x,
                 out.pose.pose.position.y,
                 out.pose.pose.position.z,
@@ -171,6 +193,8 @@ def main() -> int:
                 out.pose.pose.orientation.z,
                 out.pose.pose.orientation.w,
             )
+            self._latest_body_pose = pose
+            self._pose_history.append(TimedPose(_stamp_sec(out.header.stamp), pose))
 
             tf = TransformStamped()
             tf.header.stamp = out.header.stamp
@@ -183,6 +207,7 @@ def main() -> int:
             self._tf_pub.sendTransform(tf)
 
         def _on_cloud(self, msg: PointCloud2) -> None:
+            self._last_point_cloud_wall_time = time.monotonic()
             registered_cloud = self._transform_cloud(msg, target_frame="body")
             if self._point_count(registered_cloud) <= 0:
                 return
@@ -195,6 +220,13 @@ def main() -> int:
             self._map_cloud_pub.publish(map_cloud)
 
         def _on_scan(self, msg: LaserScan) -> None:
+            if (
+                self._prefer_point_cloud_over_scan
+                and self._last_point_cloud_wall_time > 0.0
+                and time.monotonic() - self._last_point_cloud_wall_time
+                <= self._scan_fallback_after_sec
+            ):
+                return
             points: list[tuple[float, float, float]] = []
             angle = float(msg.angle_min)
             for distance in msg.ranges:
@@ -245,7 +277,7 @@ def main() -> int:
             return point_cloud2.create_cloud(header, msg.fields, points)
 
         def _body_cloud_to_odom(self, msg: PointCloud2) -> PointCloud2:
-            pose = self._latest_body_pose
+            pose = self._pose_for_stamp(_stamp_sec(msg.header.stamp))
             names = [field.name for field in msg.fields]
             if not {"x", "y", "z"} <= set(names):
                 return self._copy_cloud_with_frame(msg, "odom")
@@ -262,6 +294,14 @@ def main() -> int:
             header = copy.deepcopy(msg.header)
             header.frame_id = "odom"
             return point_cloud2.create_cloud(header, msg.fields, points)
+
+        def _pose_for_stamp(self, stamp_sec: float) -> Pose3:
+            if not self._pose_history or stamp_sec <= 0.0:
+                return self._latest_body_pose
+            return min(
+                self._pose_history,
+                key=lambda item: abs(item.stamp_sec - stamp_sec),
+            ).pose
 
         def _copy_cloud_with_frame(self, msg: PointCloud2, frame_id: str) -> PointCloud2:
             out = copy.deepcopy(msg)

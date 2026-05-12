@@ -21,24 +21,38 @@ Visualization Manager:
       Plane: XY
 
     - Class: rviz_default_plugins/PointCloud2
-      Name: BuildingCloud
+      Name: LiveOdomCloud
       Enabled: true
-      Topic:
-        Value: /nav/building_cloud
-        Depth: 5
-        QoS Profile: default
-        Durability Policy: Volatile
-        Reliability Policy: Reliable
+      Topic: /nav/map_cloud
       Alpha: 1
       Autocompute Intensity Bounds: true
-      Color Transformer: AxisColor
-      Axis: Z
-      Min Color: 0; 0; 255
-      Max Color: 255; 0; 0
+      Color Transformer: FlatColor
+      Color: 0; 255; 120
+      Queue Size: 100
       Size (Pixels): 2
-      Size (m): 0.05
+      Size (m): 0.03
       Style: Points
       Position Transformer: XYZ
+      Unreliable: true
+      Use Fixed Frame: true
+      Value: true
+
+    - Class: rviz_default_plugins/PointCloud2
+      Name: RegisteredCloud
+      Enabled: false
+      Topic: /nav/registered_cloud
+      Alpha: 0.45
+      Autocompute Intensity Bounds: true
+      Color Transformer: FlatColor
+      Color: 0; 220; 255
+      Queue Size: 100
+      Size (Pixels): 2
+      Size (m): 0.025
+      Style: Points
+      Position Transformer: XYZ
+      Unreliable: true
+      Use Fixed Frame: true
+      Value: false
 
     - Class: rviz_default_plugins/Path
       Name: GlobalPath
@@ -72,10 +86,11 @@ Visualization Manager:
 
     - Class: rviz_default_plugins/RobotModel
       Name: RobotModel
-      Enabled: true
+      Enabled: false
       Description Topic:
         Value: /robot_description
         Durability Policy: Transient Local
+      Value: false
 
     - Class: rviz_default_plugins/Pose
       Name: GoalPose
@@ -106,13 +121,14 @@ Visualization Manager:
 
     - Class: rviz_default_plugins/TF
       Name: TF
-      Enabled: false
+      Enabled: true
 
   Enabled: true
-  Fixed Frame: map
   Global Options:
     Background Color: 25; 25; 35
+    Fixed Frame: odom
     Frame Rate: 30
+  Name: root
 
   Tools:
     - Class: rviz_default_plugins/Interact
@@ -146,7 +162,7 @@ Visualization Manager:
         Z: 1
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05
-      Target Frame: body
+      Target Frame: odom
 
 Window Geometry:
   Displays:
@@ -156,6 +172,6 @@ Window Geometry:
   QMainWindow State: ""
   Views:
     collapsed: false
-  Width: 1400
-  X: 50
+  Width: 1050
+  X: 850
   Y: 50
