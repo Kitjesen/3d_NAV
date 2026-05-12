@@ -43,6 +43,7 @@ class GazeboBridgeConfig:
     lingtu_cmd_vel: str = "/nav/cmd_vel"
     lingtu_odometry: str = "/nav/odometry"
     lingtu_map_cloud: str = "/nav/map_cloud"
+    lingtu_cumulative_map_cloud: str = "/nav/cumulative_map_cloud"
     lingtu_registered_cloud: str = "/nav/registered_cloud"
     lingtu_color_image: str = "/camera/color/image_raw"
     lingtu_depth_image: str = "/camera/depth/image_raw"
@@ -147,6 +148,7 @@ class GazeboBridgeConfig:
             "gazebo_cmd_vel_ros_input": self.gazebo_cmd_vel_ros_input,
             "odometry": self.lingtu_odometry,
             "map_cloud": self.lingtu_map_cloud,
+            "cumulative_map_cloud": self.lingtu_cumulative_map_cloud,
             "registered_cloud": self.lingtu_registered_cloud,
             "color_image": self.lingtu_color_image,
             "depth_image": self.lingtu_depth_image,

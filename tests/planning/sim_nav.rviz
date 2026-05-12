@@ -38,6 +38,23 @@ Visualization Manager:
       Value: true
 
     - Class: rviz_default_plugins/PointCloud2
+      Name: CumulativeMapCloud
+      Enabled: true
+      Topic: /nav/cumulative_map_cloud
+      Alpha: 0.85
+      Autocompute Intensity Bounds: true
+      Color Transformer: FlatColor
+      Color: 255; 220; 80
+      Queue Size: 20
+      Size (Pixels): 2
+      Size (m): 0.035
+      Style: Points
+      Position Transformer: XYZ
+      Unreliable: true
+      Use Fixed Frame: true
+      Value: true
+
+    - Class: rviz_default_plugins/PointCloud2
       Name: RegisteredCloud
       Enabled: false
       Topic: /nav/registered_cloud

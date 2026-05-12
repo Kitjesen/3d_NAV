@@ -142,6 +142,8 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         frontier_smoke_cmd.extend(
             ["--continue-after-pass-sec", str(args.frontier_continue_after_pass_sec)]
         )
+    if args.check_cumulative_map:
+        frontier_smoke_cmd.append("--require-cumulative-map")
 
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(
@@ -192,7 +194,11 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
                 report["gate"]["smoke_stdout_tail"] = smoke.stdout[-2000:]
             if smoke.stderr:
                 report["gate"]["smoke_stderr_tail"] = smoke.stderr[-2000:]
-            if (args.check_nav_loop or args.check_frontier_exploration) and report["ok"]:
+            if (
+                args.check_nav_loop
+                or args.check_frontier_exploration
+                or args.check_cumulative_map
+            ) and report["ok"]:
                 nav_proc = subprocess.Popen(
                     nav_launch_cmd,
                     cwd=str(ROOT),
@@ -235,7 +241,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
                     ]
                     report["gate"]["nav_smoke_cmd"] = nav_smoke_cmd
                     report["gate"]["nav_smoke_returncode"] = nav_smoke.returncode
-                if args.check_frontier_exploration and report["ok"]:
+                if (args.check_frontier_exploration or args.check_cumulative_map) and report["ok"]:
                     frontier_smoke = subprocess.run(
                         frontier_smoke_cmd,
                         cwd=str(ROOT),
@@ -356,6 +362,7 @@ def main() -> int:
     parser.add_argument("--require-camera", action="store_true")
     parser.add_argument("--check-nav-loop", action="store_true")
     parser.add_argument("--check-frontier-exploration", action="store_true")
+    parser.add_argument("--check-cumulative-map", action="store_true")
     parser.add_argument("--check-tare-contract", action="store_true")
     parser.add_argument("--require-tare-runtime", action="store_true")
     parser.add_argument("--nav-warmup-sec", type=float, default=8.0)

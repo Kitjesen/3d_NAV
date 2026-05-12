@@ -137,6 +137,7 @@ def _complete_gazebo_report() -> dict:
             "frontier_goal_published": True,
             "odometry_seen": True,
             "map_cloud_seen": True,
+            "cumulative_map_cloud_seen": True,
             "global_path_seen": True,
             "local_path_seen": True,
             "cmd_vel_seen": True,
@@ -152,6 +153,31 @@ def _complete_gazebo_report() -> dict:
             "explored_area_delta_m2": 0.39,
             "frontier_goal": [1.8, 0.0, 0.0],
             "frontier_count_max": 3,
+            "cumulative_map_cloud": {
+                "samples": 9,
+                "frame_ids": ["odom"],
+                "point_count_initial": 1800,
+                "point_count_final": 4200,
+                "point_count_delta": 2400,
+                "point_growth_ratio": 2.3333,
+                "unique_voxels_initial": 300,
+                "unique_voxels_final": 850,
+                "unique_voxels_delta": 550,
+                "unique_voxel_growth_ratio": 2.8333,
+                "growth_step_ratio": 0.75,
+                "retention_min": 0.85,
+            },
+            "registered_cloud": {
+                "samples": 9,
+                "median_unique_voxels": 300,
+                "map_vs_registered_voxel_ratio": 2.8333,
+            },
+            "static_obstacles": {
+                "column": {
+                    "samples": 4,
+                    "centroid_drift_max_m": 0.08,
+                }
+            },
             "samples": {
                 "/nav/frontier_goal": 1,
                 "/nav/goal_pose": 1,
@@ -160,6 +186,8 @@ def _complete_gazebo_report() -> dict:
                 "/nav/cmd_vel": 18,
                 "/nav/odometry": 16,
                 "/nav/map_cloud": 3,
+                "/nav/cumulative_map_cloud": 9,
+                "/nav/registered_cloud": 9,
             },
         },
         "tare_exploration": {
@@ -250,6 +278,7 @@ def test_server_sim_closure_gazebo_runtime_command_starts_runtime_gate():
     assert "sim/scripts/gazebo_runtime_gate.py" in spec.command
     assert "--check-nav-loop" in spec.command
     assert "--check-frontier-exploration" in spec.command
+    assert "--check-cumulative-map" in spec.command
     assert "--check-tare-contract" in spec.command
     assert "gazebo_runtime_explore/report.json" in spec.command
     assert "--launch-log artifacts/server_sim_closure/gazebo_runtime_explore/launch.log" in spec.command

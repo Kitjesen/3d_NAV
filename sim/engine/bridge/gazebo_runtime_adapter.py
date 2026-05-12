@@ -10,8 +10,10 @@ owning the simulator boundary:
 
 The point-cloud path treats raw Gazebo lidar points as sensor-frame points,
 projects them through the configured lidar->body extrinsic, and then projects
-the map cloud through the latest odom->body pose. This keeps `/nav/map_cloud`
-odom-fixed and `/nav/registered_cloud` body-relative.
+the live cloud through the timestamp-matched odom->body pose. This keeps
+`/nav/map_cloud` live and odom-fixed, `/nav/registered_cloud` body-relative,
+and `/nav/cumulative_map_cloud` as a simulation-only accumulated map for
+Gazebo deliverable gates.
 """
 
 from __future__ import annotations
@@ -103,6 +105,11 @@ def main() -> int:
             self.declare_parameter("lidar_to_body_z", 0.20)
             self.declare_parameter("prefer_point_cloud_over_scan", True)
             self.declare_parameter("scan_fallback_after_sec", 0.75)
+            self.declare_parameter("publish_cumulative_map", True)
+            self.declare_parameter("cumulative_voxel_size", 0.08)
+            self.declare_parameter("cumulative_max_points", 80000)
+            self.declare_parameter("cumulative_min_range", 0.25)
+            self.declare_parameter("cumulative_max_range", 30.0)
             self._raw_lidar_frame = str(self.get_parameter("raw_lidar_frame").value)
             self._lidar_to_body = (
                 float(self.get_parameter("lidar_to_body_x").value),
@@ -115,12 +122,37 @@ def main() -> int:
             self._scan_fallback_after_sec = float(
                 self.get_parameter("scan_fallback_after_sec").value
             )
+            self._publish_cumulative_map_enabled = bool(
+                self.get_parameter("publish_cumulative_map").value
+            )
+            self._cumulative_voxel_size = max(
+                0.01,
+                float(self.get_parameter("cumulative_voxel_size").value),
+            )
+            self._cumulative_max_points = max(
+                1,
+                int(self.get_parameter("cumulative_max_points").value),
+            )
+            self._cumulative_min_range = max(
+                0.0,
+                float(self.get_parameter("cumulative_min_range").value),
+            )
+            self._cumulative_max_range = max(
+                self._cumulative_min_range,
+                float(self.get_parameter("cumulative_max_range").value),
+            )
             self._latest_body_pose = Pose3(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
             self._pose_history: deque[TimedPose] = deque(maxlen=300)
             self._last_point_cloud_wall_time = 0.0
+            self._cumulative_voxels: dict[tuple[int, int, int], tuple[float, float, float]] = {}
 
             self._odom_pub = self.create_publisher(Odometry, self._cfg.lingtu_odometry, 10)
             self._map_cloud_pub = self.create_publisher(PointCloud2, self._cfg.lingtu_map_cloud, 2)
+            self._cumulative_map_cloud_pub = self.create_publisher(
+                PointCloud2,
+                self._cfg.lingtu_cumulative_map_cloud,
+                2,
+            )
             self._registered_cloud_pub = self.create_publisher(
                 PointCloud2,
                 self._cfg.lingtu_registered_cloud,
@@ -218,6 +250,7 @@ def main() -> int:
             if self._point_count(map_cloud) <= 0:
                 return
             self._map_cloud_pub.publish(map_cloud)
+            self._publish_cumulative_map(map_cloud)
 
         def _on_scan(self, msg: LaserScan) -> None:
             if (
@@ -251,6 +284,7 @@ def main() -> int:
             map_cloud = self._body_cloud_to_odom(registered_cloud)
             map_cloud.header.frame_id = "odom"
             self._map_cloud_pub.publish(map_cloud)
+            self._publish_cumulative_map(map_cloud)
 
         def _transform_cloud(self, msg: PointCloud2, *, target_frame: str) -> PointCloud2:
             if self._raw_lidar_frame in {"body", "base_link"}:
@@ -307,6 +341,44 @@ def main() -> int:
             out = copy.deepcopy(msg)
             out.header.frame_id = frame_id
             return out
+
+        def _publish_cumulative_map(self, map_cloud: PointCloud2) -> None:
+            if not self._publish_cumulative_map_enabled:
+                return
+            names = {field.name for field in map_cloud.fields}
+            if not {"x", "y", "z"} <= names:
+                return
+            min_range = self._cumulative_min_range
+            max_range = self._cumulative_max_range
+            voxel_size = self._cumulative_voxel_size
+            for x, y, z in point_cloud2.read_points(
+                map_cloud,
+                field_names=("x", "y", "z"),
+                skip_nans=True,
+            ):
+                px, py, pz = float(x), float(y), float(z)
+                if not (math.isfinite(px) and math.isfinite(py) and math.isfinite(pz)):
+                    continue
+                distance = math.sqrt(px * px + py * py + pz * pz)
+                if distance < min_range or distance > max_range:
+                    continue
+                key = (
+                    math.floor(px / voxel_size),
+                    math.floor(py / voxel_size),
+                    math.floor(pz / voxel_size),
+                )
+                self._cumulative_voxels[key] = (px, py, pz)
+            while len(self._cumulative_voxels) > self._cumulative_max_points:
+                self._cumulative_voxels.pop(next(iter(self._cumulative_voxels)))
+            if not self._cumulative_voxels:
+                return
+            header = copy.deepcopy(map_cloud.header)
+            header.frame_id = "odom"
+            out = point_cloud2.create_cloud_xyz32(
+                header,
+                list(self._cumulative_voxels.values()),
+            )
+            self._cumulative_map_cloud_pub.publish(out)
 
         @staticmethod
         def _point_count(msg: PointCloud2) -> int:

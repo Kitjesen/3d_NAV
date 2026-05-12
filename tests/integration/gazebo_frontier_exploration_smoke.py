@@ -41,6 +41,7 @@ class GazeboFrontierExplorationResult:
     frontier_goal_published: bool = False
     odometry_seen: bool = False
     map_cloud_seen: bool = False
+    cumulative_map_cloud_seen: bool = False
     global_path_seen: bool = False
     local_path_seen: bool = False
     cmd_vel_seen: bool = False
@@ -56,6 +57,9 @@ class GazeboFrontierExplorationResult:
     explored_area_delta_m2: float = 0.0
     frontier_goal: tuple[float, float, float] | None = None
     frontier_count_max: int = 0
+    cumulative_map_cloud: dict = field(default_factory=dict)
+    registered_cloud: dict = field(default_factory=dict)
+    static_obstacles: dict = field(default_factory=dict)
     samples: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
@@ -71,6 +75,7 @@ class GazeboFrontierExplorationResult:
             "frontier_goal_published": self.frontier_goal_published,
             "odometry_seen": self.odometry_seen,
             "map_cloud_seen": self.map_cloud_seen,
+            "cumulative_map_cloud_seen": self.cumulative_map_cloud_seen,
             "global_path_seen": self.global_path_seen,
             "local_path_seen": self.local_path_seen,
             "cmd_vel_seen": self.cmd_vel_seen,
@@ -86,6 +91,9 @@ class GazeboFrontierExplorationResult:
             "explored_area_delta_m2": self.explored_area_delta_m2,
             "frontier_goal": self.frontier_goal,
             "frontier_count_max": self.frontier_count_max,
+            "cumulative_map_cloud": self.cumulative_map_cloud,
+            "registered_cloud": self.registered_cloud,
+            "static_obstacles": self.static_obstacles,
             "samples": self.samples,
             "errors": self.errors,
         }
@@ -99,6 +107,14 @@ def _yaw_from_quat(x: float, y: float, z: float, w: float) -> float:
     siny_cosp = 2.0 * (w * z + x * y)
     cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
     return math.atan2(siny_cosp, cosy_cosp)
+
+
+STATIC_OBSTACLE_ROIS = {
+    "block": ((5.0, 0.0, 0.55), (0.9, 0.9, 1.2)),
+    "column": ((1.6, -0.35, 0.6), (0.7, 0.7, 1.4)),
+    "wall_left": ((3.0, 1.4, 0.45), (2.2, 0.45, 1.2)),
+    "wall_right": ((3.0, -1.4, 0.45), (2.2, 0.45, 1.2)),
+}
 
 
 class CoverageGrid:
@@ -194,6 +210,7 @@ def run_smoke(args: argparse.Namespace) -> GazeboFrontierExplorationResult:
     from nav_msgs.msg import Odometry, Path as ROSPath
     from rclpy.node import Node
     from sensor_msgs.msg import PointCloud2
+    from sensor_msgs_py import point_cloud2
 
     from core.msgs.geometry import Pose as CorePose
     from core.msgs.nav import Odometry as CoreOdometry
@@ -228,6 +245,170 @@ def run_smoke(args: argparse.Namespace) -> GazeboFrontierExplorationResult:
     current_cmd_vel: tuple[float, float, float] = (0.0, 0.0, 0.0)
     trace: list[dict] = []
     run_started_at = time.monotonic()
+    cumulative_point_counts: list[int] = []
+    cumulative_unique_counts: list[int] = []
+    cumulative_frames: set[str] = set()
+    cumulative_retention_ratios: list[float] = []
+    cumulative_prev_voxels: set[tuple[int, int, int]] | None = None
+    cumulative_growth_steps = 0
+    cumulative_step_count = 0
+    registered_unique_counts: list[int] = []
+    static_centroids: dict[str, list[tuple[float, float, float]]] = {
+        name: [] for name in STATIC_OBSTACLE_ROIS
+    }
+
+    def read_xyz_points(msg: PointCloud2, *, max_points: int) -> list[tuple[float, float, float]]:
+        fields = {field.name for field in msg.fields}
+        if not {"x", "y", "z"} <= fields:
+            return []
+        points: list[tuple[float, float, float]] = []
+        for raw in point_cloud2.read_points(
+            msg,
+            field_names=("x", "y", "z"),
+            skip_nans=True,
+        ):
+            x, y, z = float(raw[0]), float(raw[1]), float(raw[2])
+            if math.isfinite(x) and math.isfinite(y) and math.isfinite(z):
+                points.append((x, y, z))
+            if len(points) >= max_points:
+                break
+        return points
+
+    def voxelize(points: list[tuple[float, float, float]]) -> set[tuple[int, int, int]]:
+        size = args.cumulative_voxel_size_m
+        return {
+            (
+                math.floor(x / size),
+                math.floor(y / size),
+                math.floor(z / size),
+            )
+            for x, y, z in points
+        }
+
+    def roi_centroids(points: list[tuple[float, float, float]]) -> dict[str, tuple[float, float, float]]:
+        out: dict[str, tuple[float, float, float]] = {}
+        for name, (center, span) in STATIC_OBSTACLE_ROIS.items():
+            cx, cy, cz = center
+            sx, sy, sz = span
+            selected = [
+                (x, y, z)
+                for x, y, z in points
+                if abs(x - cx) <= sx / 2.0
+                and abs(y - cy) <= sy / 2.0
+                and abs(z - cz) <= sz / 2.0
+            ]
+            if len(selected) < args.min_static_roi_points:
+                continue
+            n = float(len(selected))
+            out[name] = (
+                sum(x for x, _, _ in selected) / n,
+                sum(y for _, y, _ in selected) / n,
+                sum(z for _, _, z in selected) / n,
+            )
+        return out
+
+    def max_centroid_drift(centroids: list[tuple[float, float, float]]) -> float:
+        if len(centroids) < 2:
+            return 0.0
+        first = centroids[0]
+        return max(
+            math.sqrt(
+                (item[0] - first[0]) ** 2
+                + (item[1] - first[1]) ** 2
+                + (item[2] - first[2]) ** 2
+            )
+            for item in centroids[1:]
+        )
+
+    def update_cumulative_report() -> None:
+        nonlocal cumulative_growth_steps, cumulative_step_count
+        initial_points = cumulative_point_counts[0] if cumulative_point_counts else 0
+        final_points = cumulative_point_counts[-1] if cumulative_point_counts else 0
+        initial_voxels = cumulative_unique_counts[0] if cumulative_unique_counts else 0
+        final_voxels = cumulative_unique_counts[-1] if cumulative_unique_counts else 0
+        point_growth_ratio = (
+            float(final_points) / float(initial_points)
+            if initial_points > 0
+            else 0.0
+        )
+        voxel_growth_ratio = (
+            float(final_voxels) / float(initial_voxels)
+            if initial_voxels > 0
+            else 0.0
+        )
+        growth_step_ratio = (
+            float(cumulative_growth_steps) / float(cumulative_step_count)
+            if cumulative_step_count > 0
+            else 0.0
+        )
+        retention_min = min(cumulative_retention_ratios) if cumulative_retention_ratios else 0.0
+        static_report = {
+            name: {
+                "samples": len(values),
+                "centroid_drift_max_m": round(max_centroid_drift(values), 4),
+            }
+            for name, values in static_centroids.items()
+            if values
+        }
+        result.cumulative_map_cloud = {
+            "samples": len(cumulative_point_counts),
+            "frame_ids": sorted(cumulative_frames),
+            "point_count_initial": initial_points,
+            "point_count_final": final_points,
+            "point_count_delta": final_points - initial_points,
+            "point_growth_ratio": round(point_growth_ratio, 4),
+            "unique_voxels_initial": initial_voxels,
+            "unique_voxels_final": final_voxels,
+            "unique_voxels_delta": final_voxels - initial_voxels,
+            "unique_voxel_growth_ratio": round(voxel_growth_ratio, 4),
+            "growth_step_ratio": round(growth_step_ratio, 4),
+            "retention_min": round(retention_min, 4),
+        }
+        result.static_obstacles = static_report
+        median_registered = 0
+        if registered_unique_counts:
+            ordered = sorted(registered_unique_counts)
+            median_registered = int(ordered[len(ordered) // 2])
+        result.registered_cloud = {
+            "samples": len(registered_unique_counts),
+            "median_unique_voxels": median_registered,
+            "map_vs_registered_voxel_ratio": round(
+                float(final_voxels) / float(median_registered),
+                4,
+            )
+            if median_registered > 0
+            else 0.0,
+        }
+
+    def cumulative_gate_ready() -> bool:
+        update_cumulative_report()
+        stats = result.cumulative_map_cloud
+        registered = result.registered_cloud
+        static = result.static_obstacles
+        if int(stats.get("samples") or 0) < args.min_cumulative_samples:
+            return False
+        point_delta = int(stats.get("point_count_delta") or 0)
+        point_ratio = float(stats.get("point_growth_ratio") or 0.0)
+        voxel_delta = int(stats.get("unique_voxels_delta") or 0)
+        voxel_ratio = float(stats.get("unique_voxel_growth_ratio") or 0.0)
+        if point_delta < args.min_cumulative_point_delta and point_ratio < args.min_cumulative_point_growth_ratio:
+            return False
+        if voxel_delta < args.min_cumulative_voxel_delta and voxel_ratio < args.min_cumulative_voxel_growth_ratio:
+            return False
+        if float(stats.get("growth_step_ratio") or 0.0) < args.min_cumulative_growth_step_ratio:
+            return False
+        if float(stats.get("retention_min") or 0.0) < args.min_cumulative_retention_ratio:
+            return False
+        if (
+            float(registered.get("map_vs_registered_voxel_ratio") or 0.0)
+            < args.min_map_vs_registered_voxel_ratio
+        ):
+            return False
+        return any(
+            int(item.get("samples") or 0) >= 2
+            and float(item.get("centroid_drift_max_m") or 0.0) <= args.max_static_centroid_drift_m
+            for item in static.values()
+        )
 
     def path_points(msg: ROSPath, *, limit: int = 160) -> list[tuple[float, float]]:
         poses = list(msg.poses or [])
@@ -367,11 +548,48 @@ def run_smoke(args: argparse.Namespace) -> GazeboFrontierExplorationResult:
         _count(result.samples, "/nav/map_cloud")
         result.map_cloud_seen = True
 
+    def on_registered_cloud(msg: PointCloud2) -> None:
+        _count(result.samples, "/nav/registered_cloud")
+        points = read_xyz_points(msg, max_points=args.max_cloud_points)
+        if points:
+            registered_unique_counts.append(len(voxelize(points)))
+            update_cumulative_report()
+
+    def on_cumulative_map_cloud(msg: PointCloud2) -> None:
+        nonlocal cumulative_prev_voxels, cumulative_growth_steps, cumulative_step_count
+        _count(result.samples, "/nav/cumulative_map_cloud")
+        result.cumulative_map_cloud_seen = True
+        cumulative_frames.add(str(msg.header.frame_id))
+        cumulative_point_counts.append(int(msg.width) * int(msg.height))
+        points = read_xyz_points(msg, max_points=args.max_cloud_points)
+        voxels = voxelize(points)
+        cumulative_unique_counts.append(len(voxels))
+        if cumulative_prev_voxels is not None:
+            cumulative_step_count += 1
+            if len(voxels) >= len(cumulative_prev_voxels):
+                cumulative_growth_steps += 1
+            if cumulative_prev_voxels:
+                cumulative_retention_ratios.append(
+                    len(cumulative_prev_voxels.intersection(voxels))
+                    / float(len(cumulative_prev_voxels))
+                )
+        cumulative_prev_voxels = voxels
+        for name, centroid in roi_centroids(points).items():
+            static_centroids[name].append(centroid)
+        update_cumulative_report()
+
     node.create_subscription(Odometry, "/nav/odometry", on_odom, 10)
     node.create_subscription(ROSPath, "/nav/global_path", on_global_path, 10)
     node.create_subscription(ROSPath, "/nav/local_path", on_local_path, 10)
     node.create_subscription(TwistStamped, "/nav/cmd_vel", on_cmd_vel, 10)
     node.create_subscription(PointCloud2, "/nav/map_cloud", on_map_cloud, 10)
+    node.create_subscription(PointCloud2, "/nav/registered_cloud", on_registered_cloud, 10)
+    node.create_subscription(
+        PointCloud2,
+        "/nav/cumulative_map_cloud",
+        on_cumulative_map_cloud,
+        10,
+    )
 
     deadline = time.monotonic() + args.timeout_sec
     started = False
@@ -407,6 +625,7 @@ def run_smoke(args: argparse.Namespace) -> GazeboFrontierExplorationResult:
                 and result.cmd_vel_nonzero
                 and result.odom_delta_m >= args.min_odom_delta_m
                 and result.explored_area_delta_m2 >= args.min_explored_area_delta_m2
+                and (not args.require_cumulative_map or cumulative_gate_ready())
             ):
                 if args.continue_after_pass_sec <= 0:
                     break
@@ -430,6 +649,71 @@ def run_smoke(args: argparse.Namespace) -> GazeboFrontierExplorationResult:
         result.errors.append("/nav/odometry was not observed")
     if not result.map_cloud_seen:
         result.errors.append("/nav/map_cloud was not observed")
+    update_cumulative_report()
+    if args.require_cumulative_map:
+        stats = result.cumulative_map_cloud
+        registered = result.registered_cloud
+        static = result.static_obstacles
+        if not result.cumulative_map_cloud_seen:
+            result.errors.append("/nav/cumulative_map_cloud was not observed")
+        if int(stats.get("samples") or 0) < args.min_cumulative_samples:
+            result.errors.append(
+                "/nav/cumulative_map_cloud samples "
+                f"{int(stats.get('samples') or 0)} < {args.min_cumulative_samples}"
+            )
+        if "odom" not in set(stats.get("frame_ids") or []):
+            result.errors.append("/nav/cumulative_map_cloud frame_id did not include odom")
+        point_delta = int(stats.get("point_count_delta") or 0)
+        point_ratio = float(stats.get("point_growth_ratio") or 0.0)
+        if (
+            point_delta < args.min_cumulative_point_delta
+            and point_ratio < args.min_cumulative_point_growth_ratio
+        ):
+            result.errors.append(
+                "cumulative map point growth too small: "
+                f"delta={point_delta}, ratio={point_ratio:.3f}"
+            )
+        voxel_delta = int(stats.get("unique_voxels_delta") or 0)
+        voxel_ratio = float(stats.get("unique_voxel_growth_ratio") or 0.0)
+        if (
+            voxel_delta < args.min_cumulative_voxel_delta
+            and voxel_ratio < args.min_cumulative_voxel_growth_ratio
+        ):
+            result.errors.append(
+                "cumulative map voxel growth too small: "
+                f"delta={voxel_delta}, ratio={voxel_ratio:.3f}"
+            )
+        if float(stats.get("growth_step_ratio") or 0.0) < args.min_cumulative_growth_step_ratio:
+            result.errors.append(
+                "cumulative map growth step ratio "
+                f"{float(stats.get('growth_step_ratio') or 0.0):.3f} "
+                f"< {args.min_cumulative_growth_step_ratio:.3f}"
+            )
+        if float(stats.get("retention_min") or 0.0) < args.min_cumulative_retention_ratio:
+            result.errors.append(
+                "cumulative map retention_min "
+                f"{float(stats.get('retention_min') or 0.0):.3f} "
+                f"< {args.min_cumulative_retention_ratio:.3f}"
+            )
+        if int(registered.get("samples") or 0) <= 0:
+            result.errors.append("/nav/registered_cloud was not observed for negative control")
+        elif (
+            float(registered.get("map_vs_registered_voxel_ratio") or 0.0)
+            < args.min_map_vs_registered_voxel_ratio
+        ):
+            result.errors.append(
+                "cumulative map did not exceed registered single-frame cloud: "
+                f"ratio={float(registered.get('map_vs_registered_voxel_ratio') or 0.0):.3f}"
+            )
+        stable_static = [
+            name
+            for name, item in static.items()
+            if int(item.get("samples") or 0) >= 2
+            and float(item.get("centroid_drift_max_m") or 0.0)
+            <= args.max_static_centroid_drift_m
+        ]
+        if not stable_static:
+            result.errors.append("no static obstacle ROI had stable cumulative-map centroids")
     if not result.global_path_seen:
         result.errors.append("/nav/global_path with poses was not observed")
     if not result.local_path_seen:
@@ -489,6 +773,19 @@ def main() -> int:
     parser.add_argument("--trace-interval-sec", type=float, default=0.35)
     parser.add_argument("--trace-max-known-points", type=int, default=1200)
     parser.add_argument("--continue-after-pass-sec", type=float, default=0.0)
+    parser.add_argument("--require-cumulative-map", action="store_true")
+    parser.add_argument("--max-cloud-points", type=int, default=200000)
+    parser.add_argument("--min-cumulative-samples", type=int, default=8)
+    parser.add_argument("--cumulative-voxel-size-m", type=float, default=0.2)
+    parser.add_argument("--min-cumulative-point-growth-ratio", type=float, default=1.25)
+    parser.add_argument("--min-cumulative-point-delta", type=int, default=1000)
+    parser.add_argument("--min-cumulative-voxel-growth-ratio", type=float, default=1.2)
+    parser.add_argument("--min-cumulative-voxel-delta", type=int, default=80)
+    parser.add_argument("--min-cumulative-growth-step-ratio", type=float, default=0.6)
+    parser.add_argument("--min-cumulative-retention-ratio", type=float, default=0.6)
+    parser.add_argument("--min-map-vs-registered-voxel-ratio", type=float, default=1.5)
+    parser.add_argument("--max-static-centroid-drift-m", type=float, default=0.25)
+    parser.add_argument("--min-static-roi-points", type=int, default=30)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--json-out", default="")
     args = parser.parse_args()

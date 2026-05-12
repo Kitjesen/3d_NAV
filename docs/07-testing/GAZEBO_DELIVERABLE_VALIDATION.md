@@ -22,6 +22,10 @@ Passed claim:
   `cmd_vel`.
 - Frontier-driven Gazebo odometry moves by at least `0.05 m`.
 - Exploration coverage grows during the Gazebo run.
+- The Gazebo runtime publishes `/nav/cumulative_map_cloud` and the gate verifies
+  cumulative point/voxel growth, retention against prior samples, negative
+  control against `/nav/registered_cloud`, and static obstacle centroid
+  stability.
 - A Gazebo + RViz diagnostic recording shows visible obstacles, live
   odom-projected LiDAR cloud, paths, frontier-driven motion evidence, and RViz
   global status `Ok`.
@@ -32,10 +36,10 @@ Not yet claimed:
 - TARE Gazebo runtime planning. The current gate checks the TARE source,
   launch, bridge, and supervisor contract; it does not require a built
   `tare_planner_node` binary unless `--require-tare-runtime` is set.
-- SLAM-quality mapping. In the current Gazebo gate, `/nav/map_cloud` is a live
-  odom-projected LiDAR cloud from the Gazebo runtime adapter, not a fused SLAM
-  map, and frontier coverage comes from the smoke test's internal coverage
-  grid.
+- SLAM-quality mapping. `/nav/map_cloud` remains the live odom-projected LiDAR
+  cloud used by terrain and local planning. `/nav/cumulative_map_cloud` is a
+  Gazebo-only accumulated map used for validation and RViz diagnostics, not a
+  replacement for Fast-LIO2/Super-LIO field SLAM.
 - S100P field validation from this Gazebo run.
 
 Wavefront frontier exploration is now Gazebo-validated through the runtime gate.
@@ -54,6 +58,7 @@ PYTHONPATH=src:.:/opt/ros/humble/local/lib/python3.10/dist-packages:/opt/ros/hum
   python3 sim/scripts/gazebo_runtime_gate.py \
     --check-nav-loop \
     --check-frontier-exploration \
+    --check-cumulative-map \
     --check-tare-contract \
     --json-out artifacts/server_sim_closure/gazebo_runtime_nav/report.json \
     --launch-log artifacts/server_sim_closure/gazebo_runtime_nav/launch.log
@@ -113,6 +118,19 @@ Additional recorded demo evidence:
   `/nav/registered_cloud=23040` points, frontier goal
   `[0.7366, -0.3315, 0.0]`, `odom_delta_m=2.9651`,
   `known_cells_delta=1547`, `explored_area_delta_m2=15.47`.
+- Cumulative-map gate report:
+  `artifacts/server_sim_closure/gazebo_runtime_cumulative3/report.json`.
+  It passed with `ok=true`, `/nav/cumulative_map_cloud` samples `77`, frame
+  `odom`, point growth `26842 -> 80000`, unique voxel growth
+  `9008 -> 29380`, retention minimum `0.9782`, and
+  `/nav/cumulative_map_cloud` versus `/nav/registered_cloud` voxel ratio
+  `18.374`.
+- Cumulative-map RViz recording:
+  `artifacts/server_sim_closure/gazebo_rviz_cumulative_recording/gazebo_rviz_cumulative_frontier.mp4`.
+  It contains `36` frames at `2 FPS`; frame
+  `artifacts/server_sim_closure/gazebo_rviz_cumulative_recording/frame_035.png`
+  shows Gazebo obstacles plus RViz `LiveOdomCloud` and
+  `CumulativeMapCloud` enabled.
 
 Additional topic synchronization evidence:
 

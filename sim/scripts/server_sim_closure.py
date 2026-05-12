@@ -460,6 +460,27 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
     for topic in ("/nav/goal_pose", "/nav/global_path", "/nav/local_path", "/nav/cmd_vel", "/nav/odometry"):
         if int(frontier_samples.get(topic) or 0) <= 0:
             blockers.append(f"frontier_exploration {topic} samples missing")
+    cumulative = frontier.get("cumulative_map_cloud") or {}
+    if frontier.get("cumulative_map_cloud_seen") is not True:
+        blockers.append("frontier_exploration.cumulative_map_cloud_seen is not true")
+    if "odom" not in set(cumulative.get("frame_ids") or []):
+        blockers.append("frontier_exploration cumulative map frame_id missing odom")
+    if int(cumulative.get("samples") or 0) < 8:
+        blockers.append("frontier_exploration cumulative map samples < 8")
+    if int(cumulative.get("unique_voxels_delta") or 0) <= 0:
+        blockers.append("frontier_exploration cumulative unique_voxels_delta <= 0")
+    if float(cumulative.get("retention_min") or 0.0) < 0.6:
+        blockers.append("frontier_exploration cumulative retention_min < 0.6")
+    registered = frontier.get("registered_cloud") or {}
+    if float(registered.get("map_vs_registered_voxel_ratio") or 0.0) < 1.5:
+        blockers.append("frontier_exploration cumulative map_vs_registered_voxel_ratio < 1.5")
+    static = frontier.get("static_obstacles") or {}
+    if not any(
+        int(item.get("samples") or 0) >= 2
+        and float(item.get("centroid_drift_max_m") or 999.0) <= 0.25
+        for item in static.values()
+    ):
+        blockers.append("frontier_exploration stable static obstacle ROI missing")
 
     tare = report.get("tare_exploration") or {}
     if tare.get("ok") is not True:
@@ -504,6 +525,9 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
             "odom_delta_m": frontier.get("odom_delta_m"),
             "known_cells_delta": frontier.get("known_cells_delta"),
             "explored_area_delta_m2": frontier.get("explored_area_delta_m2"),
+            "cumulative_map_cloud": cumulative,
+            "registered_cloud": registered,
+            "static_obstacles": static,
             "topic_samples": frontier_samples,
         },
         "tare_exploration": {
@@ -780,7 +804,7 @@ GATES: tuple[GateSpec, ...] = (
     ),
     GateSpec(
         "gazebo_runtime",
-        "ROS-native Gazebo TF, point-cloud, navigation loop, wavefront frontier exploration, and TARE contract",
+        "ROS-native Gazebo TF, point-cloud, navigation loop, cumulative map growth, wavefront frontier exploration, and TARE contract",
         (
             "artifacts/server_sim_closure/gazebo_runtime_explore/report.json",
             "artifacts/server_sim_closure/gazebo_runtime_nav/report.json",
@@ -791,7 +815,7 @@ GATES: tuple[GateSpec, ...] = (
         "PYTHONPATH=src:.:/opt/ros/humble/local/lib/python3.10/dist-packages:"
         "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
         "python3 sim/scripts/gazebo_runtime_gate.py --check-nav-loop "
-        "--check-frontier-exploration --check-tare-contract "
+        "--check-frontier-exploration --check-cumulative-map --check-tare-contract "
         "--json-out artifacts/server_sim_closure/gazebo_runtime_explore/report.json "
         "--launch-log artifacts/server_sim_closure/gazebo_runtime_explore/launch.log'",
         _eval_gazebo_runtime,

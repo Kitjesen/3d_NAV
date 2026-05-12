@@ -123,8 +123,13 @@ def generate_launch_description():
     use_foxglove = LaunchConfiguration('use_foxglove')
 
     # ── global_planner.py (真实 ele_planner.so C++ 规划器, 与 RViz demo 同一套) ─
-    pct_share = get_package_share_directory('pct_planner')
     repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    # Keep Gazebo gates runnable from a source checkout even when pct_planner
+    # has not been installed into the active ROS workspace.
+    try:
+        pct_share = get_package_share_directory('pct_planner')
+    except Exception:
+        pct_share = os.path.join(repo_root, 'src', 'global_planning', 'PCT_planner')
     source_global_planner_script = os.path.join(
         repo_root,
         'src',

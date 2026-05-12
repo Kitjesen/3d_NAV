@@ -62,6 +62,7 @@ def test_gazebo_bridge_config_exposes_lingtu_runtime_topics():
         "gazebo_cmd_vel_ros_input": "/lingtu/gazebo/cmd_vel",
         "odometry": "/nav/odometry",
         "map_cloud": "/nav/map_cloud",
+        "cumulative_map_cloud": "/nav/cumulative_map_cloud",
         "registered_cloud": "/nav/registered_cloud",
         "color_image": "/camera/color/image_raw",
         "depth_image": "/camera/depth/image_raw",
@@ -165,6 +166,7 @@ def test_gazebo_runtime_adapter_normalizes_frames_and_avoids_control_publication
     assert '"/nav/odometry"' not in adapter
     assert "lingtu_odometry" in adapter
     assert "lingtu_map_cloud" in adapter
+    assert "lingtu_cumulative_map_cloud" in adapter
     assert "lingtu_registered_cloud" in adapter
     assert 'out.header.frame_id = "odom"' in adapter
     assert 'out.child_frame_id = "body"' in adapter
@@ -186,6 +188,9 @@ def test_gazebo_runtime_adapter_normalizes_frames_and_avoids_control_publication
     assert "_last_point_cloud_wall_time" in adapter
     assert "_pose_for_stamp(_stamp_sec(msg.header.stamp))" in adapter
     assert "_pose_history" in adapter
+    assert "_cumulative_voxels" in adapter
+    assert "cumulative_voxel_size" in adapter
+    assert "_publish_cumulative_map(map_cloud)" in adapter
     assert "_point_count(registered_cloud) <= 0" in adapter
     assert "_point_count(map_cloud) <= 0" in adapter
     assert "does not do geometric point transforms" not in adapter
@@ -251,6 +256,8 @@ def test_sim_navigation_launch_can_reuse_native_chain_with_gazebo_odometry():
     assert "use_foxglove_arg" in launch
     assert "_planner_python" in launch
     assert "os.path.exists(_venv_python)" in launch
+    assert "has not been installed into the active ROS workspace" in launch
+    assert "except Exception:" in launch
     assert "source_global_planner_script" in launch
     assert "installed_global_planner_script" in launch
     assert "'legacy'" in launch
@@ -276,6 +283,8 @@ def test_gazebo_nav_loop_gate_publishes_only_goal_and_checks_motion():
     assert "create_publisher(PoseStamped, \"/nav/goal_pose\"" in smoke
     assert "create_publisher(Twist" not in smoke
     assert "--check-nav-loop" in gate
+    assert "--check-cumulative-map" in gate
+    assert "--require-cumulative-map" in gate
     assert "use_sim_robot:=false" in gate
     assert "use_terrain_passthrough:=true" in gate
     assert "gazebo_nav_loop_smoke.py" in gate
