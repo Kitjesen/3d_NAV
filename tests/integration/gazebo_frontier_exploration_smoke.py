@@ -159,6 +159,22 @@ class CoverageGrid:
 
         return int(np.count_nonzero(np.asarray(self.grid) >= 0))
 
+    def known_points(self, *, max_points: int = 1200) -> list[tuple[float, float]]:
+        assert self.grid is not None
+        import numpy as np
+
+        rows, cols = np.where(np.asarray(self.grid) >= 0)
+        if len(rows) == 0:
+            return []
+        step = max(1, int(math.ceil(len(rows) / max_points)))
+        return [
+            (
+                float(self.origin_x + (int(col) + 0.5) * self.resolution),
+                float(self.origin_y + (int(row) + 0.5) * self.resolution),
+            )
+            for row, col in zip(rows[::step], cols[::step])
+        ]
+
     def as_costmap(self) -> dict:
         assert self.grid is not None
         return {
@@ -206,6 +222,41 @@ def run_smoke(args: argparse.Namespace) -> GazeboFrontierExplorationResult:
     )
     current_pose: tuple[float, float, float] | None = None
     current_goal: tuple[float, float, float] | None = None
+    current_frontiers: list[dict[str, float]] = []
+    current_global_path: list[tuple[float, float]] = []
+    current_local_path: list[tuple[float, float]] = []
+    current_cmd_vel: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    trace: list[dict] = []
+    run_started_at = time.monotonic()
+
+    def path_points(msg: ROSPath, *, limit: int = 160) -> list[tuple[float, float]]:
+        poses = list(msg.poses or [])
+        if not poses:
+            return []
+        step = max(1, int(math.ceil(len(poses) / limit)))
+        return [
+            (float(p.pose.position.x), float(p.pose.position.y))
+            for p in poses[::step]
+        ]
+
+    def capture_trace_snapshot() -> None:
+        if not args.trace_out or current_pose is None:
+            return
+        known = coverage.known_cells()
+        trace.append(
+            {
+                "t": round(time.monotonic() - run_started_at, 3),
+                "pose": [round(float(v), 4) for v in current_pose],
+                "goal": [round(float(v), 4) for v in current_goal] if current_goal else None,
+                "known_cells": int(known),
+                "explored_area_m2": round(known * coverage.resolution * coverage.resolution, 4),
+                "frontiers": current_frontiers[:40],
+                "global_path": current_global_path,
+                "local_path": current_local_path,
+                "cmd_vel": [round(float(v), 4) for v in current_cmd_vel],
+                "known_points": coverage.known_points(max_points=args.trace_max_known_points),
+            }
+        )
 
     def publish_frontier_goal(goal) -> None:
         nonlocal current_goal
@@ -230,6 +281,17 @@ def run_smoke(args: argparse.Namespace) -> GazeboFrontierExplorationResult:
         goal_pub.publish(ros_goal)
 
     def on_frontiers(frontiers: list) -> None:
+        nonlocal current_frontiers
+        current_frontiers = [
+            {
+                "cx": round(float(frontier.get("cx", 0.0)), 4),
+                "cy": round(float(frontier.get("cy", 0.0)), 4),
+                "size": int(frontier.get("size", 0)),
+                "score": round(float(frontier.get("score", 0.0)), 4),
+            }
+            for frontier in list(frontiers or [])[:40]
+            if isinstance(frontier, dict)
+        ]
         with lock:
             _count(result.samples, "frontiers")
             result.frontier_count_max = max(result.frontier_count_max, len(frontiers or []))
@@ -274,17 +336,27 @@ def run_smoke(args: argparse.Namespace) -> GazeboFrontierExplorationResult:
             explorer.goal_reached._deliver(True)
 
     def on_global_path(msg: ROSPath) -> None:
+        nonlocal current_global_path
+        current_global_path = path_points(msg)
         _count(result.samples, "/nav/global_path")
         result.global_path_seen = result.global_path_seen or bool(msg.poses)
 
     def on_local_path(msg: ROSPath) -> None:
+        nonlocal current_local_path
+        current_local_path = path_points(msg)
         _count(result.samples, "/nav/local_path")
         result.local_path_seen = result.local_path_seen or bool(msg.poses)
 
     def on_cmd_vel(msg: TwistStamped) -> None:
+        nonlocal current_cmd_vel
         _count(result.samples, "/nav/cmd_vel")
         result.cmd_vel_seen = True
         tw = msg.twist
+        current_cmd_vel = (
+            float(tw.linear.x),
+            float(tw.linear.y),
+            float(tw.angular.z),
+        )
         result.cmd_vel_nonzero = result.cmd_vel_nonzero or (
             abs(float(tw.linear.x)) > args.min_cmd_vel
             or abs(float(tw.linear.y)) > args.min_cmd_vel
@@ -304,6 +376,8 @@ def run_smoke(args: argparse.Namespace) -> GazeboFrontierExplorationResult:
     deadline = time.monotonic() + args.timeout_sec
     started = False
     next_costmap_tick = time.monotonic()
+    next_trace_tick = time.monotonic()
+    pass_seen_at: float | None = None
     try:
         while time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=0.1)
@@ -323,6 +397,9 @@ def run_smoke(args: argparse.Namespace) -> GazeboFrontierExplorationResult:
             area = round(known * coverage.resolution * coverage.resolution, 4)
             result.explored_area_final_m2 = area
             result.explored_area_delta_m2 = round(area - result.explored_area_initial_m2, 4)
+            if now >= next_trace_tick:
+                capture_trace_snapshot()
+                next_trace_tick = now + args.trace_interval_sec
             if (
                 result.frontier_goal_published
                 and result.global_path_seen
@@ -331,7 +408,12 @@ def run_smoke(args: argparse.Namespace) -> GazeboFrontierExplorationResult:
                 and result.odom_delta_m >= args.min_odom_delta_m
                 and result.explored_area_delta_m2 >= args.min_explored_area_delta_m2
             ):
-                break
+                if args.continue_after_pass_sec <= 0:
+                    break
+                if pass_seen_at is None:
+                    pass_seen_at = now
+                elif now - pass_seen_at >= args.continue_after_pass_sec:
+                    break
     finally:
         explorer.end_exploration()
         explorer.stop()
@@ -369,6 +451,23 @@ def run_smoke(args: argparse.Namespace) -> GazeboFrontierExplorationResult:
     if result.frontier_count_max <= 0:
         result.errors.append("frontier candidates were not observed")
     result.ok = not result.errors
+    if args.trace_out:
+        capture_trace_snapshot()
+        trace_payload = {
+            "schema_version": "lingtu.gazebo_frontier_trace.v1",
+            "result": result.as_dict(),
+            "coverage": {
+                "resolution_m": coverage.resolution,
+                "origin_x": coverage.origin_x,
+                "origin_y": coverage.origin_y,
+                "width": coverage.width,
+                "height": coverage.height,
+            },
+            "samples": trace,
+        }
+        path = Path(args.trace_out)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(trace_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return result
 
 
@@ -386,6 +485,10 @@ def main() -> int:
     parser.add_argument("--min-cmd-vel", type=float, default=0.01)
     parser.add_argument("--min-odom-delta-m", type=float, default=0.05)
     parser.add_argument("--min-explored-area-delta-m2", type=float, default=0.15)
+    parser.add_argument("--trace-out", default="")
+    parser.add_argument("--trace-interval-sec", type=float, default=0.35)
+    parser.add_argument("--trace-max-known-points", type=int, default=1200)
+    parser.add_argument("--continue-after-pass-sec", type=float, default=0.0)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--json-out", default="")
     args = parser.parse_args()

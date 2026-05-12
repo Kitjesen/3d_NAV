@@ -181,6 +181,8 @@ def test_gazebo_runtime_adapter_normalizes_frames_and_avoids_control_publication
     assert "create_cloud_xyz32" in adapter
     assert "_on_scan" in adapter
     assert "_body_cloud_to_odom" in adapter
+    assert "_point_count(registered_cloud) <= 0" in adapter
+    assert "_point_count(map_cloud) <= 0" in adapter
     assert "does not do geometric point transforms" not in adapter
     assert "create_subscription" in adapter
     assert '"/nav/cmd_vel"' not in adapter

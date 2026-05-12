@@ -88,6 +88,22 @@ Observed evidence from the passing report:
 - Safety boundary: `simulation_only=true`, `real_robot_motion=false`,
   `cmd_vel_sent_to_hardware=false`
 
+Additional recorded demo evidence:
+
+- Video: `artifacts/server_sim_closure/gazebo_frontier_video_long/gazebo_frontier_exploration_long.mp4`
+- Video summary: `frames=44`, `duration_sec=5.5`, `frontier_ok=true`
+- Long frontier run: `odom_delta_m=5.1354`, `known_cells_delta=1420`,
+  `explored_area_delta_m2=14.2`
+
+Additional topic synchronization evidence:
+
+- Report: `artifacts/server_sim_closure/gazebo_topic_sync/report.json`
+- `/nav/odometry`: frame `odom`, child frame `body`, monotonic stamps
+- `/nav/map_cloud`: frame `odom`, monotonic stamps, non-zero point cloud
+- `/nav/registered_cloud`: frame `body`, monotonic stamps, non-zero point cloud
+- Nearest point-cloud-to-odometry timestamp skew: `p95=0.03 s`,
+  `max=0.16 s`
+
 ## Delivery Decision
 
 Gazebo navigation and wavefront frontier exploration are now deliverable

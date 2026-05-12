@@ -184,10 +184,14 @@ def main() -> int:
 
         def _on_cloud(self, msg: PointCloud2) -> None:
             registered_cloud = self._transform_cloud(msg, target_frame="body")
+            if self._point_count(registered_cloud) <= 0:
+                return
             self._registered_cloud_pub.publish(registered_cloud)
 
             map_cloud = self._body_cloud_to_odom(registered_cloud)
             map_cloud.header.frame_id = "odom"
+            if self._point_count(map_cloud) <= 0:
+                return
             self._map_cloud_pub.publish(map_cloud)
 
         def _on_scan(self, msg: LaserScan) -> None:
@@ -263,6 +267,10 @@ def main() -> int:
             out = copy.deepcopy(msg)
             out.header.frame_id = frame_id
             return out
+
+        @staticmethod
+        def _point_count(msg: PointCloud2) -> int:
+            return int(msg.width) * int(msg.height)
 
         def _on_color(self, msg: Image) -> None:
             out = copy.deepcopy(msg)

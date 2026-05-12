@@ -19,14 +19,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _terminate_process_tree(proc: subprocess.Popen[Any], timeout_s: float = 8.0) -> None:
-    if proc.poll() is not None:
-        return
     if os.name == "posix":
         try:
             os.killpg(proc.pid, signal.SIGINT)
         except ProcessLookupError:
             return
     else:
+        if proc.poll() is not None:
+            return
         proc.terminate()
     try:
         proc.wait(timeout=timeout_s)
@@ -136,6 +136,12 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         "--json-out",
         str(frontier_tmp),
     ]
+    if args.frontier_trace_out:
+        frontier_smoke_cmd.extend(["--trace-out", str(Path(args.frontier_trace_out))])
+    if args.frontier_continue_after_pass_sec > 0:
+        frontier_smoke_cmd.extend(
+            ["--continue-after-pass-sec", str(args.frontier_continue_after_pass_sec)]
+        )
 
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(
@@ -358,6 +364,8 @@ def main() -> int:
     parser.add_argument("--nav-goal-y", type=float, default=0.0)
     parser.add_argument("--nav-goal-z", type=float, default=0.0)
     parser.add_argument("--frontier-timeout-sec", type=float, default=45.0)
+    parser.add_argument("--frontier-trace-out", default="")
+    parser.add_argument("--frontier-continue-after-pass-sec", type=float, default=0.0)
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--use-bridge", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--spawn-robot", action=argparse.BooleanOptionalAction, default=True)
