@@ -17,7 +17,7 @@ LingTu can be claimed as P0 field-ready only when all of these are true:
 | Field motion never uses implicit goals | `p0_all.sh` and `p0_goto.sh` require explicit goal input | PASS |
 | Route preview gates motion | Route preview passes before `RUN`, and `RUN` precedes `/api/v1/goal` | PASS |
 | E-stop script fails safe after operator starts motion | Post-prompt failure paths send `/api/v1/stop` cleanup | PASS |
-| L2.5 server simulation closure is fresh | `bash docs/07-testing/l25_fresh_closure.sh` returns `ok=true` | BLOCKED |
+| L2.5 server simulation closure is fresh | `server_sim_closure.py --strict` returns `ok=true` on `gpu8x3090` | PASS |
 | S100P mapping run passes | `p0_mapping.sh` field log plus saved map artifacts | MISSING |
 | S100P route safety run passes | `p0_route_safety.sh` field log shows no-motion safe route | MISSING |
 | S100P goto run passes | `p0_goto.sh` field log reaches `SUCCESS` | MISSING |
@@ -28,6 +28,7 @@ LingTu can be claimed as P0 field-ready only when all of these are true:
 
 Recent commits:
 
+- `1330266b Document simulation readiness evidence boundary`
 - `ff2f9fd9 Keep L2.5 closure wrapper runnable`
 - `5fdda01a Harden P0 motion confirmation gates`
 - `f59d042d Harden P0 field flow safety`
@@ -47,32 +48,44 @@ but exits with `[L1 pre-commit] OK`.
 
 ## Server-Side L2.5 Closure Snapshot
 
-Latest strict summary command:
+Authoritative server:
+
+- Host: `gpu8x3090`
+- Workspace: `/home/bsrl/hongsenpang/lingtu_closure_22f127b2`
+- Summary artifact:
+  `artifacts/server_sim_closure/summary_current_codex.json`
+
+Latest strict summary command run on the server:
 
 ```bash
-bash docs/07-testing/l25_fresh_closure.sh
+PYTHONPATH=src:. python3 sim/scripts/server_sim_closure.py \
+  --json-out artifacts/server_sim_closure/summary_current_codex.json \
+  --strict
 ```
 
-Current result: `ok=false`, `simulation_only=true`,
-`real_robot_motion=false`, `cmd_vel_sent_to_hardware=false`.
+Current result: `ok=true`, `simulation_only=true`,
+`real_robot_motion=false`, `cmd_vel_sent_to_hardware=false`,
+`missing_or_failed=[]`, `remaining_gaps=[]`.
 
-Fresh PASS gates:
+Strict PASS gates:
 
 - `dynamic_obstacle_local_planner`
+- `fastlio2_live`
 - `gateway_dry_run`
-- `routecheck_preflight`
+- `gazebo_runtime`
+- `large_terrain`
+- `multifloor_exploration`
+- `native_pct_mujoco`
+- `policy_nav`
 - `saved_map_relocalize`
 
-Remaining failed or stale gates:
+Server evidence covers rich terrain, multi-floor exploration, LiDAR/SLAM
+localization and tracking, global route planning, local dynamic-obstacle
+avoidance, policy navigation, saved-map relocalization, Gateway dry-run flow,
+and simulation-only safety boundaries. The strict closure explicitly reports no
+real robot motion and no hardware `cmd_vel` publication.
 
-- `fastlio2_live` - stale report
-- `gazebo_runtime` - stale report
-- `large_terrain` - stale / blocked by native PCT runtime mismatch in this environment
-- `multifloor_exploration` - failed; native PCT gate blocked and some routes fail
-- `native_pct_mujoco` - stale report
-- `policy_nav` - stale report
-
-Observed local environment blockers:
+Local workstation note:
 
 ```text
 PowerShell interpreter: Python 3.13 on AMD64
@@ -80,6 +93,9 @@ WSL interpreter: Python 3.12 on x86_64, with no numpy installed
 PCT native artifacts observed locally: cp310/aarch64 and cp310/x86_64 files
 Missing runtime: runnable PCT native modules for the active local Python ABI
 ```
+
+Those local ABI/dependency gaps are not authoritative product evidence. The
+active validation target is the server-side full simulation closure above.
 
 ## Field Evidence Still Required
 
@@ -113,9 +129,10 @@ Required artifacts:
 Current claim allowed:
 
 ```text
-The P0 navigation, route-safety, e-stop, and exploration validation flow is
-implemented and locally guarded by contract tests. Four non-hardware L2.5 gates
-are freshly passing.
+Server-side full simulation closure passes for navigation, obstacle avoidance,
+LiDAR/SLAM localization, tracking, planning, and exploration with no real robot
+motion and no hardware cmd_vel publication. The P0 field validation scripts are
+implemented and locally guarded by contract tests.
 ```
 
 Current claim not allowed:
@@ -125,4 +142,4 @@ The robot has proven autonomous navigation, obstacle avoidance, and exploration
 on S100P.
 ```
 
-That claim requires full fresh L2.5 closure plus S100P P0 field PASS evidence.
+That claim requires S100P P0 field PASS evidence.
