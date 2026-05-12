@@ -58,13 +58,27 @@ def test_p0_scripts_use_current_gateway_contracts():
 
     assert "/api/v1/navigation/status" in goto
     assert "/api/v1/nav/status" not in goto
+    assert 'GOAL_X="${LINGTU_P0_GOAL_X:-${1:-}}"' in goto
+    assert 'GOAL_Y="${LINGTU_P0_GOAL_Y:-${2:-}}"' in goto
+    assert 'GOAL_X="${1:-2.0}"' not in goto
+    assert 'GOAL_Y="${2:-0.0}"' not in goto
+    assert "p0_route_safety.sh" in goto
+    assert "Type RUN" in goto
     assert '\\"frame_id\\":\\"map\\"' in goto
     assert '\\"client_id\\":\\"p0_goto\\"' in goto
     assert "P0-04 Goto" in goto
 
+    goto_preview_index = goto.index('p0_route_safety.sh" "$GOAL_X" "$GOAL_Y"')
+    goto_confirm_index = goto.index('if [[ "$answer" != "RUN" ]]')
+    goto_post_index = goto.index("curl -sf -X POST http://localhost:5050/api/v1/goal")
+    assert goto_preview_index < goto_confirm_index < goto_post_index
+
     assert "POST /api/v1/stop" in estop
     assert "GET /api/v1/state" in estop
     assert "PRE_STOP_SPEED" in estop
+    assert "cleanup_stop" in estop
+    assert "STOP_ON_EXIT=1" in estop
+    assert "p0-estop-cleanup" in estop
     assert "current_speed_mps" in estop
     assert "P0-05 E-stop" in estop
     assert "/api/v1/safety/state" not in estop
@@ -174,8 +188,16 @@ def test_p0_field_runbook_matches_script_contracts():
     assert "session_start \"mapping\" \"fastlio2\"" in p0_all
     assert "session_start \"navigating\" \"localizer\" \"$MAP_NAME\"" in p0_all
     assert "confirm_after_preview" in p0_all
+    assert 'return "$code"' in p0_all
     assert "LINGTU_P0_GOAL_X" in p0_all
     assert "explore/tare_explore" in p0_all
+
+    fail_return_index = p0_all.index('return "$code"')
+    route_index = p0_all.index('run_one "P0-03 route safety"')
+    confirm_index = p0_all.index("\nconfirm_after_preview\n")
+    goto_index = p0_all.index('run_one "P0-04 goto"')
+    assert fail_return_index < route_index
+    assert route_index < confirm_index < goto_index
 
     for script in p0_scripts:
         script.read_text(encoding="utf-8").encode("ascii")

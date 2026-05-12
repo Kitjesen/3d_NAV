@@ -109,7 +109,7 @@ Each P0 script is self-contained, uses `set -e`, and writes its log to `~/data/n
 | `p0_cold_boot.sh` | System cold start | None | At least 20 modules up, Gateway `/api/v1/health` returns `status="ok"` and is stable for 3 minutes |
 | `p0_mapping.sh` | Map -> save -> activate | Walk the robot for ~3 min | MapManager `/api/v1/maps` save and `set_active` succeed; `map.pcd` + `tomogram.pickle` + `occupancy.npz` + `map.pgm` / `map.yaml` are produced |
 | `p0_route_safety.sh` | No-motion route safety | Pre-loaded active map and idle robot | `/api/v1/navigation/plan` returns a feasible path with `path_safety.ok=true` and the active command source remains unchanged |
-| `p0_goto.sh` | Point goal -> arrive | Pre-loaded active map | `/api/v1/navigation/status` reports `state="SUCCESS"` |
+| `p0_goto.sh` | Point goal -> arrive | Pre-loaded active map plus explicit `GOAL_X GOAL_Y`; route preview must pass and operator must type `RUN` | `/api/v1/navigation/status` reports `state="SUCCESS"` |
 | `p0_estop.sh` | Gateway stop reflex | Operator starts non-zero robot motion, then presses Enter in the script | `POST /api/v1/stop` succeeds and `/api/v1/state` reports navigation speed below `0.01 m/s` for 3 consecutive ticks within 2 seconds |
 | `p0_explore.sh` | Exploration start/stop | `explore` or `tare_explore` profile in a safe open area | `/api/v1/explore/status` is ready, `/api/v1/explore/start` reports active exploration, and `/api/v1/explore/stop` leaves `exploring=false` |
 
@@ -136,11 +136,12 @@ python lingtu.py explore --daemon   # or start the systemd unit with explore/tar
 bash docs/07-testing/p0_explore.sh 30
 
 LINGTU_P0_RUN_EXPLORE=1 LINGTU_P0_EXPLORE_DURATION=30 \
+  LINGTU_P0_GOAL_X=2.0 LINGTU_P0_GOAL_Y=0.0 \
   bash docs/07-testing/p0_all.sh
 ```
 
 After the run:
-1. Record `PASS / FAIL / BLOCKED` plus reason in `vault/实机记录/YYYY-MM-DD.md`.
+1. Record `PASS / FAIL / BLOCKED` plus reason in `vault/field-runs/YYYY-MM-DD.md`.
 2. Update the matching item in `BACKLOG.md` (status + last-on-robot date).
 3. Failure cases get their own ticket under `docs/archive/08-project-management/known-issues/` (when that location is created).
 
@@ -195,9 +196,5 @@ The detailed runbook is in `sim/README.md`.
 - `p0_estop.sh` - P0-05 emergency stop.
 - `p0_explore.sh` - P0-06 exploration start/stop, opt-in for aggregate runs.
 - `p0_all.sh` - chain P0-01 through P0-05, with optional P0-06.
-- `p1_tare_explore.sh` - P1-01 TARE exploration (TBD).
-- `p1_gnss_fusion.sh` - P1-02 GNSS fusion (TBD).
-- `p1_follow_person.sh` - P1-04 OSNet person follow (TBD).
-- `p1_degraded.sh` - P1-05 sensor degradation (TBD).
 
 The single tracked baseline document remaining in this folder is `SUPERVISION_BENCHMARK_BASELINE_2026-04-05.md` (frozen for the supervision tracker migration).

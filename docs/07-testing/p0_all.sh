@@ -7,13 +7,6 @@ set -e
 cd "$(dirname "$0")"
 
 STAMP=$(date +%Y%m%d_%H%M%S)
-LOG_DIR="${HOME}/data/nav_logs"
-mkdir -p "$LOG_DIR"
-SUMMARY="$LOG_DIR/${STAMP}_p0_all_summary.log"
-exec > >(tee -a "$SUMMARY") 2>&1
-
-echo "=== P0 ALL - $(date) ==="
-
 MAP_NAME="${LINGTU_P0_MAP_NAME:-p0_${STAMP}}"
 GOAL_X="${LINGTU_P0_GOAL_X:-${1:-}}"
 GOAL_Y="${LINGTU_P0_GOAL_Y:-${2:-}}"
@@ -23,6 +16,13 @@ if [[ -z "$GOAL_X" || -z "$GOAL_Y" ]]; then
   echo "      The aggregate P0 flow will not choose a motion target automatically."
   exit 2
 fi
+
+LOG_DIR="${HOME}/data/nav_logs"
+mkdir -p "$LOG_DIR"
+SUMMARY="$LOG_DIR/${STAMP}_p0_all_summary.log"
+exec > >(tee -a "$SUMMARY") 2>&1
+
+echo "=== P0 ALL - $(date) ==="
 echo "map=$MAP_NAME goal=($GOAL_X, $GOAL_Y) goto_timeout=${GOTO_TIMEOUT}s"
 
 ran=0
@@ -39,7 +39,9 @@ run_one() {
     echo "[SUMMARY] $name  PASS"
     passed=$((passed + 1))
   else
-    echo "[SUMMARY] $name  FAIL (exit $?)"
+    local code=$?
+    echo "[SUMMARY] $name  FAIL (exit $code)"
+    return "$code"
   fi
 }
 

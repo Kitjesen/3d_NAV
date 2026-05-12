@@ -14,6 +14,26 @@ exec > >(tee -a "$LOG") 2>&1
 
 echo "=== P0-05 E-stop reflex - $(date) ==="
 
+STOP_ON_EXIT=0
+STOP_SENT=0
+
+stop_robot() {
+  curl -sf -X POST http://localhost:5050/api/v1/stop \
+    -H 'Content-Type: application/json' \
+    -d '{"request_id":"p0-estop-cleanup","client_id":"p0_estop"}' \
+    >/dev/null 2>&1 || true
+  STOP_SENT=1
+}
+
+cleanup_stop() {
+  if [[ "$STOP_ON_EXIT" == "1" && "$STOP_SENT" != "1" ]]; then
+    echo "Cleanup: sending stop command before exiting P0-05"
+    stop_robot
+  fi
+}
+
+trap cleanup_stop EXIT
+
 read_speed() {
   curl -sf http://localhost:5050/api/v1/state 2>/dev/null | python3 -c '
 import json, sys
@@ -35,6 +55,7 @@ curl -sf http://localhost:5050/api/v1/health > /dev/null || {
 echo "[2/4] Please manually drive the robot so reported speed is non-zero."
 echo "      Press [Enter] when ready to issue Gateway stop."
 read -r
+STOP_ON_EXIT=1
 PRE_STOP_SPEED="$(read_speed 2>/dev/null || echo "")"
 if [[ -z "$PRE_STOP_SPEED" ]]; then
   echo "FAIL: cannot read pre-stop navigation.motion.current_speed_mps"
@@ -52,6 +73,8 @@ curl -sf -X POST http://localhost:5050/api/v1/stop \
   -H 'Content-Type: application/json' \
   -d '{"request_id":"p0-estop","client_id":"p0_estop"}' \
   | python3 -m json.tool
+STOP_SENT=1
+STOP_ON_EXIT=0
 T1=$(date +%s%3N)
 RTT=$((T1 - T0))
 echo "  stop RPC round-trip: ${RTT} ms"
