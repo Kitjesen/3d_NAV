@@ -79,6 +79,57 @@ def _complete_multifloor_report() -> dict:
     }
 
 
+def _complete_gazebo_report() -> dict:
+    return {
+        "ok": True,
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "samples": 4,
+        "odometry_frame_id": "odom",
+        "odometry_child_frame_id": "body",
+        "topic_samples": {
+            "/nav/map_cloud": 3,
+            "/nav/registered_cloud": 3,
+            "/camera/color/image_raw": 3,
+            "/camera/depth/image_raw": 3,
+            "/camera/color/camera_info": 3,
+        },
+        "topic_frames": {
+            "/nav/map_cloud": "odom",
+            "/nav/registered_cloud": "body",
+            "/camera/color/image_raw": "camera_link",
+            "/camera/depth/image_raw": "camera_link",
+            "/camera/color/camera_info": "camera_link",
+        },
+        "point_counts": {
+            "/nav/map_cloud": 1024,
+            "/nav/registered_cloud": 1024,
+        },
+        "nav_loop": {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "goal_published": True,
+            "odometry_seen": True,
+            "global_path_seen": True,
+            "local_path_seen": True,
+            "cmd_vel_seen": True,
+            "cmd_vel_nonzero": True,
+            "odom_start_xy": [0.0, 0.0],
+            "odom_last_xy": [0.06, 0.05],
+            "odom_delta_m": 0.078,
+            "samples": {
+                "/nav/global_path": 2,
+                "/nav/local_path": 12,
+                "/nav/cmd_vel": 18,
+                "/nav/odometry": 16,
+            },
+        },
+    }
+
+
 def test_gateway_goal_dry_run_gate_publishes_goal_without_cmd_vel():
     pytest.importorskip("fastapi")
     from sim.scripts.gateway_goal_dry_run_gate import run_gate
@@ -151,6 +202,9 @@ def test_server_sim_closure_gazebo_runtime_command_starts_runtime_gate():
     spec = next(item for item in server_sim_closure.GATES if item.name == "gazebo_runtime")
 
     assert "sim/scripts/gazebo_runtime_gate.py" in spec.command
+    assert "--check-nav-loop" in spec.command
+    assert "gazebo_runtime_nav/report.json" in spec.command
+    assert "--launch-log artifacts/server_sim_closure/gazebo_runtime_nav/launch.log" in spec.command
     assert "tf_contract_smoke.py" not in spec.command
     assert "source /opt/ros/humble/setup.bash" in spec.command
 
@@ -360,36 +414,7 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
             },
         },
     )
-    gazebo = _write_json(
-        tmp_path / "gazebo.json",
-        {
-            "ok": True,
-            "simulation_only": True,
-            "real_robot_motion": False,
-            "cmd_vel_sent_to_hardware": False,
-            "samples": 4,
-            "odometry_frame_id": "odom",
-            "odometry_child_frame_id": "body",
-            "topic_samples": {
-                "/nav/map_cloud": 3,
-                "/nav/registered_cloud": 3,
-                "/camera/color/image_raw": 3,
-                "/camera/depth/image_raw": 3,
-                "/camera/color/camera_info": 3,
-            },
-            "topic_frames": {
-                "/nav/map_cloud": "odom",
-                "/nav/registered_cloud": "body",
-                "/camera/color/image_raw": "camera_link",
-                "/camera/depth/image_raw": "camera_link",
-                "/camera/color/camera_info": "camera_link",
-            },
-            "point_counts": {
-                "/nav/map_cloud": 1024,
-                "/nav/registered_cloud": 1024,
-            },
-        },
-    )
+    gazebo = _write_json(tmp_path / "gazebo.json", _complete_gazebo_report())
     saved_map_relocalize = _write_json(
         tmp_path / "saved_map_relocalize.json",
         {
@@ -868,6 +893,43 @@ def test_server_sim_closure_rejects_routecheck_without_publish_counters(tmp_path
     assert "published.goal_pose is missing" in gaps
     assert "published.cmd_vel is missing" in gaps
     assert "published.stop_cmd is missing" in gaps
+
+
+def test_server_sim_closure_rejects_gazebo_without_navigation_loop(tmp_path: Path):
+    weak = _complete_gazebo_report()
+    weak["nav_loop"] = {
+        "ok": True,
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "goal_published": True,
+        "odometry_seen": True,
+        "global_path_seen": False,
+        "local_path_seen": False,
+        "cmd_vel_seen": True,
+        "cmd_vel_nonzero": False,
+        "odom_delta_m": 0.01,
+        "samples": {
+            "/nav/cmd_vel": 4,
+            "/nav/odometry": 4,
+        },
+    }
+    report = _write_json(tmp_path / "gazebo_weak.json", weak)
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"gazebo_runtime": report},
+        required={"gazebo_runtime"},
+    )
+
+    assert summary["ok"] is False
+    assert summary["verified"]["gazebo_runtime"] is False
+    gaps = "\n".join(summary["remaining_gaps"])
+    assert "nav_loop.global_path_seen is not true" in gaps
+    assert "nav_loop.local_path_seen is not true" in gaps
+    assert "nav_loop.cmd_vel_nonzero is not true" in gaps
+    assert "nav_loop.odom_delta_m < 0.05" in gaps
+    assert "nav_loop /nav/global_path samples missing" in gaps
+    assert "nav_loop /nav/local_path samples missing" in gaps
 
 
 def test_server_sim_closure_rejects_non_pct_native_motion_report(tmp_path: Path):

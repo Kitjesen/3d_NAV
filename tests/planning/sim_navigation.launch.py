@@ -99,6 +99,11 @@ def generate_launch_description():
         default_value='false',
         description='Copy /nav/map_cloud to terrain topics for Gazebo navigation gates.',
     )
+    use_foxglove_arg = DeclareLaunchArgument(
+        'use_foxglove',
+        default_value='false',
+        description='Start foxglove_bridge when the optional package is installed.',
+    )
 
     map_path   = LaunchConfiguration('map_path')
     goal_x     = LaunchConfiguration('goal_x')
@@ -115,20 +120,43 @@ def generate_launch_description():
     tomogram_ground_h = LaunchConfiguration('tomogram_ground_h')
     use_sim_robot = LaunchConfiguration('use_sim_robot')
     use_terrain_passthrough = LaunchConfiguration('use_terrain_passthrough')
+    use_foxglove = LaunchConfiguration('use_foxglove')
 
     # ── global_planner.py (真实 ele_planner.so C++ 规划器, 与 RViz demo 同一套) ─
-    pct_share          = get_package_share_directory('pct_planner')
-    scripts_dir        = os.path.join(pct_share, 'planner', 'scripts')
-    global_planner_script = os.path.join(scripts_dir, 'global_planner.py')
+    pct_share = get_package_share_directory('pct_planner')
+    repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    source_global_planner_script = os.path.join(
+        repo_root,
+        'src',
+        'global_planning',
+        'PCT_planner',
+        'planner',
+        'scripts',
+        'legacy',
+        'global_planner.py',
+    )
+    installed_global_planner_script = os.path.join(
+        pct_share,
+        'planner',
+        'scripts',
+        'global_planner.py',
+    )
+    global_planner_script = (
+        source_global_planner_script
+        if os.path.exists(source_global_planner_script)
+        else installed_global_planner_script
+    )
 
-    # venv_np1: numpy 1.26.4 隔离环境, 避免系统 numpy 2.x 与 ele_planner.so 的 ABI 冲突
+    # Prefer the historical numpy-1.x venv when present, but keep the Gazebo
+    # launch runnable on clean ROS hosts that do not provide /tmp/venv_np1.
     _venv_python = '/tmp/venv_np1/bin/python3'
+    _planner_python = _venv_python if os.path.exists(_venv_python) else sys.executable
     # 保留现有 PYTHONPATH (含 rclpy), 否则 venv python 找不到 ROS2 包
     _existing_pypath = os.environ.get('PYTHONPATH', '')
 
     global_planner_proc = ExecuteProcess(
         cmd=[
-            _venv_python,
+            _planner_python,
             global_planner_script,
             '--ros-args',
             # map_file 参数: 指向当前地图 pickle
@@ -379,6 +407,7 @@ def generate_launch_description():
         executable='foxglove_bridge',
         name='foxglove_bridge',
         output='screen',
+        condition=IfCondition(use_foxglove),
         parameters=[{
             'port': 8765,
             'address': '0.0.0.0',
@@ -430,6 +459,6 @@ def generate_launch_description():
         map_path_arg, goal_x_arg, goal_y_arg, goal_z_arg, start_x_arg, start_y_arg,
         map_x_min_arg, map_x_max_arg, map_y_min_arg, map_y_max_arg,
         tomo_gh_arg, pcd_path_arg, scene_name_arg,
-        use_sim_robot_arg, use_terrain_passthrough_arg,
+        use_sim_robot_arg, use_terrain_passthrough_arg, use_foxglove_arg,
         *nodes,
     ])

@@ -22,6 +22,16 @@ _planner_root = os.path.join(current_dir, "..")
 sys.path.insert(0, _planner_root)
 sys.path.append(os.path.join(current_dir, "../lib"))
 
+try:
+    from pathlib import Path as FsPath
+
+    from global_planning.PCT_planner_runnable.runtime import prepare_pct_runtime
+
+    _repo_root = FsPath(current_dir).resolve().parents[5]
+    prepare_pct_runtime(_repo_root)
+except Exception as exc:
+    print(f"[global_planner] PCT runtime preparation skipped: {exc}", flush=True)
+
 from config import Config
 from utils import traj2ros
 from planner_wrapper import TomogramPlanner

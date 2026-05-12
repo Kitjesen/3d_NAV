@@ -397,11 +397,51 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
         if int(point_counts.get(topic) or 0) <= 0:
             blockers.append(f"{topic} points missing")
 
+    nav_loop = report.get("nav_loop") or {}
+    if nav_loop.get("ok") is not True:
+        blockers.append("nav_loop.ok is not true")
+    if nav_loop.get("simulation_only") is not True:
+        blockers.append("nav_loop.simulation_only is not true")
+    if not _bool_false(nav_loop, "real_robot_motion"):
+        blockers.append("nav_loop.real_robot_motion is not false")
+    if not _bool_false(nav_loop, "cmd_vel_sent_to_hardware"):
+        blockers.append("nav_loop.cmd_vel_sent_to_hardware is not false")
+    for key in (
+        "goal_published",
+        "odometry_seen",
+        "global_path_seen",
+        "local_path_seen",
+        "cmd_vel_seen",
+        "cmd_vel_nonzero",
+    ):
+        if nav_loop.get(key) is not True:
+            blockers.append(f"nav_loop.{key} is not true")
+    odom_delta_m = _safe_float(nav_loop.get("odom_delta_m"), default=0.0)
+    if odom_delta_m < 0.05:
+        blockers.append("nav_loop.odom_delta_m < 0.05")
+    nav_samples = nav_loop.get("samples") or nav_loop.get("topic_samples") or {}
+    for topic in ("/nav/global_path", "/nav/local_path", "/nav/cmd_vel", "/nav/odometry"):
+        if int(nav_samples.get(topic) or 0) <= 0:
+            blockers.append(f"nav_loop {topic} samples missing")
+
     return not blockers, blockers, {
         "samples": report.get("samples"),
         "topic_samples": samples,
         "topic_frames": frames,
         "point_counts": point_counts,
+        "nav_loop": {
+            "ok": nav_loop.get("ok"),
+            "goal_published": nav_loop.get("goal_published"),
+            "odometry_seen": nav_loop.get("odometry_seen"),
+            "global_path_seen": nav_loop.get("global_path_seen"),
+            "local_path_seen": nav_loop.get("local_path_seen"),
+            "cmd_vel_seen": nav_loop.get("cmd_vel_seen"),
+            "cmd_vel_nonzero": nav_loop.get("cmd_vel_nonzero"),
+            "odom_delta_m": nav_loop.get("odom_delta_m"),
+            "odom_start_xy": nav_loop.get("odom_start_xy"),
+            "odom_last_xy": nav_loop.get("odom_last_xy"),
+            "topic_samples": nav_samples,
+        },
     }
 
 
@@ -668,12 +708,18 @@ GATES: tuple[GateSpec, ...] = (
     ),
     GateSpec(
         "gazebo_runtime",
-        "ROS-native Gazebo TF, odometry, and point-cloud runtime smoke",
-        ("artifacts/server_sim_closure/gazebo_runtime/report.json",),
+        "ROS-native Gazebo TF, point-cloud, PCT path, local path, cmd_vel, and odometry motion loop",
+        (
+            "artifacts/server_sim_closure/gazebo_runtime_nav/report.json",
+            "artifacts/server_sim_closure/gazebo_runtime/report.json",
+        ),
         "bash -lc 'source /opt/ros/humble/setup.bash && "
         "source install/setup.bash 2>/dev/null || true; "
-        "PYTHONPATH=src:.:$PYTHONPATH python3 sim/scripts/gazebo_runtime_gate.py "
-        "--json-out artifacts/server_sim_closure/gazebo_runtime/report.json'",
+        "PYTHONPATH=src:.:/opt/ros/humble/local/lib/python3.10/dist-packages:"
+        "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
+        "python3 sim/scripts/gazebo_runtime_gate.py --check-nav-loop "
+        "--json-out artifacts/server_sim_closure/gazebo_runtime_nav/report.json "
+        "--launch-log artifacts/server_sim_closure/gazebo_runtime_nav/launch.log'",
         _eval_gazebo_runtime,
     ),
     GateSpec(

@@ -233,12 +233,24 @@ def test_sim_navigation_launch_can_reuse_native_chain_with_gazebo_odometry():
 
     assert "use_sim_robot" in launch
     assert "use_terrain_passthrough" in launch
+    assert "use_foxglove" in launch
     assert "IfCondition(use_sim_robot)" in launch
     assert "IfCondition(use_terrain_passthrough)" in launch
+    assert "IfCondition(use_foxglove)" in launch
     assert "terrain_passthrough_node.py" in launch
     assert "Gazebo-only: map_cloud -> terrain_map topics" in launch
     assert "use_sim_robot_arg" in launch
     assert "use_terrain_passthrough_arg" in launch
+    assert "use_foxglove_arg" in launch
+    assert "_planner_python" in launch
+    assert "os.path.exists(_venv_python)" in launch
+    assert "source_global_planner_script" in launch
+    assert "installed_global_planner_script" in launch
+    assert "'legacy'" in launch
+    assert "'global_planner.py'" in launch
+    assert "prepare_pct_runtime" in _read(
+        "src/global_planning/PCT_planner/planner/scripts/legacy/global_planner.py"
+    )
 
 
 def test_gazebo_nav_loop_gate_publishes_only_goal_and_checks_motion():
