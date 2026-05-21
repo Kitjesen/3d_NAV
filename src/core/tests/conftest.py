@@ -43,3 +43,21 @@ asyncio.set_event_loop_policy(_CompatEventLoopPolicy())
 # Integration harnesses run module-level setup at import time.
 # Both files now expose proper def test_*() functions and guard sys.exit()
 # in `if __name__ == "__main__":`, so pytest can collect them safely.
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Release shared ROS2 resources created by mixed module-level smoke tests."""
+    try:
+        from core.ros2_context import shutdown_shared_executor
+
+        shutdown_shared_executor()
+    except Exception:
+        pass
+
+    try:
+        import rclpy
+
+        if rclpy.ok():
+            rclpy.shutdown()
+    except Exception:
+        pass

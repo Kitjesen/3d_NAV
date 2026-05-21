@@ -4,6 +4,7 @@ AutonomyModule, GatewayModule, MCPServerModule, RerunModule, SemanticPlannerModu
 All external deps mocked. No GPU/FastAPI/Rerun/C++ required.
 """
 
+import json
 import math
 import time
 import unittest
@@ -108,6 +109,182 @@ class TestNavigationModule(unittest.TestCase):
         self.assertAlmostEqual(m._robot_pos[0], 1.0)
         self.assertAlmostEqual(m._robot_pos[1], 2.0)
 
+    def test_on_odom_updates_yaw_and_tracker(self):
+        from nav.waypoint_tracker import TrackerStatus
+
+        m = self._make()
+        m._state = "EXECUTING"
+        m._tracker.update = MagicMock(return_value=TrackerStatus(0, 1))
+
+        yaw = math.pi / 2.0
+        odom = Odometry(
+            pose=Pose(
+                position=Vector3(1.0, 2.0, 0.0),
+                orientation=Quaternion.from_yaw(yaw),
+            ),
+            frame_id="map",
+            ts=time.time(),
+        )
+        m._on_odom(odom)
+
+        self.assertAlmostEqual(m._robot_yaw, yaw)
+        m._tracker.update.assert_called_once()
+        self.assertAlmostEqual(m._tracker.update.call_args.args[1], yaw)
+        status = json.loads(m.get_navigation_status())
+        self.assertAlmostEqual(status["position"]["yaw"], round(yaw, 3))
+
+    def test_repeated_patrol_goals_do_not_reset_active_exploration_path(self):
+        m = self._make()
+        m._plan = MagicMock()
+        goals = [{"x": 1.0, "y": 2.0, "z": 0.0}, {"x": 3.0, "y": 4.0, "z": 0.0}]
+
+        m._on_patrol_goals(goals)
+        self.assertEqual(m._state, "PATROLLING")
+        self.assertEqual(m._plan.call_count, 1)
+
+        m._state = "EXECUTING"
+        m._plan.reset_mock()
+        m._on_patrol_goals(goals)
+
+        self.assertEqual(m._state, "EXECUTING")
+        m._plan.assert_not_called()
+
+    def test_repeated_patrol_goals_restart_after_terminal_state(self):
+        m = self._make()
+        m._plan = MagicMock()
+        goals = [{"x": 1.0, "y": 2.0, "z": 0.0}, {"x": 3.0, "y": 4.0, "z": 0.0}]
+
+        m._on_patrol_goals(goals)
+        self.assertEqual(m._plan.call_count, 1)
+
+        m._state = "SUCCESS"
+        m._plan.reset_mock()
+        m._on_patrol_goals(goals)
+
+        self.assertEqual(m._state, "PATROLLING")
+        self.assertEqual(m._plan.call_count, 1)
+
+    def test_external_strategy_path_control_executes_path_without_global_replan(self):
+        m = self._make(
+            external_strategy_path_control=True,
+            waypoint_threshold=0.2,
+            final_waypoint_threshold=0.2,
+        )
+        m._plan = MagicMock()
+        global_paths = []
+        waypoints = []
+        events = []
+        m.global_path._add_callback(global_paths.append)
+        m.waypoint._add_callback(waypoints.append)
+        m.adapter_status._add_callback(events.append)
+
+        goals = [
+            {"x": 1.0, "y": 0.0, "z": 0.0},
+            {"x": 2.0, "y": 0.0, "z": 0.0},
+            {"x": 3.0, "y": 0.0, "z": 0.0},
+        ]
+        m._on_patrol_goals(goals)
+
+        self.assertEqual(m._state, "EXECUTING")
+        self.assertTrue(m._using_external_strategy_path)
+        m._plan.assert_not_called()
+        self.assertEqual(len(global_paths[-1]), 4)
+        self.assertAlmostEqual(global_paths[-1][0][0], 0.0)
+        self.assertAlmostEqual(waypoints[-1].pose.position.x, 1.0)
+        self.assertTrue(
+            any(e.get("event") == "external_strategy_path_control" for e in events)
+        )
+
+    def test_external_strategy_path_control_does_not_replan_on_costmap(self):
+        m = self._make(
+            external_strategy_path_control=True,
+            waypoint_threshold=0.2,
+            final_waypoint_threshold=0.2,
+        )
+        m._on_patrol_goals([
+            {"x": 1.0, "y": 0.0, "z": 0.0},
+            {"x": 2.0, "y": 0.0, "z": 0.0},
+        ])
+        m._plan = MagicMock()
+        m._last_costmap_replan_time = 0.0
+
+        m._on_costmap({
+            "grid": np.zeros((5, 5), dtype=np.float32),
+            "resolution": 0.2,
+            "origin": [0.0, 0.0],
+        })
+
+        m._plan.assert_not_called()
+
+    def test_external_strategy_path_control_does_not_replan_on_stuck(self):
+        from nav.waypoint_tracker import EV_STUCK, TrackerStatus
+
+        m = self._make(
+            external_strategy_path_control=True,
+            waypoint_threshold=0.2,
+            final_waypoint_threshold=0.2,
+            max_replan_count=3,
+        )
+        events = []
+        global_paths = []
+        waypoints = []
+        m.adapter_status._add_callback(events.append)
+        m.global_path._add_callback(global_paths.append)
+        m.waypoint._add_callback(waypoints.append)
+        m._on_patrol_goals([
+            {"x": 1.0, "y": 0.0, "z": 0.0},
+            {"x": 2.0, "y": 0.0, "z": 0.0},
+            {"x": 3.0, "y": 0.0, "z": 0.0},
+        ])
+        m._plan = MagicMock()
+        m._execute_recovery_motion = MagicMock()
+        m._tracker.update = MagicMock(
+            return_value=TrackerStatus(0, 3, event=EV_STUCK)
+        )
+
+        m._on_odom(Odometry(
+            pose=Pose(position=Vector3(0.0, 0.0, 0.0)),
+            frame_id="map",
+            ts=time.time(),
+        ))
+
+        m._execute_recovery_motion.assert_called_once()
+        m._plan.assert_not_called()
+        self.assertEqual(m._state, "EXECUTING")
+        self.assertTrue(m._using_external_strategy_path)
+        self.assertEqual(len(global_paths[-1]), 4)
+        self.assertAlmostEqual(waypoints[-1].pose.position.x, 1.0)
+        self.assertTrue(
+            any(
+                e.get("event") == "external_strategy_path_stuck_recovery"
+                for e in events
+            )
+        )
+
+    def test_external_strategy_path_reports_strategy_not_stale_pct(self):
+        m = self._make(
+            external_strategy_path_control=True,
+            waypoint_threshold=0.2,
+            final_waypoint_threshold=0.2,
+        )
+        m._planner_svc._last_plan_report = {
+            "primary_planner": "pct",
+            "selected_planner": "pct",
+            "fallback_reason": "old failure",
+        }
+        statuses = []
+        m.mission_status._add_callback(statuses.append)
+
+        m._on_patrol_goals([
+            {"x": 1.0, "y": 0.0, "z": 0.0},
+            {"x": 2.0, "y": 0.0, "z": 0.0},
+        ])
+
+        report = statuses[-1]["last_plan_report"]
+        self.assertEqual(report["primary_planner"], "tare_external")
+        self.assertEqual(report["selected_planner"], "external_strategy_path")
+        self.assertIs(report["fallback_used"], False)
+
     def test_layer(self):
         m = self._make()
         self.assertEqual(m.layer, 5)
@@ -166,6 +343,41 @@ class TestNavigationModule(unittest.TestCase):
 
         self.assertEqual(m._state, "FAILED")
         self.assertIn("empty path", m._failure_reason)
+
+    def test_empty_path_with_map_can_use_explicit_direct_goal_fallback(self):
+        m = self._make(
+            enable_ros2_bridge=False,
+            allow_direct_goal_fallback=True,
+            direct_goal_fallback_on_planner_failure=True,
+        )
+
+        class _MappedBackend:
+            _grid = np.zeros((10, 10), dtype=np.float32)
+
+            def plan(self, start, goal, **kwargs):
+                return []
+
+        m._planner_svc._backend = _MappedBackend()
+        m._robot_pos = np.array([0.0, 0.0, 0.0])
+        waypoints = []
+        statuses = []
+        missions = []
+        m.waypoint._add_callback(waypoints.append)
+        m.adapter_status._add_callback(statuses.append)
+        m.mission_status._add_callback(missions.append)
+
+        m._on_goal(PoseStamped(
+            pose=Pose(position=Vector3(4.0, 2.0, 0.0), orientation=Quaternion()),
+            frame_id="map", ts=time.time(),
+        ))
+
+        self.assertEqual(m._state, "EXECUTING")
+        self.assertEqual(len(waypoints), 1)
+        self.assertAlmostEqual(waypoints[0].pose.position.x, 4.0)
+        self.assertAlmostEqual(waypoints[0].pose.position.y, 2.0)
+        self.assertTrue(any(s.get("event") == "direct_goal_fallback" for s in statuses))
+        self.assertTrue(missions[-1]["direct_goal_fallback"]["used"])
+        self.assertIn("empty path", missions[-1]["direct_goal_fallback"]["reason"])
 
     def test_duplicate_goal_update_is_ignored_while_executing(self):
         # Requires direct-goal fallback to reach EXECUTING without a real map.
@@ -401,6 +613,172 @@ class TestLocalPlannerModule(unittest.TestCase):
         self.assertIsNone(m._global_path_points)
         self.assertEqual(len(paths[-1].poses), 0)
         self.assertEqual(paths[-1].frame_id, "map")
+
+    def test_nanobind_empty_path_triggers_safety_stop(self):
+        from base_autonomy.modules.local_planner_module import LocalPlannerModule
+
+        class EmptyResult:
+            path = []
+            slow_down = 0
+            near_field_stop = False
+            path_found = False
+            recovery_state = 0
+
+        class FakeCore:
+            def set_vehicle(self, *args):
+                pass
+
+            def set_goal(self, *args):
+                pass
+
+            def plan(self, *args):
+                return EmptyResult()
+
+        m = LocalPlannerModule(backend="nanobind")
+        m._core = FakeCore()
+        m._robot_pos = np.array([0.0, 0.0, 0.0], dtype=float)
+        m._global_path_points = np.array([[5.0, 0.0, 0.0]], dtype=float)
+        m._latest_waypoint = PoseStamped(
+            pose=Pose(position=Vector3(5.0, 0.0, 0.0)),
+            frame_id="map",
+        )
+        paths = []
+        hints = []
+        m.local_path._add_callback(paths.append)
+        m.control_hint._add_callback(hints.append)
+
+        m._run_nanobind(1.0)
+
+        self.assertEqual(len(paths), 1)
+        self.assertEqual(paths[-1].poses, [])
+        self.assertTrue(hints[-1]["safety_stop"])
+        self.assertEqual(hints[-1]["reason"], "no_local_path")
+
+    def test_nanobind_direct_track_fallback_keeps_trackable_path(self):
+        from base_autonomy.modules.local_planner_module import LocalPlannerModule
+
+        class EmptyResult:
+            path = []
+            slow_down = 0
+            near_field_stop = False
+            path_found = False
+            recovery_state = 0
+
+        class FakeCore:
+            def set_vehicle(self, *args):
+                pass
+
+            def set_goal(self, *args):
+                pass
+
+            def plan(self, *args):
+                return EmptyResult()
+
+        m = LocalPlannerModule(
+            backend="nanobind",
+            allow_direct_track_fallback=True,
+            direct_track_fallback_min_distance_m=0.3,
+        )
+        m._core = FakeCore()
+        m._robot_pos = np.array([0.0, 0.0, 0.0], dtype=float)
+        m._latest_waypoint = PoseStamped(
+            pose=Pose(position=Vector3(1.0, 0.0, 0.0)),
+            frame_id="map",
+        )
+        paths = []
+        hints = []
+        m.local_path._add_callback(paths.append)
+        m.control_hint._add_callback(hints.append)
+
+        m._run_nanobind(1.0)
+
+        self.assertGreaterEqual(len(paths[-1].poses), 2)
+        self.assertFalse(hints[-1]["safety_stop"])
+        self.assertEqual(hints[-1]["reason"], "direct_track_fallback:no_local_path")
+        self.assertEqual(m.health()["local_planner"]["last_local_path_points"], 2)
+
+    def test_nanobind_direct_track_fallback_respects_near_field_stop(self):
+        from base_autonomy.modules.local_planner_module import LocalPlannerModule
+
+        class EmptyResult:
+            path = []
+            slow_down = 0
+            near_field_stop = True
+            path_found = False
+            recovery_state = 0
+
+        class FakeCore:
+            def set_vehicle(self, *args):
+                pass
+
+            def set_goal(self, *args):
+                pass
+
+            def plan(self, *args):
+                return EmptyResult()
+
+        m = LocalPlannerModule(backend="nanobind", allow_direct_track_fallback=True)
+        m._core = FakeCore()
+        m._robot_pos = np.array([0.0, 0.0, 0.0], dtype=float)
+        m._latest_waypoint = PoseStamped(
+            pose=Pose(position=Vector3(1.0, 0.0, 0.0)),
+            frame_id="map",
+        )
+        paths = []
+        hints = []
+        m.local_path._add_callback(paths.append)
+        m.control_hint._add_callback(hints.append)
+
+        m._run_nanobind(1.0)
+
+        self.assertEqual(paths[-1].poses, [])
+        self.assertTrue(hints[-1]["safety_stop"])
+        self.assertEqual(hints[-1]["reason"], "no_local_path")
+
+    def test_nanobind_ignore_near_field_stop_keeps_trackable_path_active(self):
+        from base_autonomy.modules.local_planner_module import LocalPlannerModule
+
+        class Pt:
+            def __init__(self, x, y, z=0.0):
+                self.x = x
+                self.y = y
+                self.z = z
+
+        class Result:
+            path = [Pt(0.0, 0.0), Pt(1.0, 0.0)]
+            slow_down = 0
+            near_field_stop = True
+            path_found = True
+            recovery_state = 0
+
+        class FakeCore:
+            def set_vehicle(self, *args):
+                pass
+
+            def set_goal(self, *args):
+                pass
+
+            def plan(self, *args):
+                return Result()
+
+        m = LocalPlannerModule(
+            backend="nanobind",
+            ignore_near_field_stop=True,
+        )
+        m._core = FakeCore()
+        m._robot_pos = np.array([0.0, 0.0, 0.0], dtype=float)
+        m._latest_waypoint = PoseStamped(
+            pose=Pose(position=Vector3(1.0, 0.0, 0.0)),
+            frame_id="map",
+        )
+        hints = []
+        m.control_hint._add_callback(hints.append)
+
+        m._run_nanobind(1.0)
+
+        self.assertTrue(hints[-1]["near_field_stop"])
+        self.assertFalse(hints[-1]["safety_stop"])
+        self.assertEqual(hints[-1]["reason"], "nanobind")
 
 
 class TestPathFollowerModule(unittest.TestCase):

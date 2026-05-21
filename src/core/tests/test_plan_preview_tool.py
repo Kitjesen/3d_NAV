@@ -124,6 +124,7 @@ def test_out_of_bounds_case_is_skipped_before_native_planner(tmp_path):
         downsample_dist=2.0,
         allow_out_of_bounds=False,
         pct_runtime_libs={"ok": True},
+        max_endpoint_z_error_m=1.0,
     )
 
     assert result["skipped"] is True
@@ -238,6 +239,82 @@ def test_case_failures_preserves_strict_bounds_and_backend_reasons():
     ]
 
 
+def test_case_failures_rejects_unsafe_strict_preview():
+    tool = _load_tool()
+
+    failures = tool.case_failures(
+        [
+            {
+                "name": "pct_case",
+                "skipped": False,
+                "backend_available": True,
+                "feasible": True,
+                "start_in_bounds": True,
+                "goal_in_bounds": True,
+                "preview": {
+                    "selected_planner": "pct",
+                    "path_safety": {
+                        "ok": False,
+                        "blocked_sample_count": 22,
+                    }
+                },
+                "z_consistency": {"ok": True},
+            },
+        ],
+        strict=True,
+        allow_out_of_bounds=False,
+    )
+
+    assert failures == ["pct_case:path_safety_failed:22"]
+
+
+def test_path_z_consistency_rejects_pct_endpoint_height_drift():
+    tool = _load_tool()
+
+    report = tool.path_z_consistency(
+        start=[0.0, 0.0, 0.0],
+        goal=[2.0, 0.0, 0.0],
+        path=[
+            {"x": 0.0, "y": 0.0, "z": -5.0},
+            {"x": 2.0, "y": 0.0, "z": 0.0},
+        ],
+        max_endpoint_error_m=1.0,
+    )
+
+    assert report["ok"] is False
+    assert report["start_error_m"] == 5.0
+
+
+def test_case_failures_rejects_pct_z_inconsistency_in_strict_mode():
+    tool = _load_tool()
+
+    failures = tool.case_failures(
+        [
+            {
+                "name": "pct_case",
+                "skipped": False,
+                "backend_available": True,
+                "feasible": True,
+                "start_in_bounds": True,
+                "goal_in_bounds": True,
+                "preview": {
+                    "selected_planner": "pct",
+                    "path_safety": {"ok": True},
+                },
+                "z_consistency": {
+                    "ok": False,
+                    "start_error_m": 5.0,
+                    "goal_error_m": 0.0,
+                },
+            },
+        ],
+        strict=True,
+        allow_out_of_bounds=False,
+    )
+
+    assert failures == ["pct_case:z_endpoint_inconsistent:start=5.0,goal=0.0"]
+
+
 def test_missing_aarch64_pct_libs_skip_native_backend(tmp_path):
     tool = _load_tool()
     tomo = _write_tomogram(tmp_path)
@@ -259,6 +336,7 @@ def test_missing_aarch64_pct_libs_skip_native_backend(tmp_path):
         downsample_dist=2.0,
         allow_out_of_bounds=False,
         pct_runtime_libs={"ok": False, "missing": ["ele_planner.cpython-310-aarch64-linux-gnu.so"]},
+        max_endpoint_z_error_m=1.0,
     )
 
     assert result["skipped"] is True

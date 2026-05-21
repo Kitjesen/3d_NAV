@@ -39,6 +39,8 @@ from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import Header
 from tf2_ros import TransformBroadcaster
 
+from core.runtime_interface import FRAMES, TOPICS
+
 # ── 内联 XML: 测试场景 ─────────────────────────────────────────────
 DEFAULT_XML = """
 <mujoco model="sim_bridge_test">
@@ -179,13 +181,13 @@ class MuJoCoROS2Bridge(Node):
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
 
-        self.pub_odom = self.create_publisher(Odometry, '/nav/odometry', qos)
-        self.pub_cloud = self.create_publisher(PointCloud2, '/nav/registered_cloud', qos)
+        self.pub_odom = self.create_publisher(Odometry, TOPICS.odometry, qos)
+        self.pub_cloud = self.create_publisher(PointCloud2, TOPICS.registered_cloud, qos)
         self.pub_cloud2 = self.create_publisher(PointCloud2, '/livox/lidar', qos)
-        self.pub_map_cloud = self.create_publisher(PointCloud2, '/nav/map_cloud', qos)
+        self.pub_map_cloud = self.create_publisher(PointCloud2, TOPICS.map_cloud, qos)
         self.tf_br = TransformBroadcaster(self)
 
-        self.create_subscription(TwistStamped, '/nav/cmd_vel', self._cmd_cb, qos)
+        self.create_subscription(TwistStamped, TOPICS.cmd_vel, self._cmd_cb, qos)
 
         self._cmd_vx = 0.0
         self._cmd_vy = 0.0
@@ -258,8 +260,8 @@ class MuJoCoROS2Bridge(Node):
 
         odom = Odometry()
         odom.header.stamp = stamp
-        odom.header.frame_id = 'odom'
-        odom.child_frame_id = 'body'
+        odom.header.frame_id = FRAMES.odom
+        odom.child_frame_id = FRAMES.body
         odom.pose.pose.position.x = float(pos[0])
         odom.pose.pose.position.y = float(pos[1])
         odom.pose.pose.position.z = float(pos[2])
@@ -274,14 +276,14 @@ class MuJoCoROS2Bridge(Node):
 
         t1 = TransformStamped()
         t1.header.stamp = stamp
-        t1.header.frame_id = 'map'
-        t1.child_frame_id = 'odom'
+        t1.header.frame_id = FRAMES.map
+        t1.child_frame_id = FRAMES.odom
         t1.transform.rotation.w = 1.0
 
         t2 = TransformStamped()
         t2.header.stamp = stamp
-        t2.header.frame_id = 'odom'
-        t2.child_frame_id = 'body'
+        t2.header.frame_id = FRAMES.odom
+        t2.child_frame_id = FRAMES.body
         t2.transform.translation.x = float(pos[0])
         t2.transform.translation.y = float(pos[1])
         t2.transform.translation.z = float(pos[2])
@@ -303,10 +305,15 @@ class MuJoCoROS2Bridge(Node):
             return
 
         stamp = self._stamp()
-        msg = pack_pointcloud2(pts, 'body', stamp)
-        self.pub_cloud.publish(msg)
-        self.pub_cloud2.publish(msg)
-        self.pub_map_cloud.publish(msg)  # For C++ terrainAnalysis
+        registered_cloud = pack_pointcloud2(pts, FRAMES.body, stamp)
+        self.pub_cloud.publish(registered_cloud)
+        self.pub_cloud2.publish(registered_cloud)
+
+        pos = self.data.xpos[self.robot_id].copy()
+        rmat = self.data.xmat[self.robot_id].reshape(3, 3).copy()
+        pts_world = pts @ rmat.T + pos
+        map_cloud = pack_pointcloud2(pts_world, FRAMES.odom, stamp)
+        self.pub_map_cloud.publish(map_cloud)
 
         if self._frame % 50 == 0:
             pos = self.data.xpos[self.robot_id]

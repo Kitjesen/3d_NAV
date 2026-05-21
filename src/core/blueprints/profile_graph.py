@@ -13,19 +13,40 @@ from typing import Any
 from cli.profiles_data import PROFILES, ROBOT_PRESETS
 from core.blueprint import Blueprint
 from core.blueprints.full_stack import full_stack_blueprint
+from core.blueprints.runtime_endpoint import (
+    apply_runtime_endpoint_config,
+    runtime_endpoint_robot_preset,
+)
 
 
-PROFILE_SNAPSHOT_TARGETS = (
+SIMULATION_PROFILES = (
     "stub",
     "dev",
     "sim",
+    "sim_mujoco_live",
     "sim_gazebo",
+    "sim_industrial",
+    "sim_cmu_tare",
     "sim_nav",
+)
+
+PRODUCT_PROFILES = (
     "map",
     "nav",
     "explore",
+    "tare_explore",
     "super_lio",
     "super_lio_relocation",
+)
+
+# Offline graph snapshots exclude profiles that require a locally built native
+# external binary at blueprint construction time. They remain product profiles
+# and are checked through profile-level contracts.
+OPTIONAL_NATIVE_PRODUCT_PROFILES = ("tare_explore",)
+
+PROFILE_SNAPSHOT_TARGETS = (
+    *SIMULATION_PROFILES,
+    *(profile for profile in PRODUCT_PROFILES if profile not in OPTIONAL_NATIVE_PRODUCT_PROFILES),
 )
 
 
@@ -78,18 +99,28 @@ class ProfileGraph:
         )
 
 
-def resolve_profile_config(profile: str, **overrides: Any) -> dict[str, Any]:
+def resolve_profile_config(
+    profile: str,
+    *,
+    runtime_endpoint: str | None = None,
+    **overrides: Any,
+) -> dict[str, Any]:
     """Return the full full_stack_blueprint kwargs for a CLI profile."""
 
     if profile not in PROFILES:
         raise KeyError(f"unknown profile: {profile}")
     profile_data = PROFILES[profile]
-    preset_name = profile_data.get("_default_robot", "stub")
+    if runtime_endpoint:
+        preset_name = runtime_endpoint_robot_preset(profile, runtime_endpoint)
+    else:
+        preset_name = profile_data.get("_default_robot", "stub")
     if preset_name not in ROBOT_PRESETS:
         raise KeyError(f"unknown robot preset for profile {profile}: {preset_name}")
 
     config = dict(ROBOT_PRESETS[preset_name])
     config.update({k: v for k, v in profile_data.items() if not k.startswith("_")})
+    if runtime_endpoint:
+        config = apply_runtime_endpoint_config(profile, config, runtime_endpoint)
     config.update(overrides)
     return config
 

@@ -13,6 +13,21 @@ from core.blueprint import Blueprint
 
 from .stacks.slam import slam_module_name
 
+_MAP_CLOUD_CONSUMERS = (
+    "OccupancyGridModule",
+    "ElevationMapModule",
+    "TerrainModule",
+    "VoxelGridModule",
+    "RerunBridgeModule",
+    "GatewayModule",
+)
+
+_SEMANTIC_CAMERA_CONSUMERS = (
+    "PerceptionModule",
+    "ReconstructionModule",
+    "VisualServoModule",
+)
+
 
 @dataclass(frozen=True)
 class WireSpec:
@@ -21,6 +36,12 @@ class WireSpec:
     in_module: str
     in_port: str
     transport: Any = None
+
+    def label(self) -> str:
+        return (
+            f"{self.out_module}.{self.out_port}"
+            f"->{self.in_module}.{self.in_port}"
+        )
 
     def apply(self, bp: Blueprint) -> None:
         bp.wire(
@@ -47,6 +68,30 @@ def _apply_if_present(bp: Blueprint, names: set[str], specs: list[WireSpec]) -> 
         _wire_if_present(bp, names, spec)
 
 
+def _wire_contract_issues(bp: Blueprint, names: set[str], spec: WireSpec) -> list[str]:
+    issues: list[str] = []
+    if spec.out_module not in names:
+        issues.append(f"missing source module {spec.out_module}")
+    elif not _declares_port(bp, spec.out_module, spec.out_port):
+        issues.append(f"missing source port {spec.out_module}.{spec.out_port}")
+
+    if spec.in_module not in names:
+        issues.append(f"missing destination module {spec.in_module}")
+    elif not _declares_port(bp, spec.in_module, spec.in_port):
+        issues.append(f"missing destination port {spec.in_module}.{spec.in_port}")
+    return issues
+
+
+def _require_wire(bp: Blueprint, names: set[str], spec: WireSpec) -> None:
+    issues = _wire_contract_issues(bp, names, spec)
+    if issues:
+        raise ValueError(
+            "Required full-stack wire unavailable: "
+            f"{spec.label()} ({'; '.join(issues)})"
+        )
+    spec.apply(bp)
+
+
 def _declares_port(bp: Blueprint, module_name: str, port_name: str) -> bool:
     for entry in bp._entries:
         if entry.name != module_name:
@@ -62,6 +107,91 @@ def _declares_port(bp: Blueprint, module_name: str, port_name: str) -> bool:
     return False
 
 
+def _apply_required_safety_stop_wires(
+    bp: Blueprint,
+    names: set[str],
+    *,
+    driver_module: str,
+) -> None:
+    for spec in (
+        WireSpec("SafetyRingModule", "stop_cmd", driver_module, "stop_signal"),
+        WireSpec("SafetyRingModule", "stop_cmd", "NavigationModule", "stop_signal"),
+    ):
+        _require_wire(bp, names, spec)
+
+
+def _camera_source(names: set[str], *, driver_module: str) -> tuple[str, str]:
+    camera_src = "CameraBridgeModule" if "CameraBridgeModule" in names else driver_module
+    color_out = "color_image" if camera_src == "CameraBridgeModule" else "camera_image"
+    return camera_src, color_out
+
+
+def _apply_map_cloud_wires(
+    bp: Blueprint,
+    names: set[str],
+    *,
+    driver_module: str,
+    slam_module: str,
+    scene_xml: str,
+) -> None:
+    if slam_module:
+        for consumer in _MAP_CLOUD_CONSUMERS:
+            _wire_if_present(
+                bp,
+                names,
+                WireSpec(slam_module, "map_cloud", consumer, "map_cloud"),
+            )
+        return
+
+    if scene_xml and "SimPointCloudProvider" in names:
+        for consumer in _MAP_CLOUD_CONSUMERS:
+            _wire_if_present(
+                bp,
+                names,
+                WireSpec("SimPointCloudProvider", "map_cloud", consumer, "map_cloud"),
+            )
+        _wire_if_present(
+            bp,
+            names,
+            WireSpec(driver_module, "odometry", "SimPointCloudProvider", "odometry"),
+        )
+        return
+
+    driver_map_port = ""
+    if driver_module == "ROS2SimDriverModule":
+        driver_map_port = "map_cloud"
+    elif driver_module == "MujocoDriverModule":
+        driver_map_port = "map_cloud"
+    if not driver_map_port:
+        return
+
+    for consumer in _MAP_CLOUD_CONSUMERS:
+        _wire_if_present(
+            bp,
+            names,
+            WireSpec(driver_module, driver_map_port, consumer, "map_cloud"),
+        )
+
+
+def _apply_semantic_camera_wires(
+    bp: Blueprint,
+    names: set[str],
+    *,
+    camera_src: str,
+    color_out: str,
+) -> None:
+    for consumer in _SEMANTIC_CAMERA_CONSUMERS:
+        _apply_if_present(
+            bp,
+            names,
+            [
+                WireSpec(camera_src, color_out, consumer, "color_image"),
+                WireSpec(camera_src, "depth_image", consumer, "depth_image"),
+                WireSpec(camera_src, "camera_info", consumer, "camera_info"),
+            ],
+        )
+
+
 def apply_full_stack_wires(
     bp: Blueprint,
     *,
@@ -70,58 +200,34 @@ def apply_full_stack_wires(
     slam_profile: str,
     scene_xml: str = "",
     enable_semantic: bool = True,
+    safety_stop_wiring: bool = True,
 ) -> Blueprint:
     """Apply explicit cross-stack wires to a composed full-stack Blueprint."""
 
     drv = driver_module
     slam_module = slam_module_name(slam_profile)
     names = {entry.name for entry in bp._entries}
-    camera_src = "CameraBridgeModule" if "CameraBridgeModule" in names else drv
-    color_out = "color_image" if camera_src == "CameraBridgeModule" else "camera_image"
+    camera_src, color_out = _camera_source(names, driver_module=drv)
 
-    map_consumers = [
-        "OccupancyGridModule",
-        "ElevationMapModule",
-        "TerrainModule",
-        "VoxelGridModule",
-        "RerunBridgeModule",
-        "GatewayModule",
-    ]
-    if slam_module:
-        for consumer in map_consumers:
-            _wire_if_present(bp, names, WireSpec(slam_module, "map_cloud", consumer, "map_cloud"))
-    elif scene_xml and "SimPointCloudProvider" in names:
-        for consumer in map_consumers:
-            _wire_if_present(
-                bp,
-                names,
-                WireSpec("SimPointCloudProvider", "map_cloud", consumer, "map_cloud"),
-            )
-        _wire_if_present(bp, names, WireSpec(drv, "odometry", "SimPointCloudProvider", "odometry"))
-    else:
-        driver_map_port = ""
-        if drv == "ROS2SimDriverModule":
-            driver_map_port = "map_cloud"
-        elif drv == "MujocoDriverModule":
-            driver_map_port = "lidar_cloud"
-        if driver_map_port:
-            for consumer in map_consumers:
-                _wire_if_present(bp, names, WireSpec(drv, driver_map_port, consumer, "map_cloud"))
-
+    _apply_map_cloud_wires(
+        bp,
+        names,
+        driver_module=drv,
+        slam_module=slam_module,
+        scene_xml=scene_xml,
+    )
     if enable_semantic:
-        for consumer in ["PerceptionModule", "ReconstructionModule", "VisualServoModule"]:
-            _apply_if_present(
-                bp,
-                names,
-                [
-                    WireSpec(camera_src, color_out, consumer, "color_image"),
-                    WireSpec(camera_src, "depth_image", consumer, "depth_image"),
-                    WireSpec(camera_src, "camera_info", consumer, "camera_info"),
-                ],
-            )
+        _apply_semantic_camera_wires(
+            bp,
+            names,
+            camera_src=camera_src,
+            color_out=color_out,
+        )
 
-    WireSpec("SafetyRingModule", "stop_cmd", drv, "stop_signal").apply(bp)
-    WireSpec("SafetyRingModule", "stop_cmd", "NavigationModule", "stop_signal").apply(bp)
+    if safety_stop_wiring:
+        _apply_required_safety_stop_wires(bp, names, driver_module=drv)
+    nav_odom_src = slam_module if (slam_module and slam_module in names) else drv
+
     _apply_if_present(
         bp,
         names,
@@ -156,11 +262,13 @@ def apply_full_stack_wires(
             WireSpec("MCPServerModule", "goal_pose", "NavigationModule", "goal_pose"),
             WireSpec("SemanticPlannerModule", "goal_pose", "NavigationModule", "goal_pose"),
             WireSpec("TAREExplorerModule", "exploration_goal", "NavigationModule", "goal_pose"),
+            WireSpec("TAREExplorerModule", "exploration_path", "NavigationModule", "patrol_goals"),
+            WireSpec(nav_odom_src, "odometry", "TAREExplorerModule", "odometry"),
+            WireSpec("NavigationModule", "mission_status", "TAREExplorerModule", "navigation_status"),
             WireSpec("PerceptionModule", "detections_3d", "SemanticPlannerModule", "detections"),
         ],
     )
 
-    nav_odom_src = slam_module if (slam_module and slam_module in names) else drv
     _apply_if_present(
         bp,
         names,
@@ -207,6 +315,8 @@ def apply_full_stack_wires(
         names,
         [
             WireSpec("OccupancyGridModule", "costmap", "TraversabilityCostModule", "costmap"),
+            WireSpec("OccupancyGridModule", "exploration_grid", "WavefrontFrontierExplorer", "exploration_grid"),
+            WireSpec("OccupancyGridModule", "exploration_grid", "ROS2GridBridgeModule", "exploration_grid"),
             WireSpec("ElevationMapModule", "elevation_map", "TraversabilityCostModule", "elevation_map"),
             WireSpec("ESDFModule", "esdf", "TraversabilityCostModule", "esdf"),
             WireSpec("TerrainModule", "traversability", "TraversabilityCostModule", "traversability"),
@@ -251,7 +361,9 @@ def apply_full_stack_wires(
             WireSpec("SafetyRingModule", "dialogue_state", "GatewayModule", "dialogue_state"),
             WireSpec("NavigationModule", "global_path", "GatewayModule", "global_path"),
             WireSpec("NavigationModule", "global_path", "LocalPlannerModule", "global_path"),
+            WireSpec("NavigationModule", "global_path", "ROS2PathBridgeModule", "global_path"),
             WireSpec("LocalPlannerModule", "local_path", "GatewayModule", "local_path"),
+            WireSpec("LocalPlannerModule", "local_path", "ROS2PathBridgeModule", "local_path"),
             WireSpec("SemanticPlannerModule", "agent_message", "GatewayModule", "agent_message"),
         ],
     )

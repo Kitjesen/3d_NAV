@@ -160,6 +160,21 @@ def point2(point: Any) -> list[float]:
     return [float(round_float(v) or 0.0) for v in arr[:2]]
 
 
+def json_safe(value: Any) -> Any:
+    """Return a JSON-compliant copy, replacing non-finite floats with null."""
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return json_safe(value.tolist())
+    if isinstance(value, np.generic):
+        return json_safe(value.item())
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value
+
+
 def resolve_map_root(explicit: str | None = None) -> Path:
     if explicit:
         return Path(explicit).expanduser()
@@ -348,6 +363,61 @@ def path_segments(path: list[dict[str, Any]]) -> list[float]:
         if math.isfinite(dist):
             segments.append(round(dist, 6))
     return segments
+
+
+def path_z_consistency(
+    *,
+    start: list[float],
+    goal: list[float],
+    path: list[dict[str, Any]],
+    max_endpoint_error_m: float,
+) -> dict[str, Any]:
+    if not path:
+        return {
+            "ok": False,
+            "reason": "empty_path",
+            "max_endpoint_error_m": float(max_endpoint_error_m),
+        }
+    first = path[0]
+    last = path[-1]
+    try:
+        start_z = float(start[2] if len(start) > 2 else 0.0)
+        goal_z = float(goal[2] if len(goal) > 2 else 0.0)
+        first_z = float(first.get("z"))
+        last_z = float(last.get("z"))
+    except Exception:
+        return {
+            "ok": False,
+            "reason": "invalid_z",
+            "max_endpoint_error_m": float(max_endpoint_error_m),
+        }
+    start_error = abs(first_z - start_z)
+    goal_error = abs(last_z - goal_z)
+    z_values = [
+        float(point.get("z"))
+        for point in path
+        if point.get("z") is not None and math.isfinite(float(point.get("z")))
+    ]
+    z_min = min(z_values) if z_values else float("nan")
+    z_max = max(z_values) if z_values else float("nan")
+    ok = (
+        math.isfinite(start_error)
+        and math.isfinite(goal_error)
+        and start_error <= float(max_endpoint_error_m)
+        and goal_error <= float(max_endpoint_error_m)
+    )
+    return {
+        "ok": bool(ok),
+        "start_z": start_z,
+        "first_path_z": first_z,
+        "start_error_m": float(start_error),
+        "goal_z": goal_z,
+        "last_path_z": last_z,
+        "goal_error_m": float(goal_error),
+        "path_z_min": float(z_min),
+        "path_z_max": float(z_max),
+        "max_endpoint_error_m": float(max_endpoint_error_m),
+    }
 
 
 def tail_lines(text: str, max_lines: int = 40) -> list[str]:
@@ -613,6 +683,7 @@ def child_preview(encoded_payload: str) -> int:
             timeout_s=float(payload["timeout_s"]),
             downsample_dist=float(payload["downsample_dist"]),
         )
+        result = json_safe(result)
         print(json.dumps(result, allow_nan=False, separators=(",", ":"), sort_keys=True))
         return 0
     except Exception as exc:
@@ -644,6 +715,7 @@ def summarize_case(
     downsample_dist: float,
     allow_out_of_bounds: bool,
     pct_runtime_libs: dict[str, Any],
+    max_endpoint_z_error_m: float,
 ) -> dict[str, Any]:
     start_in_bounds = info.in_bounds(case.start)
     goal_in_bounds = info.in_bounds(case.goal)
@@ -701,6 +773,13 @@ def summarize_case(
         body = preview.get("preview") or {}
         result["ok"] = bool(body.get("ok"))
         result["feasible"] = bool(body.get("feasible"))
+        if planner == "pct":
+            result["z_consistency"] = path_z_consistency(
+                start=case.start,
+                goal=case.goal,
+                path=body.get("path") or [],
+                max_endpoint_error_m=max_endpoint_z_error_m,
+            )
     except Exception as exc:
         result["error"] = str(exc)
     return result
@@ -712,6 +791,37 @@ def case_failures(
     strict: bool,
     allow_out_of_bounds: bool,
 ) -> list[str]:
+    def path_safety_failure(case: dict[str, Any]) -> str | None:
+        preview = case.get("preview") or {}
+        selected = str(preview.get("selected_planner") or preview.get("planner") or case.get("planner") or "")
+        if selected != "pct":
+            return None
+        path_safety = preview.get("path_safety")
+        if path_safety is None:
+            return None
+        if isinstance(path_safety, dict) and path_safety.get("ok") is not True:
+            blocked = path_safety.get("blocked_sample_count")
+            if blocked is not None:
+                return f"path_safety_failed:{blocked}"
+            return "path_safety_failed"
+        return None
+
+    def z_consistency_failure(case: dict[str, Any]) -> str | None:
+        preview = case.get("preview") or {}
+        selected = str(preview.get("selected_planner") or preview.get("planner") or case.get("planner") or "")
+        if selected != "pct":
+            return None
+        z_report = case.get("z_consistency")
+        if not isinstance(z_report, dict):
+            return "z_consistency_missing"
+        if z_report.get("ok") is True:
+            return None
+        return (
+            "z_endpoint_inconsistent:"
+            f"start={z_report.get('start_error_m')},"
+            f"goal={z_report.get('goal_error_m')}"
+        )
+
     failures: list[str] = []
     for case in cases:
         name = case.get("name")
@@ -728,6 +838,13 @@ def case_failures(
                 failures.append(f"{name}:start_out_of_bounds")
             if not case.get("goal_in_bounds"):
                 failures.append(f"{name}:goal_out_of_bounds")
+        if strict:
+            safety = path_safety_failure(case)
+            if safety:
+                failures.append(f"{name}:{safety}")
+            z_failure = z_consistency_failure(case)
+            if z_failure:
+                failures.append(f"{name}:{z_failure}")
     return failures
 
 
@@ -747,6 +864,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--obstacle-thr", type=float, default=49.9)
     parser.add_argument("--timeout", type=float, default=3.0)
     parser.add_argument("--downsample-dist", type=float, default=2.0)
+    parser.add_argument("--max-endpoint-z-error-m", type=float, default=1.0)
     parser.add_argument("--strict", action="store_true", help="Fail if any case is infeasible, backend unavailable, or endpoints are out of bounds.")
     parser.add_argument("--allow-out-of-bounds", action="store_true", help="Do not make --strict fail on out-of-bounds endpoints.")
     parser.add_argument("--compact", action="store_true", help="Print compact JSON.")
@@ -820,6 +938,7 @@ def main(argv: list[str] | None = None) -> int:
                 downsample_dist=args.downsample_dist,
                 allow_out_of_bounds=bool(args.allow_out_of_bounds),
                 pct_runtime_libs=pct_libs,
+                max_endpoint_z_error_m=float(args.max_endpoint_z_error_m),
             )
             for case in cases
         ]
@@ -835,6 +954,8 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         report["ok"] = False
         report["error"] = str(exc)
+
+    report = json_safe(report)
 
     if args.compact:
         print(json.dumps(report, allow_nan=False, separators=(",", ":"), sort_keys=True))

@@ -50,6 +50,177 @@ def _stats(values: list[float]) -> dict[str, float | None]:
     }
 
 
+def _command_stats(values: list[tuple[float, float]]) -> dict[str, Any]:
+    if not values:
+        return {
+            "count": 0,
+            "nonzero_count": 0,
+            "linear_x": _stats([]),
+            "abs_linear_x": _stats([]),
+            "angular_z": _stats([]),
+            "abs_angular_z": _stats([]),
+        }
+    linear = [float(v[0]) for v in values]
+    angular = [float(v[1]) for v in values]
+    return {
+        "count": len(values),
+        "nonzero_count": sum(1 for vx, wz in values if abs(vx) > 1e-4 or abs(wz) > 1e-4),
+        "linear_x": _stats(linear),
+        "abs_linear_x": _stats([abs(v) for v in linear]),
+        "angular_z": _stats(angular),
+        "abs_angular_z": _stats([abs(v) for v in angular]),
+    }
+
+
+_FOOT_BODY_NAMES = ("FR_foot", "FL_foot", "RR_foot", "RL_foot")
+
+
+def _mujoco_name(mujoco: Any, model: Any, obj_type: Any, idx: int) -> str:
+    try:
+        name = mujoco.mj_id2name(model, obj_type, int(idx))
+    except Exception:
+        return ""
+    return str(name or "")
+
+
+def _contact_snapshot(engine: Any) -> dict[str, Any]:
+    """Return one MuJoCo contact sample focused on physical gait stability."""
+    model = getattr(engine, "model", None)
+    data = getattr(engine, "data", None)
+    if model is None or data is None:
+        return {
+            "available": False,
+            "ncon": 0,
+            "feet": [],
+            "support_count": 0,
+            "non_foot_ground_contacts": 0,
+            "max_normal_force": 0.0,
+        }
+    try:
+        import mujoco  # type: ignore
+    except Exception:
+        return {
+            "available": False,
+            "ncon": int(getattr(data, "ncon", 0) or 0),
+            "feet": [],
+            "support_count": 0,
+            "non_foot_ground_contacts": 0,
+            "max_normal_force": 0.0,
+        }
+
+    feet: set[str] = set()
+    non_foot_ground_contacts = 0
+    max_normal_force = 0.0
+    ncon = int(getattr(data, "ncon", 0) or 0)
+    for idx in range(ncon):
+        try:
+            contact = data.contact[idx]
+        except Exception:
+            break
+        geom_ids = (int(contact.geom1), int(contact.geom2))
+        body_ids = [int(model.geom_bodyid[geom_id]) for geom_id in geom_ids]
+        body_names = [
+            _mujoco_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, body_id)
+            for body_id in body_ids
+        ]
+        foot_names = [
+            body_name for body_name in body_names if body_name in _FOOT_BODY_NAMES
+        ]
+        touches_world = any(body_id == 0 for body_id in body_ids)
+        if foot_names and touches_world:
+            feet.update(foot_names)
+            force = np.zeros(6, dtype=np.float64)
+            try:
+                mujoco.mj_contactForce(model, data, idx, force)
+                max_normal_force = max(max_normal_force, abs(float(force[0])))
+            except Exception:
+                pass
+        if touches_world and not foot_names:
+            robot_body_contacts = [
+                name for name, body_id in zip(body_names, body_ids)
+                if body_id != 0 and name
+            ]
+            if robot_body_contacts:
+                non_foot_ground_contacts += 1
+
+    return {
+        "available": True,
+        "ncon": ncon,
+        "feet": sorted(feet),
+        "support_count": len(feet),
+        "non_foot_ground_contacts": non_foot_ground_contacts,
+        "max_normal_force": max_normal_force,
+    }
+
+
+def _contact_summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    if not samples:
+        return {
+            "sample_count": 0,
+            "available_sample_count": 0,
+            "contact_sample_count": 0,
+            "foot_contact_sample_count": 0,
+            "unique_feet": [],
+            "unique_feet_count": 0,
+            "per_foot_contact_samples": {},
+            "support_count": _stats([]),
+            "max_support_count": 0,
+            "non_foot_ground_contacts": 0,
+            "max_normal_force": 0.0,
+        }
+
+    support_counts: list[float] = []
+    unique_feet: set[str] = set()
+    per_foot: dict[str, int] = {name: 0 for name in _FOOT_BODY_NAMES}
+    contact_sample_count = 0
+    foot_contact_sample_count = 0
+    available_sample_count = 0
+    non_foot_ground_contacts = 0
+    max_normal_force = 0.0
+    for sample in samples:
+        if bool(sample.get("available")):
+            available_sample_count += 1
+        if int(sample.get("ncon") or 0) > 0:
+            contact_sample_count += 1
+        feet = [str(name) for name in sample.get("feet") or []]
+        if feet:
+            foot_contact_sample_count += 1
+        unique_feet.update(feet)
+        for name in feet:
+            per_foot[name] = per_foot.get(name, 0) + 1
+        support_counts.append(float(sample.get("support_count") or 0))
+        non_foot_ground_contacts += int(sample.get("non_foot_ground_contacts") or 0)
+        max_normal_force = max(max_normal_force, float(sample.get("max_normal_force") or 0.0))
+
+    return {
+        "sample_count": len(samples),
+        "available_sample_count": available_sample_count,
+        "contact_sample_count": contact_sample_count,
+        "foot_contact_sample_count": foot_contact_sample_count,
+        "unique_feet": sorted(unique_feet),
+        "unique_feet_count": len(unique_feet),
+        "per_foot_contact_samples": {
+            key: value for key, value in sorted(per_foot.items()) if value > 0
+        },
+        "support_count": _stats(support_counts),
+        "max_support_count": int(max(support_counts)) if support_counts else 0,
+        "non_foot_ground_contacts": non_foot_ground_contacts,
+        "max_normal_force": max_normal_force,
+    }
+
+
+def _contact_stability_ok(result: dict[str, Any]) -> bool:
+    contacts = result.get("contacts") or {}
+    return (
+        int(contacts.get("available_sample_count") or 0) > 0
+        and int(contacts.get("foot_contact_sample_count") or 0) >= 3
+        and int(contacts.get("unique_feet_count") or 0) >= 2
+        and int(contacts.get("max_support_count") or 0) >= 2
+        and int(contacts.get("non_foot_ground_contacts") or 0) == 0
+        and float(contacts.get("max_normal_force") or 0.0) > 0.0
+    )
+
+
 def _xyz_from_any(value: Any) -> list[float] | None:
     if hasattr(value, "pose"):
         value = value.pose.position
@@ -275,6 +446,7 @@ def run_direct_policy(
         roll_values: list[float] = []
         pitch_values: list[float] = []
         speed_values: list[float] = []
+        contact_samples: list[dict[str, Any]] = []
         finite = True
         ctrl_abs_max = 0.0
         if direct_mode == "stand":
@@ -290,6 +462,7 @@ def run_direct_policy(
 
         for _ in range(steps):
             state = engine.step(cmd)
+            contact_samples.append(_contact_snapshot(engine))
             finite = (
                 finite
                 and bool(np.isfinite(state.position).all())
@@ -341,6 +514,7 @@ def run_direct_policy(
             "roll_abs": _stats(roll_values),
             "pitch_abs": _stats(pitch_values),
             "speed_xy": _stats(speed_values),
+            "contacts": _contact_summary(contact_samples),
             "ctrl_abs_max": ctrl_abs_max,
             "start": [float(v) for v in start.position[:3]],
             "end": [float(v) for v in end.position[:3]],
@@ -419,9 +593,13 @@ def run_full_stack_nav(
     }
     odom: list[tuple[float, float, float]] = []
     last_mux: list[tuple[float, float]] = []
+    path_follower_cmds: list[tuple[float, float]] = []
     global_path_summaries: list[dict[str, Any]] = []
     waypoint_points: list[list[float]] = []
     local_path_summaries: list[dict[str, Any]] = []
+    control_hint_reasons: dict[str, int] = {}
+    control_hint_safety_stop_count = 0
+    last_control_hint: dict[str, Any] | None = None
     map_readiness: dict[str, Any] = {
         "planner_has_map": False,
         "source": "not_checked",
@@ -440,6 +618,16 @@ def run_full_stack_nav(
         seen["local_path"] += 1
         local_path_summaries.append(_path_summary(path))
 
+    def _record_control_hint(hint: Any) -> None:
+        nonlocal control_hint_safety_stop_count, last_control_hint
+        if not isinstance(hint, dict):
+            return
+        reason = str(hint.get("reason") or "")
+        control_hint_reasons[reason] = control_hint_reasons.get(reason, 0) + 1
+        if bool(hint.get("safety_stop") or hint.get("near_field_stop")):
+            control_hint_safety_stop_count += 1
+        last_control_hint = dict(hint)
+
     ogm.costmap._add_callback(lambda _: seen.__setitem__("costmap", seen["costmap"] + 1))
     nav.global_path._add_callback(_record_global_path)
     nav.waypoint._add_callback(_record_waypoint)
@@ -450,8 +638,12 @@ def run_full_stack_nav(
         )
     )
     local_planner.local_path._add_callback(_record_local_path)
+    local_planner.control_hint._add_callback(_record_control_hint)
     path_follower.cmd_vel._add_callback(
-        lambda _: seen.__setitem__("path_follower_cmd", seen["path_follower_cmd"] + 1)
+        lambda m: (
+            seen.__setitem__("path_follower_cmd", seen["path_follower_cmd"] + 1),
+            path_follower_cmds.append((float(m.linear.x), float(m.angular.z))),
+        )
     )
     mux.driver_cmd_vel._add_callback(
         lambda m: (
@@ -507,6 +699,9 @@ def run_full_stack_nav(
         moved = 0.0
         dist_to_goal = math.hypot(goal_x - start[0], goal_y - start[1])
         z_values: list[float] = []
+        roll_values: list[float] = []
+        pitch_values: list[float] = []
+        contact_samples: list[dict[str, Any]] = []
         finite = True
         while time.time() < deadline:
             time.sleep(0.1)
@@ -516,6 +711,18 @@ def run_full_stack_nav(
                 dist_to_goal = math.hypot(goal_x - x, goal_y - y)
                 z_values.append(z)
                 finite = finite and all(math.isfinite(v) for v in odom[-1])
+            if engine is not None:
+                state = engine.get_robot_state()
+                roll, pitch, _ = _rpy_from_xyzw(state.orientation)
+                roll_values.append(abs(roll))
+                pitch_values.append(abs(pitch))
+                contact_samples.append(_contact_snapshot(engine))
+                finite = (
+                    finite
+                    and bool(np.isfinite(state.position).all())
+                    and bool(np.isfinite(state.orientation).all())
+                    and bool(np.isfinite(state.linear_velocity).all())
+                )
             if str(getattr(nav, "_state", "")) == "SUCCESS":
                 if success_at is None:
                     success_at = time.time()
@@ -580,12 +787,34 @@ def run_full_stack_nav(
             },
             "finite": finite,
             "seen": seen,
+            "local_path_nonempty_count": sum(
+                1 for summary in local_path_summaries if int(summary.get("count") or 0) >= 2
+            ),
+            "local_path_empty_count": sum(
+                1 for summary in local_path_summaries if int(summary.get("count") or 0) < 2
+            ),
             "global_path": global_path_summaries[-1] if global_path_summaries else None,
             "last_waypoint": waypoint_points[-1] if waypoint_points else None,
+            "last_nonempty_local_path": next(
+                (
+                    summary
+                    for summary in reversed(local_path_summaries)
+                    if int(summary.get("count") or 0) >= 2
+                ),
+                None,
+            ),
             "last_local_path": local_path_summaries[-1] if local_path_summaries else None,
+            "control_hint_reasons": control_hint_reasons,
+            "control_hint_safety_stop_count": control_hint_safety_stop_count,
+            "last_control_hint": last_control_hint,
+            "path_follower_cmd_stats": _command_stats(path_follower_cmds),
+            "mux_cmd_stats": _command_stats(last_mux),
             "moved_m": moved,
             "dist_to_goal_m": dist_to_goal,
             "z": _stats(z_values),
+            "roll_abs": _stats(roll_values),
+            "pitch_abs": _stats(pitch_values),
+            "contacts": _contact_summary(contact_samples),
             "nav_state": str(getattr(nav, "_state", "")),
             "last_mux": list(last_mux[-1]) if last_mux else None,
             "start": [float(v) for v in start[:3]],
@@ -604,6 +833,7 @@ def _passes_direct_common(result: dict[str, Any]) -> bool:
         and (result.get("z", {}).get("max") or 999.0) < 0.55
         and (result.get("roll_abs", {}).get("max") or 999.0) < 0.35
         and (result.get("pitch_abs", {}).get("max") or 999.0) < 0.35
+        and _contact_stability_ok(result)
     )
 
 
@@ -634,24 +864,30 @@ def _passes_direct(
 
 def _passes_nav(result: dict[str, Any], min_motion: float, max_dist_to_goal: float) -> bool:
     seen = result.get("seen", {})
+    map_ready = int(seen.get("costmap", 0)) > 0 or bool(
+        (result.get("costmap_readiness") or {}).get("planner_has_map")
+    )
     dist_for_gate = result.get("dist_at_success_m")
     if dist_for_gate is None:
         dist_for_gate = result.get("dist_to_goal_m", 999.0)
+    close_enough = bool(result.get("success_seen")) or float(dist_for_gate) <= max_dist_to_goal
     return (
         result.get("drive_mode") == "policy"
         and bool(result.get("policy_loaded"))
         and bool(result.get("finite"))
-        and bool(result.get("success_seen"))
-        and int(seen.get("costmap", 0)) > 0
+        and map_ready
+        and close_enough
         and int(seen.get("waypoints", 0)) > 0
         and int(seen.get("local_path", 0)) > 0
         and int(seen.get("path_follower_cmd", 0)) > 3
         and int(seen.get("mux_cmd", 0)) > 3
         and int(seen.get("direct_fallback", 0)) == 0
         and float(result.get("moved_m", 0.0)) >= min_motion
-        and float(dist_for_gate) <= max_dist_to_goal
         and (result.get("z", {}).get("min") or 0.0) > 0.35
         and (result.get("z", {}).get("max") or 999.0) < 0.55
+        and (result.get("roll_abs", {}).get("max") or 999.0) < 0.35
+        and (result.get("pitch_abs", {}).get("max") or 999.0) < 0.35
+        and _contact_stability_ok(result)
     )
 
 

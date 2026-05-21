@@ -10,6 +10,7 @@ import pytest
 
 from core.module import Module, rpc
 from core.remote_ports import RemoteIn, RemoteOut
+from core.runtime_interface import TOPICS
 from core.rpc_client import RPCClient
 
 # ---------------------------------------------------------------------------
@@ -164,8 +165,8 @@ class TestRemoteOut:
         assert ro.transport_topic == "/odometry"
 
     def test_explicit_topic(self):
-        ro = RemoteOut("odometry", transport_topic="/nav/odom")
-        assert ro.transport_topic == "/nav/odom"
+        ro = RemoteOut("odometry", transport_topic=TOPICS.odometry)
+        assert ro.transport_topic == TOPICS.odometry
 
     def test_publish_calls_transport(self):
         transport = MagicMock()
@@ -202,8 +203,8 @@ class TestRemoteIn:
         assert ri.transport_topic == "/cmd_vel"
 
     def test_explicit_topic(self):
-        ri = RemoteIn("cmd_vel", transport_topic="/nav/cmd_vel")
-        assert ri.transport_topic == "/nav/cmd_vel"
+        ri = RemoteIn("cmd_vel", transport_topic=TOPICS.cmd_vel)
+        assert ri.transport_topic == TOPICS.cmd_vel
 
     def test_subscribe_then_bind_wires_callback(self):
         transport = MagicMock()

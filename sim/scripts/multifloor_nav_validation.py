@@ -1604,18 +1604,7 @@ def run_frontier_exploration_probe() -> dict[str, Any]:
     explorer.setup()
     explorer.start()
     try:
-        grid = np.full((45, 55), -1, dtype=np.int16)
-        grid[16:29, 12:26] = 0
-        grid[20:23, 18:21] = 100
-        costmap = {
-            "grid": grid,
-            "resolution": 0.2,
-            "origin": np.asarray([-2.4, -4.5], dtype=np.float32),
-            "origin_x": -2.4,
-            "origin_y": -4.5,
-            "width": grid.shape[1],
-            "height": grid.shape[0],
-        }
+        costmap = _frontier_probe_costmap()
         odom = Odometry(pose=Pose(DEFAULT_START[0], DEFAULT_START[1], DEFAULT_START[2]), frame_id="map")
         explorer.odometry._deliver(odom)
         explorer.costmap._deliver(costmap)
@@ -1641,7 +1630,10 @@ def run_frontier_exploration_probe() -> dict[str, Any]:
 
 def _frontier_probe_costmap() -> dict[str, Any]:
     grid = np.full((45, 55), -1, dtype=np.int16)
-    grid[16:29, 12:26] = 0
+    # Seed the robot's current sensor-visible free space. The start pose maps
+    # to cell (row=12, col=10), so this known-free patch must include it; the
+    # frontier explorer intentionally no longer traverses unknown cells.
+    grid[10:29, 8:26] = 0
     grid[20:23, 18:21] = 100
     return {
         "grid": grid,

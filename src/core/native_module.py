@@ -50,6 +50,7 @@ class NativeModuleConfig:
     Attributes:
         executable: Absolute path to compiled binary.
         name: Human-readable name for logging (defaults to executable basename).
+        parameter_files: ROS2 parameter files passed as ``--params-file``.
         parameters: ROS2 parameters passed as ``--ros-args -p key:=value``.
         remappings: ROS2 topic remappings passed as ``-r /old:=/new``.
         env: Extra environment variables for the subprocess.
@@ -61,6 +62,7 @@ class NativeModuleConfig:
     """
     executable: str
     name: str = ""
+    parameter_files: list[str] = field(default_factory=list)
     parameters: dict[str, Any] = field(default_factory=dict)
     remappings: dict[str, str] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
@@ -76,9 +78,11 @@ class NativeModuleConfig:
 
     def to_ros_args(self) -> list[str]:
         """Generate ``--ros-args -p key:=val -r /old:=/new`` CLI arguments."""
-        if not self.parameters and not self.remappings:
+        if not self.parameter_files and not self.parameters and not self.remappings:
             return []
         args = ["--ros-args"]
+        for path in self.parameter_files:
+            args.extend(["--params-file", str(path)])
         for key, val in self.parameters.items():
             if isinstance(val, bool):
                 args.extend(["-p", f"{key}:={'true' if val else 'false'}"])

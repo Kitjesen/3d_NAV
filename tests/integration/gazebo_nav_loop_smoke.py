@@ -20,6 +20,35 @@ import time
 from dataclasses import dataclass, field
 
 
+NAV_TOPIC_PUBLISHER_ALLOWLIST: dict[str, set[str]] = {
+    "/nav/odometry": {
+        "lingtu_ros2_driver",
+        "lingtu_gazebo_runtime_adapter",
+        "sim_robot_node",
+    },
+    "/nav/global_path": {
+        "global_planner",
+        "pct_path_adapter",
+        "lingtu_gazebo_line_global_planner",
+        "NavigationModule",
+        "navigation_module",
+    },
+    "/nav/local_path": {
+        "localPlanner",
+        "local_planner",
+        "LocalPlannerModule",
+        "local_planner_module",
+    },
+    "/nav/cmd_vel": {
+        "pathFollower",
+        "path_follower",
+        "PathFollowerModule",
+        "path_follower_module",
+        "lingtu_ros2_driver",
+    },
+}
+
+
 @dataclass
 class GazeboNavLoopResult:
     ok: bool = False
@@ -35,7 +64,14 @@ class GazeboNavLoopResult:
     odom_start_xy: tuple[float, float] | None = None
     odom_last_xy: tuple[float, float] | None = None
     odom_delta_m: float = 0.0
+    odom_delta_x_m: float = 0.0
+    cmd_vel_linear_x_max: float = 0.0
+    cmd_vel_linear_x_min: float = 0.0
+    cmd_vel_angular_z_abs_max: float = 0.0
+    stop_last: int | None = None
+    stop_max: int | None = None
     samples: dict[str, int] = field(default_factory=dict)
+    publisher_contract: dict[str, object] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
@@ -54,13 +90,51 @@ class GazeboNavLoopResult:
             "odom_start_xy": self.odom_start_xy,
             "odom_last_xy": self.odom_last_xy,
             "odom_delta_m": self.odom_delta_m,
+            "odom_delta_x_m": self.odom_delta_x_m,
+            "cmd_vel_linear_x_max": self.cmd_vel_linear_x_max,
+            "cmd_vel_linear_x_min": self.cmd_vel_linear_x_min,
+            "cmd_vel_angular_z_abs_max": self.cmd_vel_angular_z_abs_max,
+            "stop_last": self.stop_last,
+            "stop_max": self.stop_max,
             "samples": self.samples,
+            "publisher_contract": self.publisher_contract,
             "errors": self.errors,
         }
 
 
 def _count(samples: dict[str, int], topic: str) -> None:
     samples[topic] = samples.get(topic, 0) + 1
+
+
+def _publisher_contract(node) -> dict[str, object]:
+    topics: dict[str, dict[str, object]] = {}
+    errors: list[str] = []
+    for topic, allowed in NAV_TOPIC_PUBLISHER_ALLOWLIST.items():
+        infos = node.get_publishers_info_by_topic(topic)
+        publishers = sorted(
+            f"{info.node_namespace.rstrip('/')}/{info.node_name}".replace("//", "/")
+            for info in infos
+        )
+        names = {item.rsplit("/", maxsplit=1)[-1] for item in publishers}
+        disallowed = sorted(name for name in names if name not in allowed)
+        ok = bool(publishers) and not disallowed
+        if not publishers:
+            errors.append(f"{topic} has no publishers")
+        if disallowed:
+            errors.append(
+                f"{topic} has disallowed publishers: {', '.join(disallowed)}"
+            )
+        topics[topic] = {
+            "ok": ok,
+            "publishers": publishers,
+            "allowed_node_names": sorted(allowed),
+            "disallowed_node_names": disallowed,
+        }
+    return {
+        "ok": not errors,
+        "topics": topics,
+        "errors": errors,
+    }
 
 
 def run_smoke(args: argparse.Namespace) -> GazeboNavLoopResult:
@@ -84,6 +158,7 @@ def run_smoke(args: argparse.Namespace) -> GazeboNavLoopResult:
         result.odometry_seen = True
         result.odom_last_xy = (x, y)
         if result.odom_start_xy is not None:
+            result.odom_delta_x_m = x - result.odom_start_xy[0]
             result.odom_delta_m = math.hypot(x - result.odom_start_xy[0], y - result.odom_start_xy[1])
 
     def on_global_path(msg: Path) -> None:
@@ -98,14 +173,22 @@ def run_smoke(args: argparse.Namespace) -> GazeboNavLoopResult:
         _count(result.samples, "/nav/cmd_vel")
         result.cmd_vel_seen = True
         tw = msg.twist
+        vx = float(tw.linear.x)
+        wz = float(tw.angular.z)
+        result.cmd_vel_linear_x_max = max(result.cmd_vel_linear_x_max, vx)
+        result.cmd_vel_linear_x_min = min(result.cmd_vel_linear_x_min, vx)
+        result.cmd_vel_angular_z_abs_max = max(result.cmd_vel_angular_z_abs_max, abs(wz))
         result.cmd_vel_nonzero = result.cmd_vel_nonzero or (
-            abs(float(tw.linear.x)) > args.min_cmd_vel
+            abs(vx) > args.min_cmd_vel
             or abs(float(tw.linear.y)) > args.min_cmd_vel
-            or abs(float(tw.angular.z)) > args.min_cmd_vel
+            or abs(wz) > args.min_cmd_vel
         )
 
     def on_stop(msg: Int8) -> None:
         _count(result.samples, "/nav/stop")
+        value = int(msg.data)
+        result.stop_last = value
+        result.stop_max = value if result.stop_max is None else max(result.stop_max, value)
 
     node.create_subscription(Odometry, "/nav/odometry", on_odom, 10)
     node.create_subscription(Path, "/nav/global_path", on_global_path, 10)
@@ -131,14 +214,23 @@ def run_smoke(args: argparse.Namespace) -> GazeboNavLoopResult:
                 result.goal_published = True
                 next_goal_publish = now + args.goal_republish_sec
             rclpy.spin_once(node, timeout_sec=0.1)
+            forward_ready = (
+                not args.require_forward_progress
+                or (
+                    result.cmd_vel_linear_x_max > args.min_cmd_vel
+                    and result.odom_delta_x_m >= args.min_forward_odom_x_m
+                )
+            )
             if (
                 result.global_path_seen
                 and result.local_path_seen
                 and result.cmd_vel_nonzero
                 and result.odom_delta_m >= args.min_odom_delta_m
+                and forward_ready
             ):
                 break
     finally:
+        result.publisher_contract = _publisher_contract(node)
         node.destroy_node()
         rclpy.shutdown()
 
@@ -159,6 +251,19 @@ def run_smoke(args: argparse.Namespace) -> GazeboNavLoopResult:
             f"/nav/odometry moved {result.odom_delta_m:.3f} m, "
             f"expected >= {args.min_odom_delta_m:.3f} m"
         )
+    if args.require_forward_progress:
+        if result.cmd_vel_linear_x_max <= args.min_cmd_vel:
+            result.errors.append(
+                "forward goal did not produce positive cmd_vel.linear.x: "
+                f"max={result.cmd_vel_linear_x_max:.3f}"
+            )
+        if result.odom_delta_x_m < args.min_forward_odom_x_m:
+            result.errors.append(
+                "forward goal did not produce positive odom x progress: "
+                f"dx={result.odom_delta_x_m:.3f}, expected >= {args.min_forward_odom_x_m:.3f}"
+            )
+    publisher_errors = list((result.publisher_contract or {}).get("errors") or [])
+    result.errors.extend(publisher_errors)
     result.ok = not result.errors
     return result
 
@@ -173,6 +278,8 @@ def main() -> int:
     parser.add_argument("--goal-z", type=float, default=0.0)
     parser.add_argument("--min-cmd-vel", type=float, default=0.01)
     parser.add_argument("--min-odom-delta-m", type=float, default=0.05)
+    parser.add_argument("--require-forward-progress", action="store_true")
+    parser.add_argument("--min-forward-odom-x-m", type=float, default=0.03)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--json-out", default="")
     args = parser.parse_args()

@@ -45,62 +45,100 @@ def _load_ros_modules():
     return rclpy, rosbag2_py, deserialize_message, get_message, Odometry, PointCloud2
 
 
-def _write_fastlio2_config(path: Path, *, imu_topic: str, lidar_topic: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "\n".join(
-            [
-                f"imu_topic: {imu_topic}",
-                f"lidar_topic: {lidar_topic}",
-                "body_frame: body",
-                "world_frame: odom",
-                "print_time_cost: false",
-                "",
-                "# Generic PointCloud2 replay. The source bag is MID-360 raw cloud,",
-                "# but this gate verifies algorithm I/O without Livox CustomMsg.",
-                "lidar_type: 3",
-                "scan_line: 4",
-                "timestamp_unit: 3",
-                "acc_scale: 1.0",
-                "",
-                "lidar_filter_num: 4",
-                "lidar_min_range: 0.5",
-                "lidar_max_range: 30.0",
-                "scan_resolution: 0.15",
-                "map_resolution: 0.3",
-                "",
-                "cube_len: 2000",
-                "det_range: 60",
-                "move_thresh: 1.5",
-                "max_map_points: 1000000",
-                "stationary_thresh: 0.05",
-                "",
-                "na: 0.01",
-                "ng: 0.01",
-                "nba: 0.0001",
-                "nbg: 0.0001",
-                "",
-                "imu_init_num: 20",
-                "near_search_num: 5",
-                "ieskf_max_iter: 5",
-                "time_diff_lidar_to_imu: 0.0",
-                "",
-                "gravity_align: true",
-                "esti_il: false",
-                "r_il: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]",
-                "t_il: [0.0, 0.0, 0.0]",
-                "lidar_cov_inv: 1000.0",
-                "",
-                "imu_static_acc_thresh: 0.04",
-                "imu_static_gyro_thresh: 0.001",
-                "zupt_min_static_frames: 5",
-                "zupt_sigma_v: 0.02",
-                "zupt_sigma_pos: 0.1",
-                "",
-            ]
-        ),
-        encoding="utf-8",
+def _write_fastlio2_config(
+    path: Path,
+    *,
+    imu_topic: str,
+    lidar_topic: str,
+    lidar_type: int = 3,
+    scan_line: int = 4,
+    timestamp_unit: int = 3,
+    livox_scan_window: float | None = None,
+    r_il: tuple[float, ...] | list[float] | None = None,
+    t_il: tuple[float, ...] | list[float] | None = None,
+    imu_static_acc_thresh: float = 0.04,
+    imu_static_gyro_thresh: float = 0.001,
+    zupt_min_static_frames: int = 5,
+    degeneracy_max_update_dof: int = 2,
+    degeneracy_max_condition: float = 50_000.0,
+    max_update_translation_m: float = 0.5,
+    max_update_rotation_rad: float = 0.35,
+    reject_nonconverged_update: bool = True,
+    reject_degenerate_nonconverged_update: bool = True,
+) -> None:
+    r_il_values = list(r_il) if r_il is not None else [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    t_il_values = list(t_il) if t_il is not None else [0.0, 0.0, 0.0]
+    if len(r_il_values) != 9:
+        raise ValueError("r_il must contain 9 row-major rotation values")
+    if len(t_il_values) != 3:
+        raise ValueError("t_il must contain 3 translation values")
+    r_il_text = ", ".join(f"{float(value):.9g}" for value in r_il_values)
+    t_il_text = ", ".join(f"{float(value):.9g}" for value in t_il_values)
+    lines = [
+        f"imu_topic: {imu_topic}",
+        f"lidar_topic: {lidar_topic}",
+        "body_frame: body",
+        "world_frame: odom",
+        "print_time_cost: false",
+        "",
+        "# Generic PointCloud2 replay. The source bag is MID-360 raw cloud,",
+        "# but this gate verifies algorithm I/O without Livox CustomMsg.",
+        f"lidar_type: {int(lidar_type)}",
+        f"scan_line: {int(scan_line)}",
+        f"timestamp_unit: {int(timestamp_unit)}",
+        "acc_scale: 1.0",
+    ]
+    if livox_scan_window is not None:
+        lines.append(f"livox_scan_window: {float(livox_scan_window):.6f}")
+    lines.extend(
+        [
+            "",
+            "lidar_filter_num: 4",
+            "lidar_min_range: 0.5",
+            "lidar_max_range: 30.0",
+            "scan_resolution: 0.15",
+            "map_resolution: 0.3",
+            "",
+            "cube_len: 2000",
+            "det_range: 60",
+            "move_thresh: 1.5",
+            "max_map_points: 1000000",
+            "stationary_thresh: 0.05",
+            "",
+            "na: 0.01",
+            "ng: 0.01",
+            "nba: 0.0001",
+            "nbg: 0.0001",
+            "",
+            "imu_init_num: 20",
+            "near_search_num: 5",
+            "ieskf_max_iter: 5",
+            f"degeneracy_max_update_dof: {int(degeneracy_max_update_dof)}",
+            f"degeneracy_max_condition: {float(degeneracy_max_condition):.9g}",
+            f"max_update_translation_m: {float(max_update_translation_m):.9g}",
+            f"max_update_rotation_rad: {float(max_update_rotation_rad):.9g}",
+            "reject_nonconverged_update: "
+            f"{str(bool(reject_nonconverged_update)).lower()}",
+            "reject_degenerate_nonconverged_update: "
+            f"{str(bool(reject_degenerate_nonconverged_update)).lower()}",
+            "time_diff_lidar_to_imu: 0.0",
+            "",
+            "gravity_align: true",
+            "esti_il: false",
+            f"r_il: [{r_il_text}]",
+            f"t_il: [{t_il_text}]",
+            "lidar_cov_inv: 1000.0",
+            "",
+            f"imu_static_acc_thresh: {float(imu_static_acc_thresh):.9g}",
+            f"imu_static_gyro_thresh: {float(imu_static_gyro_thresh):.9g}",
+            f"zupt_min_static_frames: {int(zupt_min_static_frames)}",
+            "zupt_sigma_v: 0.02",
+            "zupt_sigma_pos: 0.1",
+            "",
+        ]
     )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def _odom_xyz(msg: Any) -> list[float] | None:

@@ -214,7 +214,7 @@ class TestSlamBridgeWatchdog(unittest.TestCase):
         self.assertEqual(odom_seen[-1].frame_id, "odom")
         self.assertEqual(odom_seen[-1].child_frame_id, "base_link")
         self.assertTrue(cloud_seen)
-        self.assertEqual(cloud_seen[-1].frame_id, "map")
+        self.assertEqual(cloud_seen[-1].frame_id, "odom")
         self.assertEqual(cloud_seen[-1].num_points, 3)
         tracking = next(item for item in status_seen if item["state"] == "TRACKING")
         self.assertEqual(tracking["backend"], "localizer")
@@ -886,6 +886,64 @@ class TestSlamBridgeDegeneracyParsing(unittest.TestCase):
 
         m._on_rclpy_odom(msg)
         self.assertAlmostEqual(m._max_pos_cov, 150.0, places=3)
+
+    def test_rclpy_odom_uses_drift_guard_for_z_divergence(self):
+        """The rclpy fallback must suppress impossible Z drift before fan-out."""
+        m = self._make()
+        m._drift_confirm_frames = 1
+        m._drift_max_abs_z = 2.0
+        m._drift_max_z_jump = 1.0
+        m._drift_relocalize_cooldown = 10**12
+        published = []
+        m.odometry._add_callback(published.append)
+
+        class _Msg:
+            pass
+
+        class _Obj:
+            pass
+
+        def odom_msg(x, y, z):
+            msg = _Msg()
+            msg.header = _Obj()
+            msg.header.frame_id = "odom"
+            msg.pose = _Obj()
+            msg.pose.pose = _Obj()
+            msg.pose.pose.position = _Obj()
+            msg.pose.pose.position.x = x
+            msg.pose.pose.position.y = y
+            msg.pose.pose.position.z = z
+            msg.pose.pose.orientation = _Obj()
+            msg.pose.pose.orientation.x = 0.0
+            msg.pose.pose.orientation.y = 0.0
+            msg.pose.pose.orientation.z = 0.0
+            msg.pose.pose.orientation.w = 1.0
+            msg.pose.covariance = [0.0] * 36
+            msg.twist = _Obj()
+            msg.twist.twist = _Obj()
+            msg.twist.twist.linear = _Obj()
+            msg.twist.twist.linear.x = 0.0
+            msg.twist.twist.linear.y = 0.0
+            msg.twist.twist.linear.z = 0.0
+            msg.twist.twist.angular = _Obj()
+            msg.twist.twist.angular.x = 0.0
+            msg.twist.twist.angular.y = 0.0
+            msg.twist.twist.angular.z = 0.0
+            msg.child_frame_id = "body"
+            return msg
+
+        m._on_rclpy_odom(odom_msg(0.0, 0.0, 0.3))
+        worker = getattr(m, "_odom_worker_thread", None)
+        if worker is not None:
+            worker.join(timeout=0.2)
+        self.assertEqual(len(published), 1)
+
+        m._on_rclpy_odom(odom_msg(0.1, 0.0, 71.0))
+        worker = getattr(m, "_odom_worker_thread", None)
+        if worker is not None:
+            worker.join(timeout=0.2)
+        self.assertEqual(len(published), 1)
+        self.assertEqual(m._loc_state, "DIVERGED")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

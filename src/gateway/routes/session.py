@@ -129,8 +129,8 @@ def register_session_routes(app, gw) -> None:
                 status_code=400,
                 message=(
                     f"Unknown slam_profile: {slam_profile!r}. "
-                    "Use 'fastlio2' | 'localizer' | 'super_lio' | "
-                    "'super_lio_relocation'."
+                    "Use 'none' | 'fastlio2' | 'localizer' | "
+                    "'super_lio' | 'super_lio_relocation'."
                 ),
             )
         if map_name:

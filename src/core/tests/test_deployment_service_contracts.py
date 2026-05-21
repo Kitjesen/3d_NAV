@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from core.runtime_interface import TOPICS, adapter_remappings
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -690,10 +692,19 @@ def test_robot_localizer_service_matches_slam_bridge_topics():
     text = _read("docs/04-deployment/services/robot-localizer.service")
 
     assert "MAP_PATH=$${NAV_MAP_PATH:-/home/sunrise/data/nova/maps/active/map}" in text
-    assert "-r map_cloud:=/nav/saved_map_cloud" in text
-    assert "-r /localization_quality:=/nav/localization_quality" in text
-    assert "-r global_relocalize:=/nav/global_relocalize" in text
+    for source, target in adapter_remappings("localizer").items():
+        assert f"-r {source}:={target}" in text
+    assert f"-r /localization_quality:={TOPICS.localization_quality}" in text
+    assert f"-r global_relocalize:={TOPICS.global_relocalize_service}" in text
     assert "-r map_cloud:=/nav/map_cloud" not in text
+
+
+def test_robot_fastlio2_service_matches_adapter_alias_contract():
+    text = _read("docs/04-deployment/services/robot-fastlio2.service")
+
+    for source, target in adapter_remappings("fastlio2").items():
+        assert f"-r {source}:={target}" in text
+    assert f"-r /path:=/lio_path" in text
 
 
 def test_s100p_localizer_template_matches_relocalize_api():
@@ -701,9 +712,10 @@ def test_s100p_localizer_template_matches_relocalize_api():
 
     assert "MAP_PATH=$${NAV_MAP_PATH:-/home/sunrise/data/nova/maps/active/map}" in text
     assert "/home/sunrise/data/inovxio/data/maps/active/map" not in text
-    assert "-r map_cloud:=/nav/saved_map_cloud" in text
-    assert "-r /localization_quality:=/nav/localization_quality" in text
-    assert "-r global_relocalize:=/nav/global_relocalize" in text
+    for source, target in adapter_remappings("localizer").items():
+        assert f"-r {source}:={target}" in text
+    assert f"-r /localization_quality:={TOPICS.localization_quality}" in text
+    assert f"-r global_relocalize:={TOPICS.global_relocalize_service}" in text
     assert "-r map_cloud:=/nav/map_cloud" not in text
 
 
@@ -711,11 +723,10 @@ def test_localizer_launch_profile_matches_topic_contract():
     text = _read("launch/profiles/localizer_icp.launch.py")
 
     assert 'default_value="/home/sunrise/data/nova/maps/active/map"' in text
-    assert '("/cloud_registered", "/nav/registered_cloud")' in text
-    assert '("/Odometry", "/nav/odometry")' in text
-    assert '("map_cloud", "/nav/saved_map_cloud")' in text
-    assert '("/localization_quality", "/nav/localization_quality")' in text
-    assert '("global_relocalize", "/nav/global_relocalize")' in text
+    for source, target in adapter_remappings("localizer").items():
+        assert f'("{source}", "{target}")' in text
+    assert f'("/localization_quality", "{TOPICS.localization_quality}")' in text
+    assert f'("global_relocalize", "{TOPICS.global_relocalize_service}")' in text
     assert '("map_cloud", "/nav/map_cloud")' not in text
 
 

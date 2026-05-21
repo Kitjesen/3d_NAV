@@ -34,6 +34,7 @@ install_tare_deps() {
     fi
 
     local packages=(
+        libabsl-dev
         libgoogle-glog-dev
         libpcl-dev
         "ros-${ROS_DISTRO}-pcl-ros"
@@ -82,7 +83,13 @@ install_tare_deps
 
 echo ">>> [TARE] colcon build tare_planner (from LingTu workspace)..."
 cd "${WORKSPACE_DIR}"
+COLCON_LAYOUT_ARGS=()
+if [[ -f "${WORKSPACE_DIR}/install/.colcon_install_layout" ]] \
+    && grep -qx "merged" "${WORKSPACE_DIR}/install/.colcon_install_layout"; then
+    COLCON_LAYOUT_ARGS+=(--merge-install)
+fi
 colcon build \
+    "${COLCON_LAYOUT_ARGS[@]}" \
     --symlink-install \
     --packages-select tare_planner \
     --cmake-args -DCMAKE_BUILD_TYPE=Release

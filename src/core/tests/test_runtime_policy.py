@@ -18,6 +18,7 @@ def test_slam_profile_aliases_are_canonical():
     assert normalize_slam_profile("superlio-reloc") == "super_lio_relocation"
     assert normalize_slam_profile("relocation") == "super_lio_relocation"
     assert is_supported_slam_profile("super-lio")
+    assert is_supported_slam_profile("none")
     assert is_supported_slam_profile("stop", allow_stop=True)
     assert not is_supported_slam_profile("stop")
 
@@ -100,6 +101,28 @@ def test_session_transition_plans_preserve_existing_mode_behavior():
     super_lio_mapping = session_transition_plan("mapping", "super_lio")
     assert super_lio_mapping.ensure == ("lidar", "super_lio")
     assert super_lio_mapping.clear_live_map is True
+
+
+def test_external_sim_session_plan_none_does_not_start_robot_services():
+    assert slam_switch_plan("none").stop == (
+        "super_lio_relocation",
+        "super_lio",
+        "slam_pgo",
+        "localizer",
+        "slam",
+    )
+
+    exploring = session_transition_plan("exploring", "none")
+    assert exploring.stop == ()
+    assert exploring.ensure == ()
+    assert exploring.wait_ready == ()
+    assert exploring.clear_live_map is True
+
+    navigating = session_transition_plan("navigating", "none")
+    assert navigating.stop == ()
+    assert navigating.ensure == ()
+    assert navigating.wait_ready == ()
+    assert navigating.clear_live_map is False
 
 
 def test_unknown_slam_switch_plan_fails_closed():

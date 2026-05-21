@@ -1,22 +1,23 @@
-"""OccupancyGridModule — real-time 2D occupancy grid + costmap from LiDAR.
+"""OccupancyGridModule: real-time 2D occupancy and cost grids from LiDAR.
 
-Subscribes to SLAMModule.map_cloud (PointCloud2).  Projects 3-D points into a
-robot-centric 2-D grid, marks occupied cells, inflates obstacles with a
-circular kernel, then publishes:
+The module has two operating modes:
 
-  occupancy_grid → ESDFModule  (typed OccupancyGrid msg)
-  costmap        → NavigationModule.costmap  (dict: grid/resolution/origin)
+* Projection mode, the default, preserves the historical behavior: project
+  obstacle-height points into a robot-centric costmap.
+* Raycast mode marks unknown, free, and occupied cells from scan endpoints.
+  This is the mode required by frontier exploration because frontiers only
+  exist at the boundary between known free space and unknown space.
 
 Ports:
   In:  map_cloud (PointCloud2), odometry (Odometry)
-  Out: occupancy_grid (OccupancyGrid), costmap (dict)
+  Out: occupancy_grid (OccupancyGrid), costmap (dict), exploration_grid (dict)
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 
@@ -29,63 +30,76 @@ from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
+UNKNOWN = -1
+FREE = 0
+OCCUPIED = 100
+
 
 @register("map", "occupancy_grid", description="2D occupancy grid from LiDAR point cloud")
 class OccupancyGridModule(Module, layer=2):
-    """Project LiDAR cloud → 2-D occupancy grid + inflated costmap.
-
-    The grid is robot-centric: origin tracks the robot so the robot is always
-    at the centre.  Published at a throttled rate (expensive per-frame rebuild).
-
-    Inflation uses a pre-built circular binary structuring element via
-    scipy.ndimage.binary_dilation (falls back to pure-numpy if scipy absent).
-    """
+    """Project or raycast LiDAR clouds into local 2D planning grids."""
 
     map_cloud: In[PointCloud2]
-    odometry:  In[Odometry]
+    odometry: In[Odometry]
 
-    occupancy_grid: Out[OccupancyGrid]  # typed msg → ESDFModule
-    costmap:        Out[dict]           # dict    → NavigationModule.costmap
+    occupancy_grid: Out[OccupancyGrid]
+    costmap: Out[dict]
+    exploration_grid: Out[dict]
 
     def __init__(
         self,
-        resolution: float = 0.2,         # metres per cell
-        map_radius: float = 30.0,         # half-width of robot-centric grid (m)
-        # z_min 0.10 → 0.30: 10cm 之内包括地板起伏、地毯边、落叶, 经常被
-        # 误判为障碍; 四足狗 ≥ 30cm 的障碍才真的需要避.
-        z_min: float = 0.30,              # ignore points below this height
-        z_max: float = 2.00,              # ignore points above this height
-        # 0.50 → 0.25: 原值对四足 (宽 ~40cm) 太激进, 单个障碍膨胀 50cm
-        # 叠加后撑满整条走廊. 0.25 = 狗半宽 + 5cm 余量, 视觉更贴合.
-        inflation_radius: float = 0.25,   # obstacle inflation radius (m)
-        robot_clear_radius: float = 0.60, # clear self footprint from local costmap
+        resolution: float = 0.2,
+        map_radius: float = 30.0,
+        z_min: float = 0.30,
+        z_max: float = 2.00,
+        inflation_radius: float = 0.25,
+        robot_clear_radius: float = 0.60,
         publish_hz: float = 2.0,
-        **kw,
+        frame_id: str = "map",
+        raycast_free_space: bool = False,
+        unknown_as_obstacle_for_costmap: bool = False,
+        raycast_max_rays: int = 1800,
+        raycast_free_inflation_radius: float = 0.0,
+        **kw: Any,
     ):
         super().__init__(**kw)
-        self._res = resolution
-        self._radius = map_radius
-        self._z_min = z_min
-        self._z_max = z_max
-        self._inf_radius = inflation_radius
-        self._robot_clear_radius = robot_clear_radius
-        self._interval = 1.0 / publish_hz
+        self._res = float(resolution)
+        self._radius = float(map_radius)
+        self._z_min = float(z_min)
+        self._z_max = float(z_max)
+        self._inf_radius = float(inflation_radius)
+        self._robot_clear_radius = float(robot_clear_radius)
+        self._interval = 1.0 / max(float(publish_hz), 1e-6)
+        self._frame_id = str(frame_id or "map")
+        self._raycast_free_space = bool(raycast_free_space)
+        self._unknown_as_obstacle_for_costmap = bool(unknown_as_obstacle_for_costmap)
+        self._raycast_max_rays = max(1, int(raycast_max_rays))
+        self._raycast_free_inflation_radius = max(
+            0.0,
+            float(raycast_free_inflation_radius),
+        )
         self._robot_xy = np.zeros(2, dtype=np.float64)
-        self._gs = int(2 * map_radius / resolution)  # grid side (cells)
-        self._kernel: np.ndarray | None = None    # circular dilation kernel
-        self._robot_clear_radius_sq = robot_clear_radius * robot_clear_radius
+        self._gs = int(2 * self._radius / self._res)
+        self._kernel: np.ndarray | None = None
+        self._free_kernel: np.ndarray | None = None
+        self._robot_clear_radius_sq = self._robot_clear_radius * self._robot_clear_radius
         self._clear_mask_cache_key: tuple[int, int, int, int] | None = None
         self._clear_mask_cache: np.ndarray | None = None
 
     def setup(self) -> None:
         try:
-            import scipy.ndimage
-        except ImportError as e:
+            import scipy.ndimage  # noqa: F401
+        except ImportError as exc:
             raise RuntimeError(
                 "OccupancyGridModule requires scipy for binary_dilation. "
                 "Install with: pip install scipy"
-            ) from e
+            ) from exc
         self._kernel = self._make_circle_kernel(self._inf_radius, self._res)
+        if self._raycast_free_inflation_radius > 0.0:
+            self._free_kernel = self._make_circle_kernel(
+                self._raycast_free_inflation_radius,
+                self._res,
+            )
         self.map_cloud.subscribe(self._on_cloud)
         self.odometry.subscribe(self._on_odom)
         self.map_cloud.set_policy("throttle", interval=self._interval)
@@ -97,25 +111,26 @@ class OccupancyGridModule(Module, layer=2):
     def _on_cloud(self, cloud: PointCloud2) -> None:
         if cloud.is_empty:
             return
-        pts = cloud.points[:, :3]
+        pts = np.asarray(cloud.points[:, :3], dtype=np.float32)
+        valid = np.isfinite(pts).all(axis=1)
+        pts = pts[valid]
+        if pts.shape[0] == 0:
+            return
 
-        # height filter — keep obstacle-height points only
+        if self._raycast_free_space:
+            self._publish_raycast_grid(pts)
+        else:
+            self._publish_projected_grid(pts)
+
+    def _publish_projected_grid(self, pts: np.ndarray) -> None:
         mask = (pts[:, 2] > self._z_min) & (pts[:, 2] < self._z_max)
         pts2d = pts[mask, :2]
         if pts2d.shape[0] == 0:
             return
 
-        origin_xy = self._robot_xy - self._radius   # bottom-left corner
+        origin_xy = self._robot_xy - self._radius
         gs = self._gs
-
-        # LiDAR often sees the robot's own legs/body in sim; filter near-body
-        # returns and clear a local free-space disk around the robot center.
-        dist_sq = pts2d[:, 0] - self._robot_xy[0]
-        dist_sq_y = pts2d[:, 1] - self._robot_xy[1]
-        np.square(dist_sq, out=dist_sq)
-        np.square(dist_sq_y, out=dist_sq_y)
-        dist_sq += dist_sq_y
-        pts2d = pts2d[dist_sq >= self._robot_clear_radius_sq]
+        pts2d = self._filter_robot_footprint(pts2d)
         if pts2d.shape[0] == 0:
             return
 
@@ -123,6 +138,8 @@ class OccupancyGridModule(Module, layer=2):
         iy = np.floor((pts2d[:, 1] - origin_xy[1]) / self._res).astype(np.int32)
         valid = (ix >= 0) & (ix < gs) & (iy >= 0) & (iy < gs)
         ix, iy = ix[valid], iy[valid]
+        if ix.size == 0:
+            return
 
         binary = np.zeros((gs, gs), dtype=np.bool_)
         binary[iy, ix] = True
@@ -130,41 +147,177 @@ class OccupancyGridModule(Module, layer=2):
         binary[clear_mask] = False
 
         inflated = self._inflate(binary)
-        # occupied cells stay at 100; inflated fringe scaled by proximity
         cost = (inflated.astype(np.float32) * 100.0).clip(0, 100)
         cost[binary] = 100.0
         cost[clear_mask] = 0.0
         grid_int8 = cost.astype(np.int8)
+        self._publish_grids(
+            occupancy_grid=grid_int8,
+            nav_cost=cost,
+            origin_xy=origin_xy,
+            source="projected_lidar",
+            counts={
+                "unknown": 0,
+                "free": int((grid_int8 == 0).sum()),
+                "occupied": int((grid_int8 >= OCCUPIED).sum()),
+            },
+        )
 
+    def _publish_raycast_grid(self, pts: np.ndarray) -> None:
+        origin_xy = self._robot_xy - self._radius
+        gs = self._gs
+        robot_col = int(np.floor((self._robot_xy[0] - origin_xy[0]) / self._res))
+        robot_row = int(np.floor((self._robot_xy[1] - origin_xy[1]) / self._res))
+        if not (0 <= robot_row < gs and 0 <= robot_col < gs):
+            return
+
+        grid = np.full((gs, gs), UNKNOWN, dtype=np.int16)
+        clear_mask = self._robot_clear_mask(origin_xy)
+        grid[clear_mask] = FREE
+
+        ray_pts = self._downsample_points(pts, self._raycast_max_rays)
+        cols = np.floor((ray_pts[:, 0] - origin_xy[0]) / self._res).astype(np.int32)
+        rows = np.floor((ray_pts[:, 1] - origin_xy[1]) / self._res).astype(np.int32)
+        in_bounds = (cols >= 0) & (cols < gs) & (rows >= 0) & (rows < gs)
+        for col, row in zip(cols[in_bounds].tolist(), rows[in_bounds].tolist()):
+            cells = self._bresenham(robot_col, robot_row, int(col), int(row))
+            for c, r in cells[:-1]:
+                if 0 <= r < gs and 0 <= c < gs:
+                    grid[r, c] = FREE
+
+        if self._free_kernel is not None:
+            widened_free = self._dilate(grid == FREE, self._free_kernel).astype(bool)
+            grid[(grid == UNKNOWN) & widened_free] = FREE
+
+        occ_mask = (pts[:, 2] > self._z_min) & (pts[:, 2] < self._z_max)
+        occ_pts = pts[occ_mask]
+        if occ_pts.shape[0] > 0:
+            occ_pts = self._filter_robot_footprint(occ_pts[:, :2], z_source=occ_pts)
+        occ_pts = self._downsample_points(occ_pts, self._raycast_max_rays)
+        if occ_pts.shape[0] > 0:
+            occ_cols = np.floor((occ_pts[:, 0] - origin_xy[0]) / self._res).astype(np.int32)
+            occ_rows = np.floor((occ_pts[:, 1] - origin_xy[1]) / self._res).astype(np.int32)
+            occ_in_bounds = (
+                (occ_cols >= 0) & (occ_cols < gs) & (occ_rows >= 0) & (occ_rows < gs)
+            )
+            grid[occ_rows[occ_in_bounds], occ_cols[occ_in_bounds]] = OCCUPIED
+
+        occupied = grid == OCCUPIED
+        if np.any(occupied):
+            inflated = self._inflate(occupied).astype(bool)
+            grid[inflated] = OCCUPIED
+        grid[clear_mask] = FREE
+
+        nav_cost = grid.astype(np.float32)
+        if self._unknown_as_obstacle_for_costmap:
+            nav_cost[nav_cost < 0] = 100.0
+        else:
+            nav_cost[nav_cost < 0] = 0.0
+        nav_cost = nav_cost.clip(0, 100)
+
+        self._publish_grids(
+            occupancy_grid=grid.astype(np.int8),
+            nav_cost=nav_cost,
+            origin_xy=origin_xy,
+            source="raycast_lidar",
+            counts={
+                "unknown": int((grid < 0).sum()),
+                "free": int((grid == FREE).sum()),
+                "occupied": int((grid >= OCCUPIED).sum()),
+            },
+            raycast=True,
+        )
+
+    def _publish_grids(
+        self,
+        *,
+        occupancy_grid: np.ndarray,
+        nav_cost: np.ndarray,
+        origin_xy: np.ndarray,
+        source: str,
+        counts: dict[str, int],
+        raycast: bool = False,
+    ) -> None:
         origin_pose = Pose(
             position=Vector3(float(origin_xy[0]), float(origin_xy[1]), 0.0),
             orientation=Quaternion(0, 0, 0, 1),
         )
+        now = time.time()
         og = OccupancyGrid(
-            grid=grid_int8,
+            grid=occupancy_grid,
             resolution=self._res,
             origin=origin_pose,
-            ts=time.time(),
-            frame_id="map",
+            ts=now,
+            frame_id=self._frame_id,
         )
-        self.occupancy_grid.publish(og)
-        self.costmap.publish({
-            "grid":       cost,               # float32 0-100
+        common = {
             "resolution": self._res,
-            "origin":     origin_xy.tolist(),
-            "ts":         og.ts,
-            "frame_id":   og.frame_id,
-        })
+            "origin": origin_xy.tolist(),
+            "origin_x": float(origin_xy[0]),
+            "origin_y": float(origin_xy[1]),
+            "height": int(occupancy_grid.shape[0]),
+            "width": int(occupancy_grid.shape[1]),
+            "ts": now,
+            "frame_id": self._frame_id,
+            "raycast": bool(raycast),
+            "counts": counts,
+            "accumulation": "rolling_local_window",
+            "semantic": "local_planning_grid",
+        }
+        self.occupancy_grid.publish(og)
+        self.costmap.publish(
+            {
+                **common,
+                "grid": nav_cost,
+                "source": f"{source}_navigation_costmap",
+                "unknown_as_obstacle": self._unknown_as_obstacle_for_costmap,
+            }
+        )
+        self.exploration_grid.publish(
+            {
+                **common,
+                "grid": occupancy_grid.astype(np.int16),
+                "source": f"{source}_exploration_grid",
+                "semantic": "frontier_input_grid",
+            }
+        )
+
+    def _filter_robot_footprint(
+        self,
+        pts2d: np.ndarray,
+        *,
+        z_source: np.ndarray | None = None,
+    ) -> np.ndarray:
+        dx = pts2d[:, 0] - self._robot_xy[0]
+        dy = pts2d[:, 1] - self._robot_xy[1]
+        far = (dx * dx + dy * dy) >= self._robot_clear_radius_sq
+        if z_source is not None:
+            return z_source[far]
+        return pts2d[far]
+
+    @staticmethod
+    def _downsample_points(points: np.ndarray, max_points: int) -> np.ndarray:
+        if points.shape[0] <= max_points:
+            return points
+        step = max(1, int(np.ceil(points.shape[0] / max_points)))
+        return points[::step]
 
     def _inflate(self, binary: np.ndarray) -> np.ndarray:
-        """Binary dilation with pre-built circular kernel."""
+        """Binary dilation with a pre-built circular kernel."""
+        return self._dilate(binary, self._kernel)
+
+    @staticmethod
+    def _dilate(binary: np.ndarray, kernel: np.ndarray | None) -> np.ndarray:
+        if kernel is None:
+            return binary.astype(np.float32)
         try:
             from scipy.ndimage import binary_dilation
-            return binary_dilation(binary, structure=self._kernel).astype(np.float32)
+
+            return binary_dilation(binary, structure=kernel).astype(np.float32)
         except ImportError:
-            # pure-numpy fallback: sliding-window max (slower, same result)
             from numpy.lib.stride_tricks import sliding_window_view
-            k = int(self._kernel.shape[0])
+
+            k = int(kernel.shape[0])
             pad = k // 2
             padded = np.pad(binary.astype(np.float32), pad, mode="constant")
             windows = sliding_window_view(padded, (k, k))
@@ -180,24 +333,49 @@ class OccupancyGridModule(Module, layer=2):
             return self._clear_mask_cache
 
         yy, xx = np.ogrid[:gs, :gs]
-        self._clear_mask_cache = (xx - rx) ** 2 + (yy - ry) ** 2 <= r ** 2
+        self._clear_mask_cache = (xx - rx) ** 2 + (yy - ry) ** 2 <= r**2
         self._clear_mask_cache_key = key
         return self._clear_mask_cache
 
     @staticmethod
     def _make_circle_kernel(radius_m: float, res: float) -> np.ndarray:
         r = max(1, int(np.ceil(radius_m / res)))
-        y, x = np.ogrid[-r: r + 1, -r: r + 1]
-        return (x ** 2 + y ** 2) <= r ** 2
+        y, x = np.ogrid[-r : r + 1, -r : r + 1]
+        return (x**2 + y**2) <= r**2
+
+    @staticmethod
+    def _bresenham(x0: int, y0: int, x1: int, y1: int) -> list[tuple[int, int]]:
+        cells: list[tuple[int, int]] = []
+        dx = abs(x1 - x0)
+        dy = -abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx + dy
+        x, y = x0, y0
+        while True:
+            cells.append((x, y))
+            if x == x1 and y == y1:
+                break
+            e2 = 2 * err
+            if e2 >= dy:
+                err += dy
+                x += sx
+            if e2 <= dx:
+                err += dx
+                y += sy
+        return cells
 
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["occupancy_grid"] = {
-            "resolution":    self._res,
-            "map_radius":    self._radius,
-            "grid_size":     self._gs,
-            "z_range":       [self._z_min, self._z_max],
-            "inflation_m":   self._inf_radius,
+            "resolution": self._res,
+            "map_radius": self._radius,
+            "grid_size": self._gs,
+            "z_range": [self._z_min, self._z_max],
+            "inflation_m": self._inf_radius,
             "robot_clear_m": self._robot_clear_radius,
+            "frame_id": self._frame_id,
+            "raycast_free_space": self._raycast_free_space,
+            "unknown_as_obstacle_for_costmap": self._unknown_as_obstacle_for_costmap,
         }
         return info

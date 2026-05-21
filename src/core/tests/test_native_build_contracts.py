@@ -37,6 +37,15 @@ def test_disabled_bbs3d_stub_never_advertises_map_available():
     assert "has_map_ = bool(map_cloud && !map_cloud->empty())" not in disabled_branch
 
 
+def test_localizer_can_enable_bbs3d_from_local_prefix():
+    cmake = _read_repo_file("src/slam/localizer/CMakeLists.txt")
+
+    assert "CPU_BBS3D_ROOT" in cmake
+    assert "$ENV{CPU_BBS3D_ROOT}" in cmake
+    assert "PATH_SUFFIXES lib lib64" in cmake
+    assert "PATH_SUFFIXES include" in cmake
+
+
 def test_ros_workspace_builder_covers_native_server_dependencies():
     script = _read_repo_file("scripts/build/build_ros_workspace.sh")
 
@@ -69,3 +78,32 @@ def test_nav_core_exports_openmp_for_downstream_ament_consumers():
 
     assert "target_link_libraries(${PROJECT_NAME} INTERFACE OpenMP::OpenMP_CXX)" in cmake
     assert "ament_export_dependencies(OpenMP)" in cmake
+
+
+def test_nav_core_standalone_tests_do_not_require_python_headers():
+    cmake = _read_repo_file("src/nav/core/CMakeLists.txt")
+
+    assert 'option(NAV_CORE_BUILD_PYTHON_BINDINGS "Build nav_core Python bindings" OFF)' in cmake
+    assert 'EXISTS "${Python3_INCLUDE_DIRS}/Python.h"' in cmake
+    assert "Skipping nav_core Python bindings because Python development headers were not found" in cmake
+
+
+def test_nav_core_build_script_is_ascii_for_server_terminals():
+    script = _read_repo_file("scripts/build_nav_core.sh")
+
+    assert script.isascii()
+
+
+def test_nav_core_cmake_comments_are_ascii_to_avoid_mojibake():
+    cmake = _read_repo_file("src/nav/core/CMakeLists.txt")
+
+    for line in cmake.splitlines():
+        if line.lstrip().startswith("#"):
+            assert line.isascii(), line
+
+
+def test_nav_core_does_not_enable_fast_math_globally():
+    cmake = _read_repo_file("src/nav/core/CMakeLists.txt")
+
+    assert "-ffast-math" not in cmake
+    assert "validation must preserve NaN/Inf checks" in cmake

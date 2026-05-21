@@ -40,6 +40,8 @@ from std_msgs.msg import Int8, String
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 from visualization_msgs.msg import Marker
 
+from core.runtime_interface import FRAMES, TOPICS
+
 # ── 默认参数 (被环境变量覆盖) ──────────────────────────────────────────────────
 _DEF_START_X   = float(os.environ.get('SIM_START_X',   '-5.5'))
 _DEF_START_Y   = float(os.environ.get('SIM_START_Y',    '7.3'))
@@ -190,7 +192,7 @@ def _flat_cloud(cx: float, cy: float, cz: float = 0.0, stamp=None) -> PointCloud
     arr = np.array(pts, dtype=np.float32)
 
     msg = PointCloud2()
-    msg.header.frame_id = 'odom'
+    msg.header.frame_id = FRAMES.odom
     if stamp is not None:
         msg.header.stamp = stamp
     msg.height = 1
@@ -244,17 +246,17 @@ class SimRobotNode(Node):
         self._pub_static_tf()
 
         # ── Publishers ──
-        self.pub_odom    = self.create_publisher(Odometry,    '/nav/odometry',       10)
-        self.pub_cloud   = self.create_publisher(PointCloud2, '/nav/map_cloud',       10)
-        self.pub_terrain = self.create_publisher(PointCloud2, '/nav/terrain_map',     10)
-        self.pub_te      = self.create_publisher(PointCloud2, '/nav/terrain_map_ext', 10)
-        self.pub_goal    = self.create_publisher(PoseStamped, '/nav/goal_pose',       10)
-        self.pub_stop    = self.create_publisher(Int8,        '/nav/stop',            10)
+        self.pub_odom    = self.create_publisher(Odometry,    TOPICS.odometry,        10)
+        self.pub_cloud   = self.create_publisher(PointCloud2, TOPICS.map_cloud,       10)
+        self.pub_terrain = self.create_publisher(PointCloud2, TOPICS.terrain_map,     10)
+        self.pub_te      = self.create_publisher(PointCloud2, TOPICS.terrain_map_ext, 10)
+        self.pub_goal    = self.create_publisher(PoseStamped, TOPICS.goal_pose,       10)
+        self.pub_stop    = self.create_publisher(Int8,        TOPICS.stop,            10)
 
         # robot_state_publisher 需要 /joint_states (轮子关节)
         self.pub_joints = self.create_publisher(JointState, '/joint_states', 10)
         # 机器人位置大球标记 (黄色, Z=0.5m, 直径0.6m, 在建筑点云上方清晰可见)
-        self.pub_marker = self.create_publisher(Marker, '/nav/robot_marker', 10)
+        self.pub_marker = self.create_publisher(Marker, TOPICS.robot_marker, 10)
 
         # /robot_description latched (TRANSIENT_LOCAL): RViz/Foxglove 随时可读取 URDF
         latched = QoSProfile(
@@ -264,7 +266,7 @@ class SimRobotNode(Node):
         self.pub_desc  = self.create_publisher(String,       '/robot_description',  latched)
         # /nav/building_cloud: 真实建筑 3D 点云 (非 latched, 每 3s 重发确保 RViz 始终可见)
         # 注: latched 的时间戳会过期导致 RViz2 message filter 丢弃, 改为定时重发
-        self.pub_bldg  = self.create_publisher(PointCloud2,  '/nav/building_cloud', 10)
+        self.pub_bldg  = self.create_publisher(PointCloud2,  TOPICS.building_cloud, 10)
         self._bldg_last_pub  = 0.0   # 上次建筑点云发布的 wall-clock 时间
         self._publish_robot_description()
         self._publish_building_cloud()
@@ -272,19 +274,19 @@ class SimRobotNode(Node):
         # ── Subscribers ──
         # pathFollower 以 BEST_EFFORT 50 Hz 发布 cmd_vel
         be = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=10)
-        self.create_subscription(TwistStamped, '/nav/cmd_vel',        self._on_cmd,           be)
+        self.create_subscription(TwistStamped, TOPICS.cmd_vel,        self._on_cmd,           be)
         # 航点跟踪事件 (JSON)
-        self.create_subscription(String,       '/nav/adapter_status', self._on_adapter,        10)
+        self.create_subscription(String,       TOPICS.adapter_status, self._on_adapter,        10)
         # 全局规划器状态 (pathFollower 发布 GOAL_REACHED/STUCK 等)
-        self.create_subscription(String,       '/nav/planner_status', self._on_planner,        10)
+        self.create_subscription(String,       TOPICS.planner_status, self._on_planner,        10)
         # 手动目标 — PoseStamped (RViz2 "2D Nav Goal" → /nav/goal_pose)
-        self.create_subscription(PoseStamped,  '/nav/goal_pose',      self._on_goal_pose,      10)
+        self.create_subscription(PoseStamped,  TOPICS.goal_pose,      self._on_goal_pose,      10)
         # 手动目标 — PointStamped (RViz2 "Publish Point" → /clicked_point, 支持真 XYZ)
         self.create_subscription(PointStamped, '/clicked_point',      self._on_clicked_point,  10)
         # PCT 规划器输出 (含 3D Z 坐标, TRANSIENT_LOCAL latched)
         _latch_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                                 durability=DurabilityPolicy.TRANSIENT_LOCAL, depth=1)
-        self.create_subscription(Path, '/nav/global_path', self._on_global_path, _latch_qos)
+        self.create_subscription(Path, TOPICS.global_path, self._on_global_path, _latch_qos)
 
         # ── 20 Hz 主循环 ──
         self.create_timer(DT, self._tick)
@@ -331,7 +333,7 @@ class SimRobotNode(Node):
             return
 
         # 使用当前时钟时间戳 — RViz2 message filter 需要能在 TF cache 中查到该时刻
-        msg = _make_xyzi_cloud(self._bldg_pts_cache, frame_id='map',
+        msg = _make_xyzi_cloud(self._bldg_pts_cache, frame_id=FRAMES.map,
                                stamp=self.get_clock().now().to_msg())
         self.pub_bldg.publish(msg)
         self._bldg_last_pub = time.time()
@@ -344,16 +346,16 @@ class SimRobotNode(Node):
         # map → odom (仿真中无 SLAM 漂移, 恒等变换)
         t1 = TransformStamped()
         t1.header.stamp    = self.get_clock().now().to_msg()
-        t1.header.frame_id = 'map'
-        t1.child_frame_id  = 'odom'
+        t1.header.frame_id = FRAMES.map
+        t1.child_frame_id  = FRAMES.odom
         t1.transform.rotation.w = 1.0
         tfs.append(t1)
 
         # body → base_link (恒等变换, 让 robot_state_publisher 的 URDF TF 链接到导航坐标系)
         t2 = TransformStamped()
         t2.header.stamp    = t1.header.stamp
-        t2.header.frame_id = 'body'
-        t2.child_frame_id  = 'base_link'
+        t2.header.frame_id = FRAMES.body
+        t2.child_frame_id  = FRAMES.model_base
         t2.transform.rotation.w = 1.0
         tfs.append(t2)
 
@@ -363,8 +365,8 @@ class SimRobotNode(Node):
         """发布 odom → body TF + /nav/odometry。"""
         tf = TransformStamped()
         tf.header.stamp    = now
-        tf.header.frame_id = 'odom'
-        tf.child_frame_id  = 'body'
+        tf.header.frame_id = FRAMES.odom
+        tf.child_frame_id  = FRAMES.body
         tf.transform.translation.x = self.x
         tf.transform.translation.y = self.y
         tf.transform.translation.z = self.z
@@ -374,8 +376,8 @@ class SimRobotNode(Node):
 
         od = Odometry()
         od.header.stamp    = now
-        od.header.frame_id = 'odom'
-        od.child_frame_id  = 'body'
+        od.header.frame_id = FRAMES.odom
+        od.child_frame_id  = FRAMES.body
         od.pose.pose.position.x    = self.x
         od.pose.pose.position.y    = self.y
         od.pose.pose.position.z    = self.z
@@ -392,7 +394,7 @@ class SimRobotNode(Node):
     def _pub_robot_marker(self, now):
         """发布黄色大球 Marker 标记机器人实时位置 (建筑点云上方清晰可见)。"""
         m = Marker()
-        m.header.frame_id = 'odom'
+        m.header.frame_id = FRAMES.odom
         m.header.stamp    = now
         m.ns              = 'robot'
         m.id              = 0
@@ -408,7 +410,7 @@ class SimRobotNode(Node):
 
         # 朝向箭头 (蓝色, 从球心延伸 1m)
         arr = Marker()
-        arr.header.frame_id = 'odom'
+        arr.header.frame_id = FRAMES.odom
         arr.header.stamp    = now
         arr.ns              = 'robot_dir'
         arr.id              = 1

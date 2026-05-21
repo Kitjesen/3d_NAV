@@ -10,6 +10,11 @@ the touched subsystem.
 
 Current P0 readiness evidence and remaining product-claim blockers are tracked
 in [`P0_READINESS_AUDIT.md`](P0_READINESS_AUDIT.md).
+The strict navigation algorithm claim boundary is defined in
+[`ALGORITHM_VALIDATION_FLOW.md`](ALGORITHM_VALIDATION_FLOW.md).
+Simulation boundaries are defined in
+[`../architecture/SIMULATION_INTEGRATION_CONTRACT.md`](../architecture/SIMULATION_INTEGRATION_CONTRACT.md):
+LingTu absorbs simulator topic contracts, not simulator product profiles.
 
 | Layer | Trigger | Content | Time | Required |
 |---|---|---|---|---|
@@ -49,6 +54,13 @@ tracking, exploration, or Gateway command safety works beyond unit tests. It is
 hardware-free evidence only: it must report `simulation_only=true`,
 `real_robot_motion=false`, and `cmd_vel_sent_to_hardware=false`.
 
+The current strict live Fast-LIO simulation input default is
+`scan_time_profile=physical_rolling`, which accumulates actual MuJoCo subscans
+over the MID-360 scan window instead of applying offsets to a single snapshot.
+Physical-rolling fixed motion and one-goal inspection evidence is green, but a
+full algorithm claim still requires refreshed large-loop closure and dynamic
+obstacle speed/density video gates under the same profile.
+
 Full closure summary:
 
 ```bash
@@ -65,7 +77,7 @@ enforces `--max-report-age-s`, defaulting to 21600 seconds; override with
 `LINGTU_L25_MAX_REPORT_AGE_S` only when the review explicitly accepts older
 simulation evidence.
 
-The current full gate set covers:
+The full gate set is designed to cover:
 
 - multi-floor exploration, LiDAR localization contract, native PCT, local planning, and nav_core tracking;
 - large-terrain global planning and path-safety checks;
@@ -76,6 +88,7 @@ The current full gate set covers:
 - Gateway dry-run command safety;
 - routecheck preflight without publishing goal, cmd_vel, or stop;
 - ROS-native Gazebo frame/topic smoke;
+- isolated CMU Humble Unity/TARE benchmark preflight plus LingTu adapter contract;
 - saved-map relocalization contract.
 
 Server bootstrap verification uses the setup-safe subset it produces itself:

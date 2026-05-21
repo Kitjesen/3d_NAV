@@ -46,6 +46,7 @@ def add_autonomy_stack(
     bp: Blueprint,
     backend: str = "cmu",
     path_follower_backend: str = "pure_pursuit",
+    local_planner_config: dict[str, Any] | None = None,
     **kw,
 ) -> Blueprint:
     """Add the full autonomy stack (terrain + local_planner + path_follower) to a Blueprint.
@@ -59,6 +60,6 @@ def add_autonomy_stack(
         The same Blueprint (for chaining).
     """
     bp.add(TerrainModule, backend=backend)
-    bp.add(LocalPlannerModule, backend=backend)
+    bp.add(LocalPlannerModule, backend=backend, **(local_planner_config or {}))
     bp.add(PathFollowerModule, backend=path_follower_backend, **kw)
     return bp

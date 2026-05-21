@@ -34,13 +34,22 @@ include_directories(
   ${PCL_INCLUDE_DIRS}
 )
 
+set(CPU_BBS3D_ROOT "" CACHE PATH "Optional local install prefix for cpu_bbs3d")
+if(NOT CPU_BBS3D_ROOT AND DEFINED ENV{CPU_BBS3D_ROOT})
+  set(CPU_BBS3D_ROOT "$ENV{CPU_BBS3D_ROOT}")
+endif()
+
 find_library(CPU_BBS3D_LIBRARY
   NAMES cpu_bbs3d libcpu_bbs3d.so
-  PATHS /usr/local/lib
+  HINTS ${CPU_BBS3D_ROOT}
+  PATH_SUFFIXES lib lib64
+  PATHS /usr/local
 )
 find_path(CPU_BBS3D_INCLUDE_DIR
   NAMES cpu_bbs3d/bbs3d.hpp
-  PATHS /usr/local/include /usr/local/include/bbs3d
+  HINTS ${CPU_BBS3D_ROOT}
+  PATH_SUFFIXES include
+  PATHS /usr/local /usr/local/include /usr/local/include/bbs3d
 )
 
 if(CPU_BBS3D_LIBRARY AND CPU_BBS3D_INCLUDE_DIR)

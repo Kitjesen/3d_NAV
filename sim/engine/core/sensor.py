@@ -2,6 +2,11 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
+from core.runtime_interface import LIDAR_EXTRINSICS
+
+
+_MUJOCO_LIDAR = LIDAR_EXTRINSICS["mujoco_thunder_v3"]
+
 
 @dataclass
 class CameraConfig:
@@ -45,7 +50,7 @@ class LidarConfig:
     Reference: sim/sensors/livox_mid360.py parameter definitions.
     """
 
-    body_name: str = "lidar_link"      # MuJoCo mounting body name
+    body_name: str = _MUJOCO_LIDAR.child  # MuJoCo mounting body name
     sensor_name: str = "lidar_mid360"  # ray_caster plugin sensor name (method A)
 
     # Scan parameters (method B fallback)

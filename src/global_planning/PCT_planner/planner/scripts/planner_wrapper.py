@@ -216,10 +216,10 @@ class TomogramPlanner(object):
         opt_init = np.concatenate([opt_init.transpose(1, 0), init_layer.reshape(-1, 1)], axis=-1)
         traj = np.concatenate([traj_raw, layers.reshape(-1, 1)], axis=-1)
         y_idx = (traj.shape[-1] - 1) // 2
-        traj_3d = np.stack([traj[:, 0], traj[:, y_idx], heights / self.resolution], axis=1)
-        print(f"[planner_wrapper] traj_grid first={traj_3d[0]}, last={traj_3d[-1]}, "
+        traj_grid_xy = np.stack([traj[:, 0], traj[:, y_idx]], axis=1)
+        print(f"[planner_wrapper] traj_grid_xy first={traj_grid_xy[0]}, last={traj_grid_xy[-1]}, "
               f"y_idx={y_idx}, traj_shape={traj.shape}", flush=True)
-        traj_3d = transTrajGrid2Map(self.map_dim, self.center, self.resolution, traj_3d)
+        traj_3d = self._optimized_traj_to_world(traj_grid_xy, heights)
         print(f"[planner_wrapper] traj_world first={traj_3d[0]}, last={traj_3d[-1]}", flush=True)
 
         blocked = self._hard_obstacle_sample_count(traj_3d)
@@ -240,6 +240,20 @@ class TomogramPlanner(object):
             )
 
         return traj_3d
+
+    def _optimized_traj_to_world(self, xy_grid, heights):
+        """Convert optimizer XY grid coordinates while preserving true Z heights."""
+        xy_grid = np.asarray(xy_grid, dtype=np.float64)
+        heights = np.asarray(heights, dtype=np.float64).reshape(-1)
+        if xy_grid.ndim != 2 or xy_grid.shape[1] < 2 or xy_grid.shape[0] != heights.shape[0]:
+            raise ValueError(
+                f"invalid optimized trajectory shapes: xy={xy_grid.shape}, heights={heights.shape}"
+            )
+        world = np.empty((xy_grid.shape[0], 3), dtype=np.float64)
+        world[:, 0] = (xy_grid[:, 0] - self.map_dim[0] // 2) * self.resolution + self.center[0]
+        world[:, 1] = (xy_grid[:, 1] - self.map_dim[1] // 2) * self.resolution + self.center[1]
+        world[:, 2] = heights
+        return world
 
     def _raw_path_to_world(self, path):
         arr = np.asarray(path, dtype=np.float64)

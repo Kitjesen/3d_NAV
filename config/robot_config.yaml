@@ -53,31 +53,31 @@ driver:
   auto_enable: false
   auto_standup: false
   reconnect_interval: 3.0     # 秒
-  slam_reset_interval: 5.0    # SLAM 位置重置间隔 (秒)，防止航位推算漂移
+  slam_reset_interval: 5.0    # SLAM pose reset interval in seconds.
 
-# ── LiDAR 传感器 ──
+# LiDAR sensor
 lidar:
   frame_id: "livox_frame"
   publish_freq: 10.0          # Hz
-  # LiDAR 安装外参 (body → lidar TF, 单位 m / rad)
-  # 用于 static_transform_publisher 和 C++ 坐标变换
+  # LiDAR mounting extrinsics (body->lidar TF, metres/radians).
+  # Used by static_transform_publisher and C++ coordinate transforms.
   offset_x:  -0.011
   offset_y:  -0.02329
   offset_z:   0.04412
   roll:       0.0
   pitch:      0.0
   yaw:        0.0
-  # 相机相对于 LiDAR 的 Z 偏移 (for visualization TF)
+  # Camera Z offset relative to LiDAR for visualization TF.
   camera_offset_z: 0.0
 
-# ── 相机传感器 ──
-# 出厂标定值 — 客户无需修改
+# Camera sensor
+# Factory calibration defaults. Customers normally do not edit these.
 camera:
-  # 相机安装外参 (body → camera 静态变换)
-  # position: 相机在机体坐标系下的位置 (m)
-  position_x:  0.15          # 前方 15cm (机头方向)
-  position_y:  0.00          # 中线
-  position_z:  0.45          # 离地 45cm
+  # Camera mounting extrinsics (body->camera static transform).
+  # position: camera position in body frame (m)
+  position_x:  0.15          # 15 cm forward
+  position_y:  0.00          # centerline
+  position_z:  0.45          # 45 cm above ground
   # rotation: 相机光轴相对于机体前向的旋转 (rad)
   # 默认: 相机朝前安装, 光学坐标 Z 轴 = 机体 X 轴(前)
   roll:         0.0

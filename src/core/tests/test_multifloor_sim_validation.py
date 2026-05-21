@@ -10,6 +10,7 @@ from sim.engine.scenarios.multifloor_assets import build_multifloor_assets
 from sim.scripts.multifloor_nav_validation import (
     ROUTE_CASES,
     _native_pct_gate,
+    _frontier_probe_costmap,
     _nav_path_from_points,
     _odom_at_path_start,
     _path_initial_yaw,
@@ -113,6 +114,15 @@ def test_frontier_navigation_closed_loop_probe_reveals_map_and_replays_tracking(
         assert item["map_update"]["known_cells_delta"] > 0
         assert item["map_update"]["known_cells_after"] > known_after
         known_after = item["map_update"]["known_cells_after"]
+
+
+def test_frontier_probe_costmap_starts_on_known_free_space():
+    costmap = _frontier_probe_costmap()
+    grid = costmap["grid"]
+    x_idx = int(round((ROUTE_CASES["same_floor"].start[0] - costmap["origin_x"]) / costmap["resolution"]))
+    y_idx = int(round((ROUTE_CASES["same_floor"].start[1] - costmap["origin_y"]) / costmap["resolution"]))
+
+    assert grid[y_idx, x_idx] == 0
 
 
 def test_command_flow_replay_faces_the_first_path_segment():

@@ -1,12 +1,12 @@
-"""PathFollowerModule — path tracking as a pluggable Module.
+"""PathFollowerModule - path tracking as a pluggable Module.
 
 Takes local path + odometry, produces cmd_vel to follow the path.
 
 Backends:
-  "nav_core"     — C++ compute_control via nanobind (Pure Pursuit, adaptive lookahead,
+  "nav_core"     - C++ compute_control via nanobind (Pure Pursuit, adaptive lookahead,
                    two-way drive, omni-dir near-goal, acceleration limiting) [DEFAULT]
-  "pure_pursuit" — C++ path_follower (NativeModule, Pure Pursuit)
-  "pid"          — Python PID controller (testing/simple fallback)
+  "pure_pursuit" - C++ path_follower (NativeModule, Pure Pursuit)
+  "pid"          - Python PID controller (testing/simple fallback)
 
 Usage::
 
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 @register("path_follower", "nav_core",
           description="C++ compute_control via nanobind (Pure Pursuit + adaptive lookahead)")
 class PathFollowerModule(Module, layer=2):
-    """Path following — tracks local path and outputs cmd_vel.
+    """Path following - tracks local path and outputs cmd_vel.
 
     "nav_core"     backend: C++ compute_control via nanobind [default]
     "pure_pursuit" backend: C++ path_follower NativeModule
@@ -56,7 +56,10 @@ class PathFollowerModule(Module, layer=2):
                  max_speed: float = 0.4, lookahead: float = 1.5,
                  goal_tolerance: float = 0.2,
                  min_speed: float = 0.15,
-                 max_yaw_rate: float | None = None, **kw):
+                 max_yaw_rate: float | None = None,
+                 turn_speed_yaw_rate_start: float = 0.0,
+                 turn_speed_min_scale: float = 1.0,
+                 **kw):
         super().__init__(**kw)
         self._backend = backend
         self._max_speed = max_speed
@@ -64,6 +67,9 @@ class PathFollowerModule(Module, layer=2):
         self._goal_tolerance = goal_tolerance
         self._min_speed = min_speed
         self._max_yaw_rate = max_yaw_rate
+        self._turn_speed_yaw_rate_start = max(0.0, float(turn_speed_yaw_rate_start or 0.0))
+        self._turn_speed_min_scale = max(0.0, min(1.0, float(turn_speed_min_scale)))
+        self._two_way_drive = bool(kw.get("two_way_drive", True))
         self._node = None
 
         # Current robot pose (odom frame)
@@ -91,6 +97,7 @@ class PathFollowerModule(Module, layer=2):
         self._cos_yaw_rec = 1.0
         self._sin_yaw_rec = 0.0
         self._odom_frame_id = "map"
+        self._last_odom_ts = 0.0
         self._control_hint_timeout = float(kw.get("control_hint_timeout", 0.75))
         self._control_hint_ts = 0.0
         self._control_slow_down = 0
@@ -110,17 +117,17 @@ class PathFollowerModule(Module, layer=2):
         else:
             self._setup_pid()
 
-    # ── pid backend setup (W2-4 adaptive Pure Pursuit) ────────────────────
+    # -- pid backend setup (W2-4 adaptive Pure Pursuit) --
 
     def _setup_pid(self) -> None:
         """W2-4: configure adaptive Pure Pursuit for the pid fallback backend.
 
         Parameters (config-overridable via robot_config.yaml path_follower):
-          k_v   — variable-lookahead slope (m per m/s of speed)
-          L_min — minimum lookahead distance (m)
-          L_max — maximum lookahead distance (m)
-          a_max — max acceleration for v_cmd ramp (m/s^2)
-          v_max — clamp ceiling for v_cmd (m/s), defaults to self._max_speed
+          k_v   - variable-lookahead slope (m per m/s of speed)
+          L_min - minimum lookahead distance (m)
+          L_max - maximum lookahead distance (m)
+          a_max - max acceleration for v_cmd ramp (m/s^2)
+          v_max - clamp ceiling for v_cmd (m/s), defaults to self._max_speed
         """
         self._pp_k_v: float = 0.5
         self._pp_l_min: float = 0.5
@@ -147,20 +154,20 @@ class PathFollowerModule(Module, layer=2):
         except (ImportError, AttributeError, KeyError):
             logger.info(
                 "PathFollowerModule [pid]: using default adaptive PP params "
-                "(k_v=0.5, L=[0.5,2.0], a_max=1.0) — override via robot_config.yaml"
+                "(k_v=0.5, L=[0.5,2.0], a_max=1.0) - override via robot_config.yaml"
             )
 
         # Previous-tick velocity for acceleration ramp
         self._pp_v_prev: float = 0.0
 
-    # ── nav_core backend setup ─────────────────────────────────────────────
+    # -- nav_core backend setup --
 
     def _setup_nav_core(self):
         """Import _nav_core and create PathFollowerParams/State."""
         _nav_core = try_import_nav_core(("PathFollowerParams", "PathFollowerState", "compute_control"))
         if _nav_core is None:
             logger.info(
-                "PathFollowerModule: _nav_core.so not found — using pid backend.\n"
+                "PathFollowerModule: _nav_core.so not found - using pid backend.\n"
                 "  To enable C++ path follower:\n  %s", nav_core_build_hint()
             )
             self._backend = "pid"
@@ -188,12 +195,16 @@ class PathFollowerModule(Module, layer=2):
                 else 45.0
             )
             params.max_accel = 1.0
+            if hasattr(params, "turn_speed_yaw_rate_start"):
+                params.turn_speed_yaw_rate_start = self._turn_speed_yaw_rate_start
+            if hasattr(params, "turn_speed_min_scale"):
+                params.turn_speed_min_scale = self._turn_speed_min_scale
             params.switch_time_thre = 1.0
             params.dir_diff_thre = 0.1
             params.omni_dir_goal_thre = 1.0
             params.omni_dir_diff_thre = 1.5
             params.slow_dwn_dis_thre = 1.0
-            params.two_way_drive = True
+            params.two_way_drive = self._two_way_drive
             params.no_rot_at_goal = True
 
             self._nc_params = params
@@ -201,11 +212,11 @@ class PathFollowerModule(Module, layer=2):
 
             logger.info("PathFollowerModule [nav_core]: C++ compute_control loaded")
         except Exception as e:
-            logger.warning("PathFollowerModule: _nav_core error: %s — using pid backend", e)
+            logger.warning("PathFollowerModule: _nav_core error: %s - using pid backend", e)
             self._backend = "pid"
             self._nc = None
 
-    # ── NativeModule (pure_pursuit) backend setup ──────────────────────────
+    # -- NativeModule (pure_pursuit) backend setup --
 
     def _setup_native(self):
         try:
@@ -222,7 +233,7 @@ class PathFollowerModule(Module, layer=2):
         except ImportError as e:
             logger.warning("PathFollowerModule: C++ backend not available: %s", e)
 
-    # ── Module lifecycle ───────────────────────────────────────────────────
+    # -- Module lifecycle --
 
     def start(self):
         super().start()
@@ -244,7 +255,7 @@ class PathFollowerModule(Module, layer=2):
         self.alive.publish(False)
         super().stop()
 
-    # ── Callbacks ─────────────────────────────────────────────────────────
+    # -- Callbacks --
 
     def _reset_nav_core_state(self) -> None:
         if self._backend != "nav_core" or self._nc is None:
@@ -291,9 +302,10 @@ class PathFollowerModule(Module, layer=2):
         except (TypeError, ValueError):
             slow_down = 0
         self._control_slow_down = max(0, min(3, slow_down))
-        self._control_safety_stop = bool(
-            hint.get("safety_stop") or hint.get("near_field_stop")
-        )
+        if "safety_stop" in hint:
+            self._control_safety_stop = bool(hint.get("safety_stop"))
+        else:
+            self._control_safety_stop = bool(hint.get("near_field_stop"))
         self._control_hint_reason = str(hint.get("reason") or "")
         self._control_hint_ts = float(hint.get("ts") or time.time())
         if self._control_safety_stop:
@@ -315,6 +327,20 @@ class PathFollowerModule(Module, layer=2):
         }
         return slow_factor_by_level.get(self._control_slow_down, 1.0), self._control_safety_stop
 
+    def _turn_speed_scale(self, yaw_rate_abs: float, yaw_limit: float) -> float:
+        if (
+            self._turn_speed_yaw_rate_start <= 0.0
+            or self._turn_speed_min_scale >= 1.0
+            or yaw_limit <= self._turn_speed_yaw_rate_start
+        ):
+            return 1.0
+        ratio = (
+            (max(0.0, float(yaw_rate_abs)) - self._turn_speed_yaw_rate_start)
+            / (yaw_limit - self._turn_speed_yaw_rate_start)
+        )
+        ratio = max(0.0, min(1.0, ratio))
+        return 1.0 - (1.0 - self._turn_speed_min_scale) * ratio
+
     def _on_map_frame_jump(self, event: dict) -> None:
         if isinstance(event, dict):
             self._reset_path_tracking(reset_nav_core_state=True)
@@ -325,6 +351,7 @@ class PathFollowerModule(Module, layer=2):
         self._robot_y = odom.pose.position.y
         if getattr(odom, "frame_id", None):
             self._odom_frame_id = str(odom.frame_id)
+        self._last_odom_ts = float(getattr(odom, "ts", 0.0) or time.time())
 
         # Extract yaw from quaternion (reliable, works at all speeds)
         self._robot_yaw = odom.yaw
@@ -332,7 +359,7 @@ class PathFollowerModule(Module, layer=2):
         if self._backend == "nav_core" and self._nc_path:
             self._nav_core_step(odom.ts)
         elif self._backend == "pid" and self._path_points is not None:
-            # Guard against synchronous cmd_vel→odom→pid_step recursion
+            # Guard against synchronous cmd_vel->odom->pid_step recursion
             # in callback transport (no issue with DDS/shm transport).
             if not getattr(self, '_in_pid', False):
                 self._in_pid = True
@@ -341,7 +368,7 @@ class PathFollowerModule(Module, layer=2):
 
     def _on_path(self, path: Path):
         if self._backend == "nav_core":
-            # Record robot pose at path receipt — defines the reference frame
+            # Record robot pose at path receipt - defines the reference frame
             frame_id = str(getattr(path, "frame_id", "") or "").strip()
             fixed_frame_path = frame_id in {self._odom_frame_id, "map", "odom", "world"}
             if fixed_frame_path:
@@ -375,7 +402,9 @@ class PathFollowerModule(Module, layer=2):
                 self._reset_path_tracking(reset_nav_core_state=True)
                 return
             self._nc_path = pts
-            # Note: do NOT reset nc_state here — compute_control needs
+            if self._last_odom_ts > 0:
+                self._nav_core_step(self._last_odom_ts)
+            # Note: do NOT reset nc_state here - compute_control needs
             # continuous state to ramp up speed (vehicleSpeed persists)
 
         elif self._backend == "pid":
@@ -386,11 +415,11 @@ class PathFollowerModule(Module, layer=2):
                 self._reset_path_tracking(reset_nav_core_state=False)
                 return
             self._path_points = np.array(pts)
-            # Kick off the cmd_vel → odom loop immediately
+            # Kick off the cmd_vel -> odom loop immediately
             if self._path_points is not None:
                 self._pid_step()
 
-    # ── nav_core control step ──────────────────────────────────────────────
+    # -- nav_core control step --
 
     def _to_path_reference_frame(self, x: float, y: float) -> tuple[float, float]:
         dx = x - self._x_rec
@@ -419,7 +448,7 @@ class PathFollowerModule(Module, layer=2):
         # Yaw change since path was received
         vehicle_yaw_diff = self._robot_yaw - self._yaw_rec
 
-        # joy_speed normalized [0, 1] — use 1.0 (max_speed already in params)
+        # joy_speed normalized [0, 1] - use 1.0 (max_speed already in params)
         joy_speed = 1.0
         slow_factor, safety_stop_active = self._active_control_guard()
         safety_stop = 1 if safety_stop_active else 0
@@ -449,7 +478,7 @@ class PathFollowerModule(Module, layer=2):
             angular=Vector3(0.0, 0.0, self._smooth_wz),
         ))
 
-    # ── Python PID (fallback) ──────────────────────────────────────────────
+    # -- Python PID (fallback) --
 
     def _pid_step(self):
         """Simple Pure Pursuit in Python for testing."""
@@ -494,12 +523,13 @@ class PathFollowerModule(Module, layer=2):
         while yaw_err < -math.pi:
             yaw_err += 2 * math.pi
 
-        # P controller with cos coupling — Go1 has low yaw drift (~2°/8s)
+        # P controller with cos coupling - Go1 has low yaw drift (about 2 deg/8s)
         yaw_limit = float(self._max_yaw_rate) if self._max_yaw_rate is not None else 0.8
         wz = max(-yaw_limit, min(yaw_limit, yaw_err * 0.5))
         turn_factor = max(0.2, math.cos(yaw_err))
         vx = min(self._max_speed, max(self._min_speed, dist * 0.25)) * turn_factor
         vx *= slow_factor
+        vx *= self._turn_speed_scale(abs(wz), yaw_limit)
 
         alpha = 0.2
         self._smooth_vx = (1 - alpha) * self._smooth_vx + alpha * vx
@@ -510,7 +540,7 @@ class PathFollowerModule(Module, layer=2):
             angular=Vector3(0.0, 0.0, self._smooth_wz),
         ))
 
-    # ── Health ─────────────────────────────────────────────────────────────
+    # -- Health --
 
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
@@ -519,6 +549,8 @@ class PathFollowerModule(Module, layer=2):
             "has_path": bool(self._nc_path) if self._backend == "nav_core"
                         else self._path_points is not None,
             "max_yaw_rate": self._max_yaw_rate,
+            "turn_speed_yaw_rate_start": self._turn_speed_yaw_rate_start,
+            "turn_speed_min_scale": self._turn_speed_min_scale,
             "control_hint": {
                 "slow_down": self._control_slow_down,
                 "safety_stop": self._control_safety_stop,

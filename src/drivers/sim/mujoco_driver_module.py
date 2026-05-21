@@ -32,6 +32,7 @@ from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat, PointCloud2
 from core.registry import register
+from core.runtime_interface import FRAMES
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
@@ -115,12 +116,46 @@ def _scene_placeholder_start(scene_xml: Path) -> list[float] | None:
     return None
 
 
+def _quat_xyzw_to_rotation_matrix(quat: np.ndarray) -> np.ndarray:
+    q = np.asarray(quat, dtype=float).reshape(4)
+    norm = float(np.linalg.norm(q))
+    if norm <= 1e-12:
+        return np.eye(3, dtype=float)
+    x, y, z, w = q / norm
+    return np.array(
+        [
+            [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+            [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+            [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
+        ],
+        dtype=float,
+    )
+
+
+def _world_points_to_body_frame(
+    points: np.ndarray,
+    position_xyz: np.ndarray,
+    orientation_xyzw: np.ndarray,
+) -> np.ndarray:
+    cloud = np.asarray(points, dtype=np.float32).copy()
+    if cloud.ndim != 2 or cloud.shape[1] < 3:
+        return cloud
+    rotation_body_to_world = _quat_xyzw_to_rotation_matrix(orientation_xyzw)
+    relative_world = cloud[:, :3].astype(float) - np.asarray(position_xyz, dtype=float).reshape(3)
+    cloud[:, :3] = (relative_world @ rotation_body_to_world).astype(np.float32)
+    return cloud
+
+
 # Known worlds
 WORLDS = {
     "building": "building_scene.xml",
     "building_scene": "building_scene.xml",
     "factory": "factory_scene.xml",
     "factory_scene": "factory_scene.xml",
+    "industrial_park": "industrial_park_scene.xml",
+    "industrial_park_scene": "industrial_park_scene.xml",
+    "industrial_demo": "industrial_demo_scene.xml",
+    "industrial_demo_scene": "industrial_demo_scene.xml",
     "open_field": "open_field.xml",
     "spiral": "spiral_terrain.xml",
     "spiral_terrain": "spiral_terrain.xml",
@@ -142,6 +177,7 @@ class MujocoDriverModule(Module, layer=1):
     # -- Outputs --
     odometry: Out[Odometry]
     lidar_cloud: Out[PointCloud2]
+    map_cloud: Out[PointCloud2]
     camera_image: Out[Image]
     depth_image: Out[Image]
     camera_info: Out[CameraIntrinsics]
@@ -160,8 +196,8 @@ class MujocoDriverModule(Module, layer=1):
         max_angular_vel: float | None = None,
         start_pos: tuple = _DEFAULT_START_POS,
         obstacles: list | None = None,
-        odom_frame_id: str = "odom",
-        child_frame_id: str = "body",
+        odom_frame_id: str = FRAMES.odom,
+        child_frame_id: str = FRAMES.body,
         **kw,
     ):
         super().__init__(**kw)
@@ -378,11 +414,23 @@ class MujocoDriverModule(Module, layer=1):
                     try:
                         pts = self._engine.get_lidar_points()
                         if pts is not None and len(pts) > 0:
+                            pts_world = pts.astype(np.float32)
+                            pts_body = _world_points_to_body_frame(
+                                pts_world,
+                                state.position,
+                                state.orientation,
+                            )
                             self.lidar_cloud.publish(PointCloud2(
-                                points=pts.astype(np.float32),
-                                frame_id="lidar",
+                                points=pts_body,
+                                frame_id=FRAMES.body,
                                 ts=ts,
                             ))
+                            world_cloud = PointCloud2(
+                                points=pts_world,
+                                frame_id=FRAMES.odom,
+                                ts=ts,
+                            )
+                            self.map_cloud.publish(world_cloud)
                     except Exception:
                         pass
 

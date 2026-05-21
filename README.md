@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://docs.ros.org/en/humble/"><img src="https://img.shields.io/badge/ROS2-Humble-blue" alt="ROS2" /></a>
   <a href="#platform"><img src="https://img.shields.io/badge/Platform-S100P_(RDK_X5)-green" alt="Platform" /></a>
-  <img src="https://img.shields.io/badge/Tests-1263_passed-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/Framework_tests-1263_passed-brightgreen" alt="Framework tests" />
   <img src="https://img.shields.io/badge/Version-2.2.0-orange" alt="Version" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-lightgrey" alt="License" /></a>
 </p>
@@ -21,6 +21,8 @@
 ## What is LingTu?
 
 LingTu is a full-stack autonomous navigation system that runs on quadruped robots. It handles everything from LiDAR SLAM and terrain analysis to semantic navigation ("go to the kitchen") and remote control via a web dashboard.
+
+Simulation and framework tests are not field-readiness evidence. The strict algorithm claim boundary is tracked in `docs/07-testing/ALGORITHM_VALIDATION_FLOW.md`.
 
 **Key capabilities:**
 - **SLAM** — Fast-LIO2 mapping + ICP localization against pre-built maps
@@ -47,7 +49,7 @@ Dual-board architecture: **Nav Board** (S100P) runs LingTu; **Dog Board** runs B
 ### Framework tests (no hardware needed)
 
 ```bash
-python -m pytest src/core/tests/ -q    # 1263 tests, ~5s
+python -m pytest src/core/tests/ -q    # framework tests only; not full algorithm closure
 ```
 
 ### Run on robot
@@ -340,7 +342,7 @@ sudo systemctl restart lingtu
 
 ```bash
 # Python framework tests (no ROS2 needed)
-python -m pytest src/core/tests/ -q              # 1263 tests
+python -m pytest src/core/tests/ -q              # framework tests only
 
 # C++ nav_core tests
 cd src/nav/core && mkdir -p build && cd build

@@ -32,7 +32,25 @@ def maps(**config) -> Blueprint:
                inflation_radius=config.get("inflation_radius", og.get("inflation_radius", 0.5)),
                z_min=og.get("z_min", 0.10),
                z_max=og.get("z_max", 2.00),
-               publish_hz=og.get("publish_hz", 2.0))
+               publish_hz=og.get("publish_hz", 2.0),
+               frame_id=config.get("occupancy_frame_id", "map"),
+               raycast_free_space=config.get("occupancy_raycast_free_space", False),
+               unknown_as_obstacle_for_costmap=config.get(
+                   "occupancy_unknown_as_obstacle_for_costmap",
+                   False,
+               ),
+               raycast_max_rays=config.get("occupancy_raycast_max_rays", 1800),
+               raycast_free_inflation_radius=config.get(
+                   "occupancy_raycast_free_inflation_radius",
+                   og.get("raycast_free_inflation_radius", 0.0),
+               ))
+        if config.get("enable_ros2_grid_bridge", False):
+            try:
+                from nav.ros2_grid_bridge_module import ROS2GridBridgeModule
+
+                bp.add(ROS2GridBridgeModule)
+            except ImportError as e:
+                logger.warning("ROS2 grid bridge not available: %s", e)
 
         from nav.voxel_grid_module import VoxelGridModule
         vg = cfg.raw.get("voxel_grid", {})

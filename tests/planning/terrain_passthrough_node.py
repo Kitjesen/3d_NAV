@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Simulation helper: mirror Gazebo map clouds into terrain topics.
+"""Simulation helper: mirror filtered Gazebo obstacle clouds into terrain topics.
 
-Gazebo supplies /nav/map_cloud through the runtime adapter. The legacy ROS
-localPlanner also waits for /nav/terrain_map and /nav/terrain_map_ext, which
-sim_robot_node normally publishes. This node is only for Gazebo navigation
-gates where sim_robot_node is disabled so Gazebo remains the odometry source.
+Gazebo supplies a z/range-filtered /nav/map_cloud through the runtime adapter.
+The legacy ROS localPlanner also waits for /nav/terrain_map and
+/nav/terrain_map_ext, which sim_robot_node normally publishes. This node is
+only for Gazebo navigation gates where sim_robot_node is disabled so Gazebo
+remains the odometry source.
 """
 
 from __future__ import annotations

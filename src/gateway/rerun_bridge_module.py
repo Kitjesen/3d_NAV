@@ -25,6 +25,7 @@ from core.module import Module, skill
 from core.msgs.nav import Odometry, PoseStamped
 from core.msgs.sensor import PointCloud2
 from core.registry import register
+from core.runtime_interface import TOPICS
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
@@ -278,13 +279,13 @@ class RerunBridgeModule(Module, layer=6):
 
             self._ros2_node = Node("rerun_bridge")
             self._ros2_subs = [
-                self._ros2_node.create_subscription(Image, "/camera/color/image_raw", self._on_ros2_color, qos),
-                self._ros2_node.create_subscription(Image, "/camera/depth/image_raw", self._on_ros2_depth, qos),
+                self._ros2_node.create_subscription(Image, TOPICS.camera_color, self._on_ros2_color, qos),
+                self._ros2_node.create_subscription(Image, TOPICS.camera_depth, self._on_ros2_depth, qos),
                 self._ros2_node.create_subscription(TFMessage, "/tf", self._on_ros2_tf, qos_be),
                 self._ros2_node.create_subscription(TFMessage, "/tf_static", self._on_ros2_tf_static, qos_be),
-                self._ros2_node.create_subscription(OccupancyGrid, "/nav/costmap", self._on_ros2_costmap, qos_be),
-                self._ros2_node.create_subscription(MarkerArray, "/nav/detections", self._on_ros2_detections, qos_be),
-                self._ros2_node.create_subscription(Path, "/nav/path", self._on_ros2_path, qos_be),
+                self._ros2_node.create_subscription(OccupancyGrid, TOPICS.semantic_costmap, self._on_ros2_costmap, qos_be),
+                self._ros2_node.create_subscription(MarkerArray, TOPICS.visualization_detections, self._on_ros2_detections, qos_be),
+                self._ros2_node.create_subscription(Path, TOPICS.global_path, self._on_ros2_path, qos_be),
             ]
             get_shared_executor().add_node(self._ros2_node)
             logger.info("RerunBridge: ROS2 subscriptions active")

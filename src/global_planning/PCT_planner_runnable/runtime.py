@@ -330,10 +330,10 @@ def prepare_tomogram_for_pct(
 ) -> Path:
     """Return a PCT-compatible tomogram path without mutating the source file.
 
-    LingTu's current offline builder stores tomogram grid axes as x,y for the
-    planner preview code. The original PCT wrapper expects y,x and derives
-    ``map_dim`` directly from the last two dimensions. For builder pickles, we
-    write a small cached transposed copy before invoking the original wrapper.
+    Some legacy LingTu builders stored tomogram grid axes as x,y for planner
+    preview code. The original PCT wrapper expects row=y, col=x and derives
+    ``map_dim`` directly from the last two dimensions. Only legacy
+    ``builder_xy`` pickles need a cached transposed copy.
     """
     source = Path(tomogram_path).resolve()
     if source.suffix != ".pickle" or not source.exists():
@@ -346,6 +346,8 @@ def prepare_tomogram_for_pct(
         return source
 
     data = raw.get("data") if isinstance(raw, dict) else None
+    grid_info = raw.get("grid_info") if isinstance(raw, dict) else None
+    axis_order = str((grid_info or {}).get("axis_order") or "")
     if (
         not isinstance(raw, dict)
         or data is None
@@ -354,6 +356,8 @@ def prepare_tomogram_for_pct(
         or "slice_h0" not in raw
         or "slice_dh" not in raw
     ):
+        return source
+    if axis_order in {"row_y_col_x", "yx"}:
         return source
 
     import numpy as np

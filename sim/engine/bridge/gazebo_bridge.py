@@ -14,22 +14,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from core.runtime_interface import FRAMES, TOPICS, RuntimeFrames
 
-@dataclass(frozen=True)
-class FrameContract:
-    """Canonical frame names used at the simulator/runtime boundary."""
 
-    map_frame: str = "map"
-    odom_frame: str = "odom"
-    body_frame: str = "body"
-    model_base_frame: str = "base_link"
-    lidar_frame: str = "lidar_link"
-    camera_frame: str = "camera_link"
-    simulator_world_frame: str = "world"
-
-    @property
-    def body_alias_note(self) -> str:
-        return f"{self.model_base_frame} == {self.body_frame}"
+FrameContract = RuntimeFrames
 
 
 @dataclass(frozen=True)
@@ -38,16 +26,18 @@ class GazeboBridgeConfig:
 
     world_name: str = "lingtu_world"
     robot_name: str = "thunder"
-    frames: FrameContract = FrameContract()
+    frames: FrameContract = FRAMES
 
-    lingtu_cmd_vel: str = "/nav/cmd_vel"
-    lingtu_odometry: str = "/nav/odometry"
-    lingtu_map_cloud: str = "/nav/map_cloud"
-    lingtu_cumulative_map_cloud: str = "/nav/cumulative_map_cloud"
-    lingtu_registered_cloud: str = "/nav/registered_cloud"
-    lingtu_color_image: str = "/camera/color/image_raw"
-    lingtu_depth_image: str = "/camera/depth/image_raw"
-    lingtu_camera_info: str = "/camera/color/camera_info"
+    lingtu_cmd_vel: str = TOPICS.cmd_vel
+    lingtu_odometry: str = TOPICS.odometry
+    lingtu_map_cloud: str = TOPICS.map_cloud
+    lingtu_terrain_map: str = TOPICS.terrain_map
+    lingtu_terrain_map_ext: str = TOPICS.terrain_map_ext
+    lingtu_cumulative_map_cloud: str = TOPICS.cumulative_map_cloud
+    lingtu_registered_cloud: str = TOPICS.registered_cloud
+    lingtu_color_image: str = TOPICS.camera_color
+    lingtu_depth_image: str = TOPICS.camera_depth
+    lingtu_camera_info: str = TOPICS.camera_info
 
     gazebo_raw_odometry: str = "/lingtu/gazebo/raw/odometry"
     gazebo_raw_lidar_points: str = "/lingtu/gazebo/raw/lidar_points"
@@ -148,6 +138,8 @@ class GazeboBridgeConfig:
             "gazebo_cmd_vel_ros_input": self.gazebo_cmd_vel_ros_input,
             "odometry": self.lingtu_odometry,
             "map_cloud": self.lingtu_map_cloud,
+            "terrain_map": self.lingtu_terrain_map,
+            "terrain_map_ext": self.lingtu_terrain_map_ext,
             "cumulative_map_cloud": self.lingtu_cumulative_map_cloud,
             "registered_cloud": self.lingtu_registered_cloud,
             "color_image": self.lingtu_color_image,

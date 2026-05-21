@@ -40,6 +40,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from core.runtime_interface import TOPICS
+
 from ._dds import HAS_LIVOX_IDL, DDS_Imu, LivoxCustomMsg, dds_imu_to_imu, livox_msg_to_numpy
 
 logger = logging.getLogger(__name__)
@@ -127,7 +129,7 @@ class Lidar:
     Under the hood:
     1. Launches ``livox_ros_driver2_node`` as a managed subprocess (NativeModule)
        — auto-restart on crash, log piping, SIGTERM/SIGKILL shutdown.
-    2. Subscribes to ``/lidar/scan`` (Livox CustomMsg) and ``/imu/data``
+    2. Subscribes to canonical ``/nav/lidar_scan`` and ``/nav/imu``
        via lightweight cyclonedds — no rclpy required.
     3. Converts Livox frames to numpy (N, 4) and delivers via callback or poll.
 
@@ -138,8 +140,8 @@ class Lidar:
     def __init__(
         self,
         ip: str | None = None,
-        scan_topic: str = "/lidar/scan",
-        imu_topic: str = "/imu/data",
+        scan_topic: str = TOPICS.lidar_scan,
+        imu_topic: str = TOPICS.imu,
     ):
         self._ip = ip
         self._scan_topic = scan_topic

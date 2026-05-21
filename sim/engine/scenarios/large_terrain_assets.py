@@ -58,6 +58,132 @@ DEFAULT_SHAPE_XY = (121, 81)  # x cells, y cells; builder_xy convention.
 DEFAULT_SLICE_DH = 0.5
 
 
+def large_terrain_localization_landmarks() -> list[TerrainBox]:
+    """Return planner-visible vertical geometry that improves LiDAR observability."""
+
+    return [
+        TerrainBox(
+            name="localization_start_south_panel",
+            position=(-9.40, -6.65, 0.90),
+            half_size=(0.75, 0.08, 0.90),
+            rgba=(0.74, 0.70, 0.30, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_start_west_panel",
+            position=(-10.55, -5.25, 0.90),
+            half_size=(0.08, 0.70, 0.90),
+            rgba=(0.74, 0.70, 0.30, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_start_north_panel",
+            position=(-8.65, -4.20, 0.90),
+            half_size=(0.52, 0.08, 0.90),
+            rgba=(0.74, 0.70, 0.30, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_start_south_plinth",
+            position=(-8.00, -6.15, 0.42),
+            half_size=(0.38, 0.24, 0.42),
+            rgba=(0.62, 0.67, 0.40, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_start_west_plinth",
+            position=(-10.15, -4.45, 0.50),
+            half_size=(0.32, 0.22, 0.50),
+            rgba=(0.62, 0.67, 0.40, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_start_corner_plinth",
+            position=(-10.30, -6.35, 0.58),
+            half_size=(0.30, 0.30, 0.58),
+            rgba=(0.62, 0.67, 0.40, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_lane_north_panel",
+            position=(-7.85, -3.70, 0.90),
+            half_size=(0.70, 0.08, 0.90),
+            rgba=(0.74, 0.70, 0.30, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_lane_south_plinth",
+            position=(-7.15, -7.15, 0.55),
+            half_size=(0.34, 0.24, 0.55),
+            rgba=(0.62, 0.67, 0.40, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_lane_east_panel",
+            position=(-6.30, -6.40, 0.90),
+            half_size=(0.08, 0.60, 0.90),
+            rgba=(0.74, 0.70, 0.30, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_lane_north_plinth",
+            position=(-6.80, -3.95, 0.60),
+            half_size=(0.30, 0.28, 0.60),
+            rgba=(0.62, 0.67, 0.40, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_midfield_south_panel",
+            position=(-3.20, -6.55, 0.90),
+            half_size=(0.70, 0.08, 0.90),
+            rgba=(0.74, 0.70, 0.30, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_midfield_north_panel",
+            position=(-3.80, 6.30, 0.90),
+            half_size=(0.70, 0.08, 0.90),
+            rgba=(0.74, 0.70, 0.30, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_gate_south_panel",
+            position=(-1.75, -1.45, 0.90),
+            half_size=(0.08, 0.55, 0.90),
+            rgba=(0.74, 0.70, 0.30, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_gate_south_plinth",
+            position=(-2.35, -0.35, 0.45),
+            half_size=(0.28, 0.28, 0.45),
+            rgba=(0.62, 0.67, 0.40, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_gate_north_panel",
+            position=(1.75, 2.75, 0.90),
+            half_size=(0.08, 0.55, 0.90),
+            rgba=(0.74, 0.70, 0.30, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_goal_south_panel",
+            position=(7.85, -5.75, 0.90),
+            half_size=(0.72, 0.08, 0.90),
+            rgba=(0.74, 0.70, 0.30, 1.0),
+            kind="localization_landmark",
+        ),
+        TerrainBox(
+            name="localization_goal_north_panel",
+            position=(9.65, 3.85, 0.90),
+            half_size=(0.08, 0.72, 0.90),
+            rgba=(0.74, 0.70, 0.30, 1.0),
+            kind="localization_landmark",
+        ),
+    ]
+
+
 def large_terrain_routes() -> list[TerrainRoute]:
     return [
         TerrainRoute(
@@ -221,6 +347,7 @@ def large_terrain_boxes() -> list[TerrainBox]:
             half_size=(0.44, 0.56, 0.38),
             rgba=(0.34, 0.42, 0.50, 1.0),
         ),
+        *large_terrain_localization_landmarks(),
     ]
 
 
@@ -351,6 +478,52 @@ def _mark_zone(trav: np.ndarray, xx: np.ndarray, yy: np.ndarray, *, zone: Terrai
         trav[mask] = np.maximum(trav[mask], zone.cost)
 
 
+def _map_frame_box(box: TerrainBox, origin_world_xy: tuple[float, float]) -> TerrainBox:
+    return TerrainBox(
+        name=box.name,
+        position=(
+            float(box.position[0]) - float(origin_world_xy[0]),
+            float(box.position[1]) - float(origin_world_xy[1]),
+            float(box.position[2]),
+        ),
+        half_size=box.half_size,
+        rgba=box.rgba,
+        kind=box.kind,
+    )
+
+
+def _map_frame_zone(zone: TerrainZone, origin_world_xy: tuple[float, float]) -> TerrainZone:
+    return TerrainZone(
+        name=zone.name,
+        center=(
+            float(zone.center[0]) - float(origin_world_xy[0]),
+            float(zone.center[1]) - float(origin_world_xy[1]),
+        ),
+        half_size=zone.half_size,
+        cost=zone.cost,
+        rgba=zone.rgba,
+        kind=zone.kind,
+    )
+
+
+def _map_frame_route(route: TerrainRoute, origin_world_xy: tuple[float, float]) -> TerrainRoute:
+    return TerrainRoute(
+        name=route.name,
+        start=(
+            float(route.start[0]) - float(origin_world_xy[0]),
+            float(route.start[1]) - float(origin_world_xy[1]),
+            float(route.start[2]),
+        ),
+        goal=(
+            float(route.goal[0]) - float(origin_world_xy[0]),
+            float(route.goal[1]) - float(origin_world_xy[1]),
+            float(route.goal[2]),
+        ),
+        description=route.description,
+        min_routed_distance_m=route.min_routed_distance_m,
+    )
+
+
 def _tomogram(
     *,
     resolution: float,
@@ -359,13 +532,21 @@ def _tomogram(
     slice_dh: float,
     obstacle_thr: float,
     inflation: float,
+    map_frame_origin_world_xy: tuple[float, float] = (0.0, 0.0),
 ) -> dict[str, Any]:
     trav = np.full(shape_xy, 1.0, dtype=np.float32)
     xx, yy = _world_grid(shape_xy, origin, resolution)
     for zone in large_terrain_zones():
-        _mark_zone(trav, xx, yy, zone=zone)
+        _mark_zone(trav, xx, yy, zone=_map_frame_zone(zone, map_frame_origin_world_xy))
     for box in large_terrain_boxes():
-        _mark_box(trav, xx, yy, box=box, obstacle_thr=obstacle_thr, inflation=inflation)
+        _mark_box(
+            trav,
+            xx,
+            yy,
+            box=_map_frame_box(box, map_frame_origin_world_xy),
+            obstacle_thr=obstacle_thr,
+            inflation=inflation,
+        )
 
     data = np.zeros((5, 1, shape_xy[0], shape_xy[1]), dtype=np.float32)
     data[0, 0] = trav
@@ -392,6 +573,7 @@ def _tomogram(
             "source": "sim_large_terrain_geometry",
             "obstacle_thr": float(obstacle_thr),
             "inflation_m": float(inflation),
+            "map_frame_origin_world_xy": list(map_frame_origin_world_xy),
         },
     }
 
@@ -423,15 +605,27 @@ def _sample_zone_points(zone: TerrainZone, step: float = 0.35) -> np.ndarray:
     return np.asarray(pts, dtype=np.float32)
 
 
-def sample_large_terrain_map_points(step: float = 0.16) -> np.ndarray:
-    blocks = [_sample_box_surfaces(box, step=step) for box in large_terrain_boxes()]
-    blocks.extend(_sample_zone_points(zone) for zone in large_terrain_zones())
+def sample_large_terrain_map_points(
+    step: float = 0.16,
+    *,
+    map_frame_origin_world_xy: tuple[float, float] = (0.0, 0.0),
+) -> np.ndarray:
+    blocks = [
+        _sample_box_surfaces(_map_frame_box(box, map_frame_origin_world_xy), step=step)
+        for box in large_terrain_boxes()
+    ]
+    blocks.extend(
+        _sample_zone_points(_map_frame_zone(zone, map_frame_origin_world_xy))
+        for zone in large_terrain_zones()
+    )
     points = np.concatenate(blocks, axis=0)
     return np.asarray(points[np.all(np.isfinite(points), axis=1)], dtype=np.float32)
 
 
-def _write_ascii_pcd(path: Path) -> None:
-    points = sample_large_terrain_map_points()
+def _write_ascii_pcd(path: Path, *, map_frame_origin_world_xy: tuple[float, float]) -> None:
+    points = sample_large_terrain_map_points(
+        map_frame_origin_world_xy=map_frame_origin_world_xy,
+    )
     lines = [
         "# .PCD v0.7 - Point Cloud Data file format",
         "VERSION 0.7",
@@ -460,6 +654,7 @@ def build_large_terrain_assets(
     slice_dh: float = DEFAULT_SLICE_DH,
     obstacle_thr: float = 49.9,
     inflation: float = 0.16,
+    map_frame_origin_world_xy: tuple[float, float] | None = None,
 ) -> LargeTerrainAssets:
     out = Path(output_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -468,22 +663,41 @@ def build_large_terrain_assets(
     map_pcd = out / "map.pcd"
     metadata = out / "metadata.json"
     routes = tuple(large_terrain_routes())
+    map_frame_origin_world_xy = tuple(
+        float(value)
+        for value in (map_frame_origin_world_xy or (0.0, 0.0))
+    )
+    tomogram_origin = (
+        float(origin[0]) - float(map_frame_origin_world_xy[0]),
+        float(origin[1]) - float(map_frame_origin_world_xy[1]),
+    )
+    map_frame = (
+        "world"
+        if abs(map_frame_origin_world_xy[0]) < 1e-9 and abs(map_frame_origin_world_xy[1]) < 1e-9
+        else "start_odom"
+        if (
+            abs(map_frame_origin_world_xy[0] - float(start[0])) < 1e-9
+            and abs(map_frame_origin_world_xy[1] - float(start[1])) < 1e-9
+        )
+        else "offset_odom"
+    )
 
     scene_xml.write_text(_scene_xml(start, goal), encoding="utf-8")
     with tomogram_path.open("wb") as fh:
         pickle.dump(
             _tomogram(
                 resolution=resolution,
-                origin=origin,
+                origin=tomogram_origin,
                 shape_xy=shape_xy,
                 slice_dh=slice_dh,
                 obstacle_thr=obstacle_thr,
                 inflation=inflation,
+                map_frame_origin_world_xy=map_frame_origin_world_xy,
             ),
             fh,
             protocol=pickle.HIGHEST_PROTOCOL,
         )
-    _write_ascii_pcd(map_pcd)
+    _write_ascii_pcd(map_pcd, map_frame_origin_world_xy=map_frame_origin_world_xy)
     metadata.write_text(
         json.dumps(
             {
@@ -495,15 +709,30 @@ def build_large_terrain_assets(
                 "map_pcd": str(map_pcd),
                 "start": list(start),
                 "goal": list(goal),
+                "map_frame": map_frame,
+                "map_frame_origin_world_xy": list(map_frame_origin_world_xy),
                 "resolution": resolution,
-                "origin": list(origin),
+                "origin": list(tomogram_origin),
+                "world_origin": list(origin),
                 "shape_xy": list(shape_xy),
                 "slice_dh": slice_dh,
                 "inflation_m": inflation,
                 "obstacle_thr": obstacle_thr,
                 "obstacles": [asdict(box) for box in large_terrain_boxes()],
+                "map_frame_obstacles": [
+                    asdict(_map_frame_box(box, map_frame_origin_world_xy))
+                    for box in large_terrain_boxes()
+                ],
                 "terrain_zones": [asdict(zone) for zone in large_terrain_zones()],
+                "map_frame_terrain_zones": [
+                    asdict(_map_frame_zone(zone, map_frame_origin_world_xy))
+                    for zone in large_terrain_zones()
+                ],
                 "routes": [asdict(route) for route in routes],
+                "map_frame_routes": [
+                    asdict(_map_frame_route(route, map_frame_origin_world_xy))
+                    for route in routes
+                ],
             },
             indent=2,
             sort_keys=True,

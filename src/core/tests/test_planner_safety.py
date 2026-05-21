@@ -409,6 +409,23 @@ class TestGlobalPlannerServiceCostmap(unittest.TestCase):
         # Should return None since no reachable free cell within tolerance
         self.assertIsNone(result)
 
+    def test_find_safe_goal_rejects_disconnected_free_goal(self):
+        """A free cell behind a wall is not a safe goal for the current start."""
+        svc = GlobalPlannerService(planner_name="astar", tomogram="")
+        svc.setup()
+
+        grid = np.zeros((20, 20), dtype=np.float32)
+        grid[10, :] = 100.0
+        svc.update_map(grid, resolution=1.0, origin=np.array([0.0, 0.0]))
+
+        safe = svc._find_safe_goal(
+            np.array([2.0, 15.0, 0.0]),
+            tolerance=2.0,
+            start=np.array([2.0, 2.0, 0.0]),
+        )
+
+        self.assertIsNone(safe)
+
 
 # ---------------------------------------------------------------------------
 # 5. Integration: PCT grid + _find_safe_goal

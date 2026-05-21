@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build_nav_core.sh — compile _nav_core.so (nanobind Python extension)
+# build_nav_core.sh - compile _nav_core.so (nanobind Python extension)
 #
 # This script builds the _nav_core nanobind extension from src/nav/core/.
 # The resulting .so is placed in src/nav/core/build_nb/ and a symlink is
@@ -25,25 +25,25 @@ NAV_CORE_DIR="$REPO_ROOT/src/nav/core"
 BUILD_DIR="$NAV_CORE_DIR/build_nb"
 INSTALL_LINK="$REPO_ROOT/src"
 
-# ── Colors ──────────────────────────────────────────────────────────────────
+# Colors
 _G="\033[0;32m"; _Y="\033[1;33m"; _R="\033[0;31m"; _N="\033[0m"; _B="\033[1m"
-ok()   { echo -e "  ${_G}✓${_N} $*"; }
-info() { echo -e "  ${_B}›${_N} $*"; }
+ok()   { echo -e "  ${_G}[OK]${_N} $*"; }
+info() { echo -e "  ${_B}[INFO]${_N} $*"; }
 warn() { echo -e "  ${_Y}!${_N} $*"; }
-fail() { echo -e "  ${_R}✗${_N} $*"; exit 1; }
+fail() { echo -e "  ${_R}[FAIL]${_N} $*"; exit 1; }
 
 echo ""
-echo -e "  ${_B}LingTu — build _nav_core.so${_N}"
-echo "  ─────────────────────────────────────"
+echo -e "  ${_B}LingTu - build _nav_core.so${_N}"
+echo "  -------------------------------------"
 
-# ── Clean ────────────────────────────────────────────────────────────────────
+# Clean
 if [[ "${1:-}" == "--clean" ]]; then
     info "Cleaning build directory..."
     rm -rf "$BUILD_DIR"
     ok "Cleaned"
 fi
 
-# ── Check dependencies ───────────────────────────────────────────────────────
+# Check dependencies
 info "Checking dependencies..."
 
 command -v cmake >/dev/null 2>&1 || fail "cmake not found. Install: sudo apt install cmake"
@@ -90,7 +90,7 @@ fi
 NB_DIR=$("$PYTHON" -c "import nanobind; print(nanobind.cmake_dir())")
 ok "nanobind found at: $NB_DIR"
 
-# ── Configure ────────────────────────────────────────────────────────────────
+# Configure
 info "Configuring CMake (standalone mode, no ROS2)..."
 mkdir -p "$BUILD_DIR"
 
@@ -129,19 +129,19 @@ cmake -B "$BUILD_DIR" -S "$BUILD_DIR" \
 
 ok "CMake configured"
 
-# ── Build ────────────────────────────────────────────────────────────────────
+# Build
 NPROC=$(nproc 2>/dev/null || echo 4)
 info "Building with $NPROC cores..."
 cmake --build "$BUILD_DIR" -j"$NPROC"
 
-# ── Find the .so ─────────────────────────────────────────────────────────────
+# Find the .so
 SO_FILE=$(find "$BUILD_DIR" -name "_nav_core*.so" | head -1)
 if [[ -z "$SO_FILE" ]]; then
     fail "_nav_core*.so not found after build. Check cmake output above."
 fi
 ok "Built: $SO_FILE"
 
-# ── Install symlink into src/ ─────────────────────────────────────────────────
+# Install symlink into src/
 SO_NAME=$(basename "$SO_FILE")
 LINK_TARGET="$INSTALL_LINK/$SO_NAME"
 
@@ -150,9 +150,9 @@ if [[ -L "$LINK_TARGET" || -f "$LINK_TARGET" ]]; then
     rm -f "$LINK_TARGET"
 fi
 ln -s "$SO_FILE" "$LINK_TARGET"
-ok "Symlinked: $LINK_TARGET → $SO_FILE"
+ok "Symlinked: $LINK_TARGET -> $SO_FILE"
 
-# ── Verify import ─────────────────────────────────────────────────────────────
+# Verify import
 info "Verifying import..."
 if PYTHONPATH="$INSTALL_LINK:${PYTHONPATH:-}" $PYTHON -c "
 import _nav_core
@@ -163,7 +163,7 @@ print('  compute_control:    ', _nav_core.compute_control)
 "; then
     ok "_nav_core imported successfully"
 else
-    fail "Import failed — check build output"
+    fail "Import failed - check build output"
 fi
 
 echo ""
@@ -172,5 +172,5 @@ echo ""
 echo "  To use permanently, add to ~/.bashrc:"
 echo -e "    ${_B}export PYTHONPATH=$INSTALL_LINK:\$PYTHONPATH${_N}"
 echo ""
-echo "  Or just run lingtu — it auto-detects the .so location."
+echo "  Or just run lingtu - it auto-detects the .so location."
 echo ""

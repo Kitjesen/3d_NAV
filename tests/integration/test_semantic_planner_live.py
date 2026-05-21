@@ -30,6 +30,8 @@ from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
 
+from core.runtime_interface import TOPICS
+
 # ── 工厂场景图 (机器人在 2,2,0.35) ────────────────────────
 FACTORY_SCENE_GRAPH = json.dumps({
     "objects": [
@@ -51,11 +53,11 @@ class SemanticPlannerTestNode(Node):
         super().__init__("semantic_planner_test")
 
         # Publishers
-        self._pub_sg = self.create_publisher(String, "/nav/semantic/scene_graph", 10)
-        self._pub_instr = self.create_publisher(String, "/nav/semantic/instruction", 10)
-        self._pub_cancel = self.create_publisher(String, "/nav/semantic/cancel", 10)
+        self._pub_sg = self.create_publisher(String, TOPICS.semantic_scene_graph, 10)
+        self._pub_instr = self.create_publisher(String, TOPICS.semantic_instruction, 10)
+        self._pub_cancel = self.create_publisher(String, TOPICS.semantic_cancel, 10)
         self._pub_odom = self.create_publisher(
-            Odometry, "/nav/odometry",
+            Odometry, TOPICS.odometry,
             QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=5)
         )
 
@@ -64,11 +66,11 @@ class SemanticPlannerTestNode(Node):
         self._statuses = []
         self._latest_status = None
 
-        self.create_subscription(PoseStamped, "/nav/goal_pose", self._goal_cb,
+        self.create_subscription(PoseStamped, TOPICS.goal_pose, self._goal_cb,
             QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                        durability=DurabilityPolicy.VOLATILE,
                        history=HistoryPolicy.KEEP_LAST, depth=5))
-        self.create_subscription(String, "/nav/semantic/status", self._status_cb, 10)
+        self.create_subscription(String, TOPICS.semantic_status, self._status_cb, 10)
 
         # 1Hz 场景图 + 10Hz fake odom
         self.create_timer(1.0, self._pub_scene_graph)

@@ -31,6 +31,9 @@ def navigation(
             "max_replan_count",
             "downsample_dist",
             "allow_direct_goal_fallback",
+            "direct_goal_fallback_on_planner_failure",
+            "external_strategy_path_control",
+            "external_strategy_start_tolerance_m",
             "goal_update_epsilon",
             "mission_timeout",
             "planning_frame_id",
@@ -39,6 +42,12 @@ def navigation(
             "safe_goal_tolerance",
             "plan_safety_policy",
             "fallback_planner_name",
+            "accept_partial_goal_progress",
+            "partial_goal_repeat_ignore_window_s",
+            "defer_empty_path_planning_failure",
+            "empty_path_retry_interval_s",
+            "empty_path_retry_timeout_s",
+            "replan_on_costmap_update",
         )
         if key in config
     }
@@ -47,6 +56,17 @@ def navigation(
            tomogram=tomogram,
            enable_ros2_bridge=enable_ros2_bridge,
            **nav_config)
+
+    if config.get("enable_ros2_path_bridge", False):
+        try:
+            from nav.ros2_path_bridge_module import ROS2PathBridgeModule
+
+            path_bridge_config = {}
+            if "planning_frame_id" in config:
+                path_bridge_config["default_frame_id"] = config["planning_frame_id"]
+            bp.add(ROS2PathBridgeModule, **path_bridge_config)
+        except ImportError as e:
+            logger.warning("ROS2 path bridge not available: %s", e)
 
     if config.get("enable_frontier", False):
         try:
@@ -58,12 +78,38 @@ def navigation(
                    max_explored_distance=config.get("frontier_max_dist", 15.0),
                    info_gain_threshold=config.get("frontier_info_gain", 0.03),
                    goal_timeout=config.get("frontier_goal_timeout", 30.0),
-                   explore_rate=config.get("frontier_rate", 2.0))
+                   explore_rate=config.get("frontier_rate", 2.0),
+                   blocked_goal_radius=config.get("frontier_blocked_goal_radius", 1.0),
+                   blocked_goal_ttl=config.get("frontier_blocked_goal_ttl", 120.0),
+                   approach_standoff_m=config.get("frontier_approach_standoff_m", 0.8),
+                   approach_max_target_distance_m=config.get(
+                       "frontier_approach_max_target_distance_m",
+                       1.5,
+                   ),
+                   approach_goal_max_distance_m=config.get(
+                       "frontier_approach_goal_max_distance_m",
+                       3.0,
+                   ),
+                   reachable_goal_radius=config.get("frontier_reachable_goal_radius", 0.8),
+                   navigation_failure_grace_s=config.get(
+                       "frontier_navigation_failure_grace_s",
+                       2.0,
+                   ),
+                   cost_obstacle_threshold=config.get(
+                       "frontier_cost_obstacle_threshold",
+                       49.9,
+                   ))
             bp.wire(
                 "WavefrontFrontierExplorer",
                 "exploration_goal",
                 "NavigationModule",
                 "goal_pose",
+            )
+            bp.wire(
+                "NavigationModule",
+                "mission_status",
+                "WavefrontFrontierExplorer",
+                "navigation_status",
             )
         except ImportError as e:
             logger.warning("FrontierExplorer not available: %s", e)
@@ -78,6 +124,32 @@ def navigation(
                 ("path_follower_goal_tolerance", "goal_tolerance"),
                 ("path_follower_min_speed", "min_speed"),
                 ("path_follower_max_yaw_rate", "max_yaw_rate"),
+                ("path_follower_turn_speed_yaw_rate_start", "turn_speed_yaw_rate_start"),
+                ("path_follower_turn_speed_min_scale", "turn_speed_min_scale"),
+                ("path_follower_two_way_drive", "two_way_drive"),
+            )
+            if key in config
+        }
+        local_planner_config = {
+            param: config[key]
+            for key, param in (
+                ("local_planner_corridor_lookahead_m", "corridor_lookahead_m"),
+                (
+                    "local_planner_allow_direct_track_fallback",
+                    "allow_direct_track_fallback",
+                ),
+                (
+                    "local_planner_ignore_near_field_stop",
+                    "ignore_near_field_stop",
+                ),
+                (
+                    "local_planner_direct_track_fallback_min_distance_m",
+                    "direct_track_fallback_min_distance_m",
+                ),
+                (
+                    "local_planner_min_trackable_local_path_m",
+                    "min_trackable_local_path_m",
+                ),
             )
             if key in config
         }
@@ -86,6 +158,7 @@ def navigation(
                 bp,
                 backend="cmu",
                 path_follower_backend="nav_core",
+                local_planner_config=local_planner_config,
                 **path_follower_config,
             )
         else:
@@ -93,6 +166,7 @@ def navigation(
                 bp,
                 backend=config.get("python_autonomy_backend", "nanobind"),
                 path_follower_backend=config.get("python_path_follower_backend", "nav_core"),
+                local_planner_config=local_planner_config,
                 **path_follower_config,
             )
     except ImportError as e:

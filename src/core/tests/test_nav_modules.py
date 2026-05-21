@@ -431,6 +431,18 @@ class TestPathFollowerModule(unittest.TestCase):
 
         m._on_control_hint({
             "near_field_stop": True,
+            "safety_stop": False,
+            "ts": time.time(),
+            "reason": "near_field_ignored",
+        })
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.2, 0.0, 0.0)), ts=1.2))
+
+        self.assertEqual(RecordingNavCore.last_safety_stop, 0)
+        self.assertFalse(m.health()["path_follower"]["control_hint"]["safety_stop"])
+        self.assertGreater(outputs[-1].linear.x, 0.0)
+
+        m._on_control_hint({
+            "near_field_stop": True,
             "safety_stop": True,
             "ts": time.time(),
             "reason": "near_field",
@@ -614,6 +626,83 @@ class TestOccupancyGridModule(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertTrue(np.any(results[0]["grid"] == 100),
                         "Expected outside-clear-radius point to stay occupied")
+
+    def test_raycast_mode_publishes_exploration_unknown_free_occupied_grid(self):
+        """Raycast mode preserves unknown cells for real frontier exploration."""
+        m = self._make_module(
+            resolution=0.5,
+            map_radius=4.0,
+            robot_clear_radius=0.0,
+            inflation_radius=0.0,
+            raycast_free_space=True,
+            unknown_as_obstacle_for_costmap=True,
+            raycast_max_rays=100,
+        )
+        odom = Odometry(pose=Pose(position=Vector3(0, 0, 0),
+                                   orientation=Quaternion(0, 0, 0, 1)),
+                        frame_id="map")
+        m.odometry._deliver(odom)
+
+        pts = np.array([
+            [2.0, 0.0, 0.6],
+            [2.0, 1.0, 0.6],
+            [1.5, -1.0, 0.6],
+        ], dtype=np.float32)
+        cloud = PointCloud2.from_numpy(pts, frame_id="map")
+
+        costmaps = []
+        exploration = []
+        m.costmap._add_callback(lambda msg: costmaps.append(msg))
+        m.exploration_grid._add_callback(lambda msg: exploration.append(msg))
+        m.map_cloud._deliver(cloud)
+
+        self.assertEqual(len(costmaps), 1)
+        self.assertEqual(len(exploration), 1)
+        emap = exploration[0]
+        counts = emap["counts"]
+        self.assertGreater(counts["unknown"], 0)
+        self.assertGreater(counts["free"], 0)
+        self.assertGreater(counts["occupied"], 0)
+        self.assertTrue(np.any(emap["grid"] < 0), "Exploration grid must keep unknown cells")
+        self.assertTrue(np.any(emap["grid"] == 0), "Exploration grid must contain free cells")
+        self.assertTrue(np.any(emap["grid"] == 100), "Exploration grid must contain occupied cells")
+        self.assertFalse(np.any(costmaps[0]["grid"] < 0), "Navigation costmap must not contain unknown negatives")
+        self.assertEqual(emap["frame_id"], "map")
+        self.assertEqual(emap["accumulation"], "rolling_local_window")
+        self.assertEqual(emap["semantic"], "frontier_input_grid")
+        self.assertEqual(costmaps[0]["unknown_as_obstacle"], True)
+
+    def test_raycast_free_inflation_widens_observed_free_corridors(self):
+        def free_count(radius: float) -> int:
+            m = self._make_module(
+                resolution=0.5,
+                map_radius=4.0,
+                robot_clear_radius=0.0,
+                inflation_radius=0.0,
+                raycast_free_space=True,
+                unknown_as_obstacle_for_costmap=True,
+                raycast_max_rays=100,
+                raycast_free_inflation_radius=radius,
+            )
+            odom = Odometry(pose=Pose(position=Vector3(0, 0, 0),
+                                       orientation=Quaternion(0, 0, 0, 1)),
+                            frame_id="map")
+            m.odometry._deliver(odom)
+            pts = np.array([
+                [2.0, 0.0, 0.6],
+                [2.0, 1.0, 0.6],
+                [1.5, -1.0, 0.6],
+            ], dtype=np.float32)
+            cloud = PointCloud2.from_numpy(pts, frame_id="map")
+            exploration = []
+            m.exploration_grid._add_callback(lambda msg: exploration.append(msg))
+            m.map_cloud._deliver(cloud)
+            self.assertEqual(len(exploration), 1)
+            self.assertGreater(exploration[0]["counts"]["occupied"], 0)
+            self.assertGreater(exploration[0]["counts"]["unknown"], 0)
+            return int(exploration[0]["counts"]["free"])
+
+        self.assertGreater(free_count(0.5), free_count(0.0))
 
 
 # ---------------------------------------------------------------------------

@@ -192,6 +192,28 @@ def test_prepare_tomogram_for_pct_returns_source_when_axes_already_transposed(tm
     assert not (tmp_path / ".pct_runnable_cache").exists()
 
 
+def test_prepare_tomogram_for_pct_returns_cmu_yx_tomogram_source(tmp_path):
+    source = tmp_path / "cmu_flat.pickle"
+    data = np.zeros((5, 1, 3, 4), dtype=np.float32)
+    with source.open("wb") as handle:
+        pickle.dump(
+            {
+                "data": data,
+                "resolution": 0.25,
+                "center": [1.0, 2.0],
+                "slice_h0": 0.0,
+                "slice_dh": 0.5,
+                "grid_info": {"axis_order": "row_y_col_x"},
+            },
+            handle,
+        )
+
+    prepared = prepare_tomogram_for_pct(source)
+
+    assert prepared == source.resolve()
+    assert not (tmp_path / ".pct_runnable_cache").exists()
+
+
 def test_prepare_tomogram_for_pct_reuses_cache_for_same_source_stat(tmp_path):
     source = tmp_path / "tomogram.pickle"
     data = np.zeros((5, 2, 3, 4), dtype=np.float32)

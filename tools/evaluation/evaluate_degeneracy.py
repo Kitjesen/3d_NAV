@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Offline degeneracy evaluation — replay GEODE / ntnu-arl datasets.
+"""Offline degeneracy evaluation - replay GEODE / ntnu-arl datasets.
 
 Reads ROS2 bag or CSV files, replays LiDAR point clouds through the
 degeneracy detection pipeline, records per-frame metrics, and generates
 comparison plots + statistics.
 
-This does NOT run the full SLAM C++ node — it evaluates:
+This does NOT run the full SLAM C++ node - it evaluates:
   1. Degeneracy detection thresholds (eigenvalue analysis)
-  2. Classification accuracy (corridor/tunnel → detected as degenerate)
+  2. Classification accuracy (corridor/tunnel -> detected as degenerate)
   3. Visual odometry fusion quality (if ground truth available)
 
 For full SLAM replay with C++ nodes, use:
@@ -48,7 +48,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 
-# ── Degeneracy frame record ───────────────────────────────────────────
+# -- Degeneracy frame record --
 
 @dataclass
 class DegeneracyFrame:
@@ -67,7 +67,7 @@ class DegeneracyFrame:
     gt_degenerate: Optional[bool] = None
 
 
-# ── CSV I/O ───────────────────────────────────────────────────────────
+# -- CSV I/O --
 
 CSV_HEADER = [
     "timestamp", "eig0", "eig1", "eig2", "eig3", "eig4", "eig5",
@@ -116,7 +116,7 @@ def read_csv(path: str) -> List[DegeneracyFrame]:
     return frames
 
 
-# ── ROS2 bag parsing (optional, requires rosbag2) ────────────────────
+# -- ROS2 bag parsing (optional, requires rosbag2) --
 
 def parse_rosbag_degeneracy(bag_path: str) -> List[DegeneracyFrame]:
     """Extract degeneracy messages from a ROS2 bag.
@@ -173,7 +173,7 @@ def parse_rosbag_degeneracy(bag_path: str) -> List[DegeneracyFrame]:
     return frames
 
 
-# ── Ground truth loading ───��──────────────────────────────────────────
+# -- Ground truth loading --
 
 def load_ground_truth_tum(path: str) -> np.ndarray:
     """Load TUM-format ground truth: timestamp tx ty tz qx qy qz qw.
@@ -196,7 +196,7 @@ def label_degeneracy_from_gt(
 
     Heuristic: if the robot is moving (GT velocity > threshold) but the
     displacement between consecutive poses is very small in certain axes,
-    those axes are degenerate. This is an approximation — real labeling
+    those axes are degenerate. This is an approximation - real labeling
     requires manual annotation per scenario.
 
     For now, we just label frames where condition_number > 1000 AND the
@@ -219,7 +219,7 @@ def label_degeneracy_from_gt(
         idx = np.searchsorted(gt_ts, fr.timestamp)
         idx = min(idx, len(gt_vel) - 1)
         moving = gt_vel[idx] > velocity_threshold
-        # If moving and high condition number → degenerate
+        # If moving and high condition number -> degenerate
         fr.gt_degenerate = moving and fr.condition_number > 1000
 
     n_degen = sum(1 for f in frames if f.gt_degenerate)
@@ -227,7 +227,7 @@ def label_degeneracy_from_gt(
     return frames
 
 
-# ── Statistics ────────────────────────────────────────────────────────
+# -- Statistics --
 
 @dataclass
 class EvalStats:
@@ -323,7 +323,7 @@ def print_stats(stats: EvalStats) -> None:
         logger.info("    F1:        %.3f", stats.f1)
 
 
-# ── Threshold calibration ─────────────────────────────────────────────
+# -- Threshold calibration --
 
 def calibrate_thresholds(
     frames: List[DegeneracyFrame],
@@ -335,7 +335,7 @@ def calibrate_thresholds(
     """
     has_gt = any(f.gt_degenerate is not None for f in frames)
     if not has_gt:
-        logger.warning("No ground truth labels — cannot calibrate thresholds")
+        logger.warning("No ground truth labels - cannot calibrate thresholds")
         return {}
 
     labeled = [f for f in frames if f.gt_degenerate is not None]
@@ -372,13 +372,13 @@ def calibrate_thresholds(
     logger.info("\n=== Threshold Calibration ===")
     logger.info("  Best F1: %.3f", best_f1)
     logger.info("  Suggested thresholds:")
-    logger.info("    condition_number > %.0f → degenerate", best_thresh["condition_number"])
-    logger.info("    effective_ratio < %.2f → degenerate", best_thresh["effective_ratio"])
+    logger.info("    condition_number > %.0f -> degenerate", best_thresh["condition_number"])
+    logger.info("    effective_ratio < %.2f -> degenerate", best_thresh["effective_ratio"])
 
     return best_thresh
 
 
-# ── Plotting ──────��───────────────────────────────────────────────────
+# -- Plotting --
 
 def plot_degeneracy(frames: List[DegeneracyFrame], output_dir: str) -> None:
     """Generate degeneracy analysis plots. Requires matplotlib."""
@@ -387,7 +387,7 @@ def plot_degeneracy(frames: List[DegeneracyFrame], output_dir: str) -> None:
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
-        logger.warning("matplotlib not available — skipping plots")
+        logger.warning("matplotlib not available - skipping plots")
         return
 
     ts = [f.timestamp - frames[0].timestamp for f in frames]
@@ -451,7 +451,7 @@ def plot_degeneracy(frames: List[DegeneracyFrame], output_dir: str) -> None:
     logger.info("Plot saved: %s", hist_path)
 
 
-# ── Main ──────────────────────────��───────────────────────────────────
+# -- Main --
 
 def main():
     parser = argparse.ArgumentParser(

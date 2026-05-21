@@ -533,10 +533,15 @@ class MuJoCoEngine(SimEngine):
 
         # Physics stepping (policy_dt / physics_dt steps)
         n_sub = max(1, round(self._control_dt / self._physics_dt))
-        for _ in range(n_sub):
-            if self._drive_mode == "kinematic":
-                self._apply_kinematic_cmd()
-            mujoco.mj_step(self._model, self._data)
+        if self._drive_mode == "kinematic":
+            for _ in range(n_sub):
+                self._apply_kinematic_cmd(integrate_dt=self._physics_dt)
+                mj_forward = getattr(mujoco, "mj_forward", None)
+                if callable(mj_forward):
+                    mj_forward(self._model, self._data)
+        else:
+            for _ in range(n_sub):
+                mujoco.mj_step(self._model, self._data)
         self._sim_time += self._control_dt
 
         return self.get_robot_state()
@@ -593,7 +598,7 @@ class MuJoCoEngine(SimEngine):
     def _is_idle_policy_command(self, direction: np.ndarray) -> bool:
         return bool(np.linalg.norm(direction) <= self._policy_idle_cmd_eps)
 
-    def _apply_kinematic_cmd(self) -> None:
+    def _apply_kinematic_cmd(self, *, integrate_dt: float = 0.0) -> None:
         """Apply cmd_vel directly to the free joint for deterministic nav smoke tests."""
         if self._model is None or self._data is None:
             return
@@ -611,6 +616,15 @@ class MuJoCoEngine(SimEngine):
         c, s = np.cos(yaw), np.sin(yaw)
         vx_world = vx_body * c - vy_body * s
         vy_world = vx_body * s + vy_body * c
+
+        dt = max(0.0, float(integrate_dt))
+        if dt > 0.0:
+            self._data.qpos[qadr + 0] += vx_world * dt
+            self._data.qpos[qadr + 1] += vy_world * dt
+            yaw += float(wz) * dt
+            c, s = np.cos(yaw), np.sin(yaw)
+            vx_world = vx_body * c - vy_body * s
+            vy_world = vx_body * s + vy_body * c
 
         self._data.qvel[dadr + 0] = vx_world
         self._data.qvel[dadr + 1] = vy_world
@@ -658,12 +672,14 @@ class MuJoCoEngine(SimEngine):
 
     def get_robot_state(self) -> RobotState:
         """Read current robot state snapshot."""
-        pos = self._data.qpos[:3].copy()
-        quat_wxyz = self._data.qpos[3:7].copy()
+        qadr = self._root_qposadr
+        dadr = self._root_dofadr
+        pos = self._data.qpos[qadr:qadr + 3].copy()
+        quat_wxyz = self._data.qpos[qadr + 3:qadr + 7].copy()
         # MuJoCo quaternion w,x,y,z -> ROS x,y,z,w
         orientation = np.array([quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]])
-        linear_vel = self._data.qvel[:3].copy()
-        angular_vel = self._data.qvel[3:6].copy()
+        linear_vel = self._data.qvel[dadr:dadr + 3].copy()
+        angular_vel = self._data.qvel[dadr + 3:dadr + 6].copy()
 
         jp, jv = self._get_joint_state()
         gyro, pg = self._get_imu()
@@ -685,7 +701,8 @@ class MuJoCoEngine(SimEngine):
         """
         body_id = self._base_body_id
         R = self._data.xmat[body_id].reshape(3, 3)  # body-to-world
-        omega_world = self._data.qvel[3:6]
+        dadr = self._root_dofadr
+        omega_world = self._data.qvel[dadr + 3:dadr + 6]
         gyroscope = R.T @ omega_world                 # world -> body frame
 
         gravity_world = np.array([0.0, 0.0, -1.0])
@@ -866,8 +883,12 @@ class MuJoCoEngine(SimEngine):
                 pass  # acquire lock pattern
 
             if self._drive_mode == "kinematic":
-                self._apply_kinematic_cmd()
-            mujoco.mj_step(self._model, self._data)
+                self._apply_kinematic_cmd(integrate_dt=self._physics_dt)
+                mj_forward = getattr(mujoco, "mj_forward", None)
+                if callable(mj_forward):
+                    mj_forward(self._model, self._data)
+            else:
+                mujoco.mj_step(self._model, self._data)
             self._sim_time += self._physics_dt
 
             if self._sim_time - last_policy >= self._control_dt:

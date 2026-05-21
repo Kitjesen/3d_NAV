@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional
 from core.module import Module
 from core.msgs.sensor import Imu, PointCloud2
 from core.registry import register
+from core.runtime_interface import FRAMES, TOPICS
 from core.stream import Out
 
 from .lidar import Lidar, LidarState
@@ -61,8 +62,8 @@ class LidarModule(Module, layer=1):
     def __init__(
         self,
         ip: str | None = None,
-        scan_topic: str = "/lidar/scan",
-        imu_topic: str = "/imu/data",
+        scan_topic: str = TOPICS.lidar_scan,
+        imu_topic: str = TOPICS.imu,
         **kw,
     ):
         super().__init__(**kw)
@@ -88,7 +89,7 @@ class LidarModule(Module, layer=1):
 
     def _on_cloud(self, pts) -> None:
         """Forward numpy (N,4) → PointCloud2 on the scan port."""
-        cloud = PointCloud2.from_numpy(pts, frame_id="livox_frame")
+        cloud = PointCloud2.from_numpy(pts, frame_id=FRAMES.real_lidar)
         self.scan.publish(cloud)
 
     def _on_imu(self, imu_msg: Imu) -> None:

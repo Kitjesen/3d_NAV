@@ -6,7 +6,7 @@ import pickle
 import numpy as np
 
 from nav.global_planner_service import GlobalPlannerService
-from sim.engine.scenarios.large_terrain_assets import build_large_terrain_assets
+from sim.engine.scenarios.large_terrain_assets import DEFAULT_START, build_large_terrain_assets
 from sim.scripts.large_terrain_nav_validation import run_validation
 
 
@@ -34,6 +34,23 @@ def test_large_terrain_assets_write_schema_and_route_catalog(tmp_path):
     assert metadata["name"] == "large_terrain_field"
     assert metadata["shape_xy"] == [121, 81]
     assert len(metadata["obstacles"]) >= 10
+    localization_landmarks = [
+        obstacle
+        for obstacle in metadata["obstacles"]
+        if obstacle.get("kind") == "localization_landmark"
+    ]
+    assert {landmark["name"] for landmark in localization_landmarks} >= {
+        "localization_start_south_panel",
+        "localization_start_west_panel",
+        "localization_start_south_plinth",
+        "localization_start_west_plinth",
+        "localization_lane_north_panel",
+        "localization_lane_south_plinth",
+        "localization_lane_east_panel",
+        "localization_midfield_south_panel",
+        "localization_gate_north_panel",
+    }
+    assert len(localization_landmarks) >= 16
     assert {zone["name"] for zone in metadata["terrain_zones"]} >= {
         "rough_gravel_patch",
         "slope_ramp_band",
@@ -62,8 +79,32 @@ def test_large_terrain_tomogram_marks_obstacles_and_terrain_costs(tmp_path):
     assert _builder_cell(tomo, 4.8, 4.1) == 12.0
     assert _builder_cell(tomo, 4.1, -3.1) >= 100.0
     assert _builder_cell(tomo, -5.55, 2.85) >= 100.0
+    assert _builder_cell(tomo, -9.4, -6.65) >= 100.0
+    assert _builder_cell(tomo, -8.0, -6.15) >= 100.0
+    assert _builder_cell(tomo, 1.75, 2.75) >= 100.0
     assert _builder_cell(tomo, -9.5, -5.6) < 49.9
     assert _builder_cell(tomo, 9.4, 5.4) < 49.9
+
+
+def test_large_terrain_assets_can_align_map_products_to_start_odom_frame(tmp_path):
+    assets = build_large_terrain_assets(
+        tmp_path,
+        map_frame_origin_world_xy=DEFAULT_START[:2],
+    )
+
+    metadata = json.loads(assets.metadata.read_text(encoding="utf-8"))
+    with assets.tomogram.open("rb") as fh:
+        tomo = pickle.load(fh)
+
+    assert metadata["map_frame"] == "start_odom"
+    assert metadata["map_frame_origin_world_xy"] == list(DEFAULT_START[:2])
+    assert _builder_cell(tomo, 0.0, 0.0) < 49.9
+    assert _builder_cell(tomo, 0.10, -1.05) >= 100.0
+    assert _builder_cell(tomo, 1.65, 1.90) >= 100.0
+    assert _builder_cell(tomo, 2.35, -1.55) >= 100.0
+    assert _builder_cell(tomo, 3.20, -0.80) >= 100.0
+    assert _builder_cell(tomo, 1.40, 0.10) < 49.9
+    assert _builder_cell(tomo, 18.90, 11.00) < 49.9
 
 
 def test_large_terrain_astar_route_uses_central_gate(tmp_path):

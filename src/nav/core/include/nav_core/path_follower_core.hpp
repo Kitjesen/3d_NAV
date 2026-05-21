@@ -31,6 +31,8 @@ struct PathFollowerParams {
   double maxYawRate        = 45.0;  // degrees
   double maxSpeed          = 1.0;
   double maxAccel          = 1.0;
+  double turnSpeedYawRateStart = 0.0;  // rad/s; <=0 disables turn-speed coupling
+  double turnSpeedMinScale = 1.0;      // [0,1], applied at maxYawRate
   double switchTimeThre    = 1.0;
   double dirDiffThre       = 0.1;   // rad, ~5.7°
   double omniDirGoalThre   = 1.0;
@@ -58,6 +60,7 @@ struct PathFollowerOutput {
   Twist  cmd;          // body-frame velocity command
   double dirDiff  = 0; // heading error after two-way correction (rad)
   double endDis   = 0; // distance to path end
+  double turnSpeedScale = 1.0;
   bool   canAccel = false;
 };
 
@@ -175,6 +178,21 @@ inline PathFollowerOutput computeControl(
     vehicleYawRate = 0;
   }
 
+  double turnSpeedScale = 1.0;
+  if (p.turnSpeedYawRateStart > 0.0 &&
+      p.turnSpeedMinScale < 1.0 &&
+      maxYawRateRad > p.turnSpeedYawRateStart) {
+    double minScale = p.turnSpeedMinScale;
+    if (minScale < 0.0) minScale = 0.0;
+    if (minScale > 1.0) minScale = 1.0;
+    double ratio = (std::fabs(vehicleYawRate) - p.turnSpeedYawRateStart)
+                 / (maxYawRateRad - p.turnSpeedYawRateStart);
+    if (ratio < 0.0) ratio = 0.0;
+    if (ratio > 1.0) ratio = 1.0;
+    turnSpeedScale = 1.0 - (1.0 - minScale) * ratio;
+  }
+  out.turnSpeedScale = turnSpeedScale;
+
   // ── 速度限制 (pathFollower.cpp:509-518) ──
   if (pathSize <= 1) {
     joySpeed2 = 0;
@@ -182,7 +200,7 @@ inline PathFollowerOutput computeControl(
     joySpeed2 *= endDis / p.slowDwnDisThre;
   }
 
-  double joySpeed3 = joySpeed2 * slowFactor;
+  double joySpeed3 = joySpeed2 * slowFactor * turnSpeedScale;
 
   // ── canAccel + 速度积分 (pathFollower.cpp:526-530) ──
   auto stepToward = [&](double cur, double tgt) {

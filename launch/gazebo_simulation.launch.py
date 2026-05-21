@@ -22,7 +22,7 @@ from launch.substitutions import LaunchConfiguration
 
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_DEFAULT_WORLD = os.path.join(_REPO_ROOT, "sim", "worlds", "lingtu_gazebo_empty.sdf")
+_DEFAULT_WORLD = os.path.join(_REPO_ROOT, "sim", "worlds", "lingtu_gazebo_demo_room.sdf")
 _DEFAULT_ROBOT_MODEL = os.path.join(
     _REPO_ROOT,
     "sim",
@@ -171,7 +171,7 @@ def _optional_gazebo_actions(context, *_args, **_kwargs):
             ]
             actions.append(
                 TimerAction(
-                    period=3.0 if spawn_robot else 0.0,
+                    period=0.0,
                     actions=bridge_actions,
                 )
             )
@@ -206,7 +206,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("spawn_x", default_value="0.0"),
             DeclareLaunchArgument("spawn_y", default_value="0.0"),
-            DeclareLaunchArgument("spawn_z", default_value="0.35"),
+            DeclareLaunchArgument("spawn_z", default_value="0.0"),
             DeclareLaunchArgument("spawn_yaw", default_value="0.0"),
             DeclareLaunchArgument(
                 "use_bridge",

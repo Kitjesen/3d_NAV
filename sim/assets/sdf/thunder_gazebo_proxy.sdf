@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <sdf version="1.9">
   <model name="thunder">
-    <pose>0 0 0.18 0 0 0</pose>
+    <pose>0 0 0.15 0 0 0</pose>
 
     <link name="base_link">
       <inertial>
@@ -21,6 +21,14 @@
             <size>0.72 0.34 0.22</size>
           </box>
         </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>1.0</mu>
+              <mu2>1.0</mu2>
+            </ode>
+          </friction>
+        </surface>
       </collision>
       <visual name="body_visual">
         <geometry>
@@ -31,6 +39,18 @@
         <material>
           <ambient>0.08 0.14 0.22 1</ambient>
           <diffuse>0.10 0.20 0.36 1</diffuse>
+        </material>
+      </visual>
+      <visual name="front_marker_visual">
+        <pose>0.43 0 0.04 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.16 0.20 0.08</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.95 0.42 0.08 1</ambient>
+          <diffuse>1.0 0.50 0.12 1</diffuse>
         </material>
       </visual>
     </link>
@@ -55,6 +75,14 @@
             <length>0.06</length>
           </cylinder>
         </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>1.4</mu>
+              <mu2>1.4</mu2>
+            </ode>
+          </friction>
+        </surface>
       </collision>
       <visual name="visual">
         <geometry>
@@ -69,7 +97,11 @@
       <parent>base_link</parent>
       <child>front_left_wheel</child>
       <axis>
-        <xyz>0 0 1</xyz>
+        <xyz>0 1 0</xyz>
+        <dynamics>
+          <damping>1.0</damping>
+          <friction>0.4</friction>
+        </dynamics>
       </axis>
     </joint>
 
@@ -93,6 +125,14 @@
             <length>0.06</length>
           </cylinder>
         </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>1.4</mu>
+              <mu2>1.4</mu2>
+            </ode>
+          </friction>
+        </surface>
       </collision>
       <visual name="visual">
         <geometry>
@@ -107,7 +147,11 @@
       <parent>base_link</parent>
       <child>rear_left_wheel</child>
       <axis>
-        <xyz>0 0 1</xyz>
+        <xyz>0 1 0</xyz>
+        <dynamics>
+          <damping>1.0</damping>
+          <friction>0.4</friction>
+        </dynamics>
       </axis>
     </joint>
 
@@ -131,6 +175,14 @@
             <length>0.06</length>
           </cylinder>
         </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>1.4</mu>
+              <mu2>1.4</mu2>
+            </ode>
+          </friction>
+        </surface>
       </collision>
       <visual name="visual">
         <geometry>
@@ -145,7 +197,11 @@
       <parent>base_link</parent>
       <child>front_right_wheel</child>
       <axis>
-        <xyz>0 0 1</xyz>
+        <xyz>0 1 0</xyz>
+        <dynamics>
+          <damping>1.0</damping>
+          <friction>0.4</friction>
+        </dynamics>
       </axis>
     </joint>
 
@@ -169,6 +225,14 @@
             <length>0.06</length>
           </cylinder>
         </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>1.4</mu>
+              <mu2>1.4</mu2>
+            </ode>
+          </friction>
+        </surface>
       </collision>
       <visual name="visual">
         <geometry>
@@ -183,7 +247,11 @@
       <parent>base_link</parent>
       <child>rear_right_wheel</child>
       <axis>
-        <xyz>0 0 1</xyz>
+        <xyz>0 1 0</xyz>
+        <dynamics>
+          <damping>1.0</damping>
+          <friction>0.4</friction>
+        </dynamics>
       </axis>
     </joint>
 
@@ -191,7 +259,6 @@
       <pose>0.28 0 0.20 0 0 0</pose>
       <sensor name="lidar" type="gpu_lidar">
         <update_rate>10</update_rate>
-        <topic>/world/lingtu_gazebo_empty/model/thunder/link/lidar_link/sensor/lidar/scan</topic>
         <ray>
           <scan>
             <horizontal>
@@ -201,15 +268,15 @@
               <max_angle>3.14159</max_angle>
             </horizontal>
             <vertical>
-              <samples>32</samples>
+              <samples>16</samples>
               <resolution>1</resolution>
-              <min_angle>-0.45</min_angle>
-              <max_angle>0.45</max_angle>
+              <min_angle>-0.25</min_angle>
+              <max_angle>0.25</max_angle>
             </vertical>
           </scan>
           <range>
             <min>0.2</min>
-            <max>30.0</max>
+            <max>8.0</max>
             <resolution>0.02</resolution>
           </range>
         </ray>
@@ -226,7 +293,6 @@
       <pose>0.36 0 0.22 0 0 0</pose>
       <sensor name="camera" type="camera">
         <update_rate>15</update_rate>
-        <topic>/world/lingtu_gazebo_empty/model/thunder/link/camera_link/sensor/camera/image</topic>
         <camera>
           <horizontal_fov>1.047</horizontal_fov>
           <image>
@@ -244,7 +310,6 @@
       </sensor>
       <sensor name="depth_camera" type="depth_camera">
         <update_rate>15</update_rate>
-        <topic>/world/lingtu_gazebo_empty/model/thunder/link/camera_link/sensor/depth_camera/image</topic>
         <camera>
           <horizontal_fov>1.047</horizontal_fov>
           <image>

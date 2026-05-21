@@ -202,6 +202,43 @@ TEST(PathFollowerSlow, SlowFactorReducesSpeed) {
   EXPECT_LT(speed2, speed1);
 }
 
+TEST(PathFollowerSlow, TurnSpeedCouplingReducesHighYawLinearSpeed) {
+  PathFollowerParams p;
+  p.maxSpeed = 1.0;
+  p.maxAccel = 100.0;
+  p.maxYawRate = 45.0;
+  p.dirDiffThre = 1.0;
+  p.turnSpeedYawRateStart = 0.10;
+  p.turnSpeedMinScale = 0.40;
+  PathFollowerState state;
+
+  std::vector<Vec3> path = {{1.0, 0.0, 0.0}, {2.0, 0.0, 0.0}, {5.0, 0.0, 0.0}};
+  Vec3 robot{0.0, 0.0, 0.0};
+
+  auto out = computeControl(robot, -0.20, path, 1.0, 0.0, 1.0, 0, p, state);
+
+  EXPECT_NEAR(out.turnSpeedScale, 0.40, 1e-6);
+  EXPECT_NEAR(state.vehicleSpeed, 0.40, 1e-6);
+  EXPECT_GT(std::fabs(out.cmd.wz), p.turnSpeedYawRateStart);
+}
+
+TEST(PathFollowerSlow, TurnSpeedCouplingDefaultsToNoSpeedChange) {
+  PathFollowerParams p;
+  p.maxSpeed = 1.0;
+  p.maxAccel = 100.0;
+  p.maxYawRate = 45.0;
+  p.dirDiffThre = 1.0;
+  PathFollowerState state;
+
+  std::vector<Vec3> path = {{1.0, 0.0, 0.0}, {2.0, 0.0, 0.0}, {5.0, 0.0, 0.0}};
+  Vec3 robot{0.0, 0.0, 0.0};
+
+  auto out = computeControl(robot, -0.20, path, 1.0, 0.0, 1.0, 0, p, state);
+
+  EXPECT_NEAR(out.turnSpeedScale, 1.0, 1e-6);
+  EXPECT_NEAR(state.vehicleSpeed, 1.0, 1e-6);
+}
+
 // ── computeControl — empty path ──
 
 TEST(PathFollowerEdge, EmptyPath) {

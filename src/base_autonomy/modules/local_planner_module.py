@@ -346,6 +346,16 @@ class LocalPlannerModule(Module, layer=2):
         self._global_path_points: np.ndarray | None = None
         self._path_frame_id = "map"
         self._corridor_lookahead_m = float(kw.get("corridor_lookahead_m", 3.0))
+        self._allow_direct_track_fallback = bool(
+            kw.get("allow_direct_track_fallback", False)
+        )
+        self._ignore_near_field_stop = bool(kw.get("ignore_near_field_stop", False))
+        self._direct_track_fallback_min_distance_m = float(
+            kw.get("direct_track_fallback_min_distance_m", _MIN_TRACKABLE_LOCAL_PATH_XY)
+        )
+        self._min_trackable_local_path_xy = float(
+            kw.get("min_trackable_local_path_m", _MIN_TRACKABLE_LOCAL_PATH_XY)
+        )
         self._terrain_points: np.ndarray | None = None
         self._boundary_points: np.ndarray | None = None
         self._added_obstacle_points: np.ndarray | None = None
@@ -364,6 +374,10 @@ class LocalPlannerModule(Module, layer=2):
         # One-shot warning flags
         self._warned_no_core: bool = False
         self._warned_no_path_data: bool = False
+        self._last_control_hint: dict[str, Any] = {}
+        self._last_local_path_points: int = 0
+        self._last_local_path_span_m: float = 0.0
+        self._last_direct_track_fallback_ts: float = 0.0
 
         # W2-6: cmu_py grid parameters — pulled from config at setup() if the
         # `local_planner_grid` section is present, otherwise keep CMU defaults.
@@ -633,7 +647,7 @@ class LocalPlannerModule(Module, layer=2):
         self._latest_waypoint = None
         self._global_path_points = None
         self._publish_control_hint(reason="clear_path")
-        self.local_path.publish(Path(poses=[], frame_id=self._path_frame_id))
+        self._publish_local_path([])
 
     def _on_map_frame_jump(self, event: dict) -> None:
         if isinstance(event, dict):
@@ -695,8 +709,10 @@ class LocalPlannerModule(Module, layer=2):
                 )
                 for p in path_points
             ]
-            self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
+            self._publish_local_path(poses)
             self._publish_control_hint(reason="simple_path")
+        elif self._backend == "nanobind" and wp is not None and self._core is not None:
+            self._run_nanobind(float(getattr(wp, "ts", 0.0) or time.time()))
 
     def _on_clear_path(self, clear: bool) -> None:
         if not clear:
@@ -771,6 +787,13 @@ class LocalPlannerModule(Module, layer=2):
         )
 
         if not result.path:
+            if self._publish_direct_track_fallback(
+                near_field_stop=bool(getattr(result, "near_field_stop", False)),
+                path_found=bool(getattr(result, "path_found", False)),
+                recovery_state=int(getattr(result, "recovery_state", 0) or 0),
+                reason="no_local_path",
+            ):
+                return
             self._publish_control_hint(
                 slow_down=int(getattr(result, "slow_down", 0) or 0),
                 near_field_stop=bool(getattr(result, "near_field_stop", False)),
@@ -779,7 +802,7 @@ class LocalPlannerModule(Module, layer=2):
                 safety_stop=True,
                 reason="no_local_path",
             )
-            self.local_path.publish(Path(poses=[], frame_id=self._path_frame_id))
+            self._publish_local_path([])
             return
 
         raw_xy = np.asarray([[float(v.x), float(v.y)] for v in result.path], dtype=float)
@@ -793,10 +816,17 @@ class LocalPlannerModule(Module, layer=2):
         recovery_state = int(getattr(result, "recovery_state", 0))
         trackable = (
             len(result.path) >= 2
-            and max(xy_length, xy_span) >= _MIN_TRACKABLE_LOCAL_PATH_XY
+            and max(xy_length, xy_span) >= self._min_trackable_local_path_xy
             and (path_found or recovery_state in (1, 2))
         )
         if not trackable:
+            if self._publish_direct_track_fallback(
+                near_field_stop=bool(getattr(result, "near_field_stop", False)),
+                path_found=path_found,
+                recovery_state=recovery_state,
+                reason="untrackable_local_path",
+            ):
+                return
             self._publish_control_hint(
                 slow_down=int(getattr(result, "slow_down", 0) or 0),
                 near_field_stop=bool(getattr(result, "near_field_stop", False)),
@@ -805,7 +835,7 @@ class LocalPlannerModule(Module, layer=2):
                 safety_stop=True,
                 reason="untrackable_local_path",
             )
-            self.local_path.publish(Path(poses=[], frame_id=self._path_frame_id))
+            self._publish_local_path([])
             return
 
         poses = []
@@ -822,7 +852,7 @@ class LocalPlannerModule(Module, layer=2):
                 ),
                 frame_id=self._path_frame_id,
             ))
-        self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
+        self._publish_local_path(poses)
 
     # ------------------------------------------------------------------ #
     # CMU Python scorer                                                    #
@@ -900,7 +930,7 @@ class LocalPlannerModule(Module, layer=2):
                 path_found=False,
                 reason="no_feasible_local_path",
             )
-            self.local_path.publish(Path(poses=[], frame_id=self._path_frame_id))
+            self._publish_local_path([])
             return
 
         rot_dir    = selected_group_id // _GROUP_NUM
@@ -938,7 +968,7 @@ class LocalPlannerModule(Module, layer=2):
                 )
             )
 
-        self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
+        self._publish_local_path(poses)
         self._publish_control_hint(reason="cmu_py_path")
 
     # ------------------------------------------------------------------ #
@@ -965,7 +995,10 @@ class LocalPlannerModule(Module, layer=2):
     ) -> None:
         slow_down = max(0, min(3, int(slow_down or 0)))
         near_field_stop = bool(near_field_stop)
-        stop = near_field_stop if safety_stop is None else bool(safety_stop)
+        if safety_stop is None:
+            stop = near_field_stop and not self._ignore_near_field_stop
+        else:
+            stop = bool(safety_stop)
         payload: dict[str, Any] = {
             "ts": time.time(),
             "source": "LocalPlannerModule",
@@ -978,17 +1011,91 @@ class LocalPlannerModule(Module, layer=2):
             payload["path_found"] = bool(path_found)
         if recovery_state is not None:
             payload["recovery_state"] = int(recovery_state)
+        self._last_control_hint = dict(payload)
         self.control_hint.publish(payload)
+
+    def _publish_local_path(self, poses: list[PoseStamped]) -> None:
+        self._last_local_path_points = len(poses)
+        if len(poses) >= 2:
+            start = poses[0].pose.position
+            end = poses[-1].pose.position
+            self._last_local_path_span_m = float(
+                math.hypot(end.x - start.x, end.y - start.y)
+            )
+        else:
+            self._last_local_path_span_m = 0.0
+        self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
+
+    def _publish_direct_track_fallback(
+        self,
+        *,
+        near_field_stop: bool,
+        path_found: bool,
+        recovery_state: int,
+        reason: str,
+    ) -> bool:
+        if not self._allow_direct_track_fallback:
+            return False
+        if near_field_stop:
+            if not self._ignore_near_field_stop:
+                return False
+            if not path_found:
+                return False
+        wp = self._latest_waypoint
+        if wp is None:
+            return False
+        goal = self._effective_goal(wp)
+        if not np.all(np.isfinite(goal[:2])):
+            return False
+        span = float(np.linalg.norm(goal[:2] - self._robot_pos[:2]))
+        if span < max(0.0, self._direct_track_fallback_min_distance_m):
+            return False
+        path_points = self._straight_line(self._robot_pos.copy(), goal, step=0.5)
+        if len(path_points) < 2:
+            return False
+        poses = [
+            PoseStamped(
+                pose=Pose(
+                    position=Vector3(float(p[0]), float(p[1]), float(p[2])),
+                    orientation=Quaternion(0, 0, 0, 1),
+                ),
+                frame_id=self._path_frame_id,
+            )
+            for p in path_points
+        ]
+        self._last_direct_track_fallback_ts = time.time()
+        self._publish_control_hint(
+            near_field_stop=near_field_stop,
+            safety_stop=False,
+            path_found=path_found,
+            recovery_state=recovery_state,
+            reason=f"direct_track_fallback:{reason}",
+        )
+        self._publish_local_path(poses)
+        return True
 
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
+        core_paths_loaded = False
+        if self._core is not None and hasattr(self._core, "paths_loaded"):
+            core_paths_loaded = bool(self._core.paths_loaded())
         info["local_planner"] = {
             "backend":       self._backend,
-            "paths_loaded":  self._path_data is not None or (self._core is not None and self._core.paths_loaded()),
+            "paths_loaded":  self._path_data is not None or core_paths_loaded,
             "terrain_pts":   (self._terrain_points.shape[0]
                               if self._terrain_points is not None else 0),
             "running":       (self._core is not None) or
                              (self._node is not None
                               and getattr(self._node, "_process", None) is not None),
+            "direct_track_fallback_enabled": self._allow_direct_track_fallback,
+            "min_trackable_local_path_m": round(self._min_trackable_local_path_xy, 3),
+            "last_direct_track_fallback_age_ms": (
+                round((time.time() - self._last_direct_track_fallback_ts) * 1000)
+                if self._last_direct_track_fallback_ts > 0
+                else None
+            ),
+            "last_control_hint": dict(self._last_control_hint),
+            "last_local_path_points": self._last_local_path_points,
+            "last_local_path_span_m": round(self._last_local_path_span_m, 3),
         }
         return info

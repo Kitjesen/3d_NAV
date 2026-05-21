@@ -29,6 +29,7 @@ from core.msgs.gnss import GnssFixType, GnssOdom
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
+from core.runtime_interface import FRAMES, TOPICS
 from core.runtime_policy import slam_backend_contract
 from core.stream import In, Out
 from core.utils.scene_mode_detector import SceneModeConfig, SceneModeDetector
@@ -108,11 +109,11 @@ class SlamBridgeModule(Module, layer=1):
 
     def __init__(
         self,
-        cloud_topic: str = "/nav/map_cloud",
-        odom_topic: str = "/nav/odometry",
-        quality_topic: str = "/nav/localization_quality",
-        registered_cloud_topic: str = "/nav/registered_cloud",
-        saved_map_topic: str = "/nav/saved_map_cloud",
+        cloud_topic: str = TOPICS.map_cloud,
+        odom_topic: str = TOPICS.odometry,
+        quality_topic: str = TOPICS.localization_quality,
+        registered_cloud_topic: str = TOPICS.registered_cloud,
+        saved_map_topic: str = TOPICS.saved_map_cloud,
         backend_profile: str = "bridge",
         **kw,
     ):
@@ -184,12 +185,18 @@ class SlamBridgeModule(Module, layer=1):
         # Drift guard — detect odometry divergence and auto-relocalize
         self._drift_max_speed: float = kw.get("drift_max_speed", 5.0)       # m/s, quad max ~3
         self._drift_max_jump: float = kw.get("drift_max_jump", 2.0)         # m between frames
+        self._drift_max_z_jump: float = kw.get("drift_max_z_jump", 2.0)     # m between frames
+        self._drift_max_abs_z: float = kw.get("drift_max_abs_z", 20.0)      # m from odom plane
         self._drift_max_pos: float = kw.get("drift_max_pos", 500.0)         # m from origin
         self._drift_confirm_frames: int = kw.get("drift_confirm_frames", 5) # consecutive bad
         self._drift_bad_count: int = 0
         self._drift_last_good_pos: np.ndarray | None = None                 # for relocalize
         self._drift_last_good_yaw: float = 0.0
         self._drift_relocalize_cooldown: float = kw.get("drift_relocalize_cooldown", 30.0)
+        self._drift_recovery_enabled: bool = bool(kw.get(
+            "drift_recovery_enabled",
+            _env_bool("LINGTU_SLAM_DRIFT_RECOVERY", True),
+        ))
         self._drift_last_relocalize: float = 0.0
         self._prev_odom_pos: np.ndarray | None = None
 
@@ -494,7 +501,7 @@ class SlamBridgeModule(Module, layer=1):
             # on it.
             health_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
             self._create_subscription(
-                node, String, "/nav/localization_health",
+                node, String, TOPICS.localization_health,
                 self._on_rclpy_localization_health, health_qos,
                 callback_group=callback_group)
         except Exception as e:
@@ -556,13 +563,20 @@ class SlamBridgeModule(Module, layer=1):
         Checks:
           1. |velocity| > max_speed (quad can't exceed ~3 m/s)
           2. |position jump| > max_jump between consecutive frames
-          3. |position| > max_pos from origin (indoor environment bound)
+          3. |Z jump| or |Z| impossible for a ground robot
+          4. |position| > max_pos from origin (indoor environment bound)
 
         After drift_confirm_frames consecutive bad readings, triggers
         auto-relocalize to last known good position.
         """
         pos = np.array([odom.x, odom.y, odom.z])
-        speed = abs(getattr(odom, 'vx', 0.0))
+        speed = float(
+            math.sqrt(
+                float(getattr(odom, "vx", 0.0)) ** 2
+                + float(getattr(odom, "vy", 0.0)) ** 2
+                + float(getattr(getattr(odom, "twist", None), "linear", Vector3()).z) ** 2
+            )
+        )
         bad = False
 
         # Check 1: speed
@@ -571,11 +585,18 @@ class SlamBridgeModule(Module, layer=1):
 
         # Check 2: position jump
         if self._prev_odom_pos is not None:
-            jump = float(np.linalg.norm(pos[:2] - self._prev_odom_pos[:2]))
+            jump = float(np.linalg.norm(pos - self._prev_odom_pos))
             if jump > self._drift_max_jump:
                 bad = True
+            z_jump = abs(float(pos[2] - self._prev_odom_pos[2]))
+            if z_jump > self._drift_max_z_jump:
+                bad = True
 
-        # Check 3: absolute position
+        # Check 3: ground-robot vertical bound
+        if abs(float(pos[2])) > self._drift_max_abs_z:
+            bad = True
+
+        # Check 4: absolute XY position
         if np.linalg.norm(pos[:2]) > self._drift_max_pos:
             bad = True
 
@@ -608,7 +629,10 @@ class SlamBridgeModule(Module, layer=1):
             )
 
             # Auto-relocalize (with cooldown)
-            if now - self._drift_last_relocalize > self._drift_relocalize_cooldown:
+            if (
+                self._drift_recovery_enabled
+                and now - self._drift_last_relocalize > self._drift_relocalize_cooldown
+            ):
                 self._drift_last_relocalize = now
                 threading.Thread(
                     target=self._auto_relocalize,
@@ -825,9 +849,10 @@ class SlamBridgeModule(Module, layer=1):
             svc.stop("localizer")
             svc.stop("slam")
             self._ensure_recovery_services(svc, "slam")
-            if not self._wait_ros_topic_publishers("/nav/odometry", timeout=30.0):
+            if not self._wait_ros_topic_publishers(self._odom_topic, timeout=30.0):
                 logger.error(
-                    "Localization recovery: /nav/odometry did not regain a publisher"
+                    "Localization recovery: %s did not regain a publisher",
+                    self._odom_topic,
                 )
                 self._ensure_localizer_service_best_effort(svc)
                 return False
@@ -835,18 +860,19 @@ class SlamBridgeModule(Module, layer=1):
                 restart_start_mono, timeout=10.0
             ):
                 logger.error(
-                    "Localization recovery: /nav/odometry publisher returned "
-                    "but no fresh odometry sample reached SlamBridge"
+                    "Localization recovery: %s publisher returned but no fresh "
+                    "odometry sample reached SlamBridge",
+                    self._odom_topic,
                 )
                 self._ensure_localizer_service_best_effort(svc)
                 return False
             self._ensure_recovery_services(svc, "localizer")
             if not self._wait_ros_topic_publishers(
-                "/nav/localization_health", timeout=30.0
+                TOPICS.localization_health, timeout=30.0
             ):
                 logger.error(
-                    "Localization recovery: /nav/localization_health did not "
-                    "regain a publisher"
+                    "Localization recovery: %s did not regain a publisher",
+                    TOPICS.localization_health,
                 )
                 self._ensure_localizer_service_best_effort(svc)
                 return False
@@ -854,8 +880,9 @@ class SlamBridgeModule(Module, layer=1):
                 restart_start_wall, timeout=10.0
             ):
                 logger.error(
-                    "Localization recovery: /nav/localization_health publisher "
-                    "returned but no fresh health sample reached SlamBridge"
+                    "Localization recovery: %s publisher returned but no fresh "
+                    "health sample reached SlamBridge",
+                    TOPICS.localization_health,
                 )
                 self._ensure_localizer_service_best_effort(svc)
                 return False
@@ -899,10 +926,10 @@ class SlamBridgeModule(Module, layer=1):
                     )
                     self._ensure_localizer_service_best_effort()
                     return False
-            if not self._wait_ros_topic_publishers("/nav/odometry", timeout=30.0):
+            if not self._wait_ros_topic_publishers(self._odom_topic, timeout=30.0):
                 logger.error(
-                    "Localization recovery fallback: /nav/odometry did not "
-                    "regain a publisher"
+                    "Localization recovery fallback: %s did not regain a publisher",
+                    self._odom_topic,
                 )
                 self._ensure_localizer_service_best_effort()
                 return False
@@ -910,8 +937,9 @@ class SlamBridgeModule(Module, layer=1):
                 restart_start_mono, timeout=10.0
             ):
                 logger.error(
-                    "Localization recovery fallback: /nav/odometry publisher "
-                    "returned but no fresh odometry sample reached SlamBridge"
+                    "Localization recovery fallback: %s publisher returned but no "
+                    "fresh odometry sample reached SlamBridge",
+                    self._odom_topic,
                 )
                 self._ensure_localizer_service_best_effort()
                 return False
@@ -932,11 +960,11 @@ class SlamBridgeModule(Module, layer=1):
                 )
                 return False
             if not self._wait_ros_topic_publishers(
-                "/nav/localization_health", timeout=30.0
+                TOPICS.localization_health, timeout=30.0
             ):
                 logger.error(
-                    "Localization recovery fallback: /nav/localization_health "
-                    "did not regain a publisher"
+                    "Localization recovery fallback: %s did not regain a publisher",
+                    TOPICS.localization_health,
                 )
                 self._ensure_localizer_service_best_effort()
                 return False
@@ -944,9 +972,9 @@ class SlamBridgeModule(Module, layer=1):
                 restart_start_wall, timeout=10.0
             ):
                 logger.error(
-                    "Localization recovery fallback: /nav/localization_health "
-                    "publisher returned but no fresh health sample reached "
-                    "SlamBridge"
+                    "Localization recovery fallback: %s publisher returned but no "
+                    "fresh health sample reached SlamBridge",
+                    TOPICS.localization_health,
                 )
                 self._ensure_localizer_service_best_effort()
                 return False
@@ -1091,7 +1119,7 @@ class SlamBridgeModule(Module, layer=1):
             subprocess.run(
                 ["bash", "-c",
                  ros_env +
-                 f"ros2 service call /nav/relocalize interface/srv/Relocalize "
+                 f"ros2 service call {TOPICS.relocalize_service} interface/srv/Relocalize "
                  f"\"{{pcd_path: '{pcd_path}', x: {pos[0]}, y: {pos[1]}, z: 0.0, "
                  f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\""],
                 capture_output=True, text=True, encoding="utf-8",
@@ -1284,9 +1312,10 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                xyz_map = self._maybe_apply_map_odom_to_points(xyz)
+                source_frame = self._cloud_frame_from_msg(msg, default=FRAMES.odom)
+                xyz_map, frame_id = self._map_cloud_points_and_frame(xyz, source_frame)
                 self._mark_cloud_received()
-                self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id="map"))
+                self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id=frame_id))
         except Exception as e:
             logger.debug("SlamBridge dds cloud error: %s", e)
 
@@ -1308,7 +1337,7 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
+                self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id=FRAMES.map))
         except Exception as e:
             logger.debug("SlamBridge dds saved_map error: %s", e)
 
@@ -1410,10 +1439,10 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                # Keep points in the same frame semantics as odometry.
-                xyz_map = self._maybe_apply_map_odom_to_points(xyz)
+                source_frame = self._cloud_frame_from_msg(msg, default=FRAMES.odom)
+                xyz_map, frame_id = self._map_cloud_points_and_frame(xyz, source_frame)
                 self._mark_cloud_received()
-                self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id="map"))
+                self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id=frame_id))
         except Exception as e:
             logger.debug("SlamBridge rclpy cloud error: %s", e)
 
@@ -1435,7 +1464,7 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
+                self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id=FRAMES.map))
         except Exception as e:
             logger.debug("SlamBridge rclpy saved_map error: %s", e)
 
@@ -1450,6 +1479,22 @@ class SlamBridgeModule(Module, layer=1):
         R = T[:3, :3].astype(np.float32)
         t = T[:3, 3].astype(np.float32)
         return (xyz @ R.T) + t
+
+    def _cloud_frame_from_msg(self, msg, *, default: str) -> str:
+        header = getattr(msg, "header", None)
+        frame_id = str(getattr(header, "frame_id", "") or default).strip().lstrip("/")
+        return frame_id or default
+
+    def _map_cloud_points_and_frame(
+        self,
+        xyz: np.ndarray,
+        source_frame: str,
+    ) -> tuple[np.ndarray, str]:
+        """Return map-cloud points without relabeling odom data as map data."""
+
+        if getattr(self, "_T_map_odom", None) is not None and self._should_apply_map_odom_tf():
+            return self._apply_map_odom_to_points(xyz), FRAMES.map
+        return xyz, (source_frame or FRAMES.odom)
 
     def _should_apply_map_odom_tf(self) -> bool:
         """Return whether incoming SLAM data needs localizer map->odom lift.
@@ -1542,7 +1587,7 @@ class SlamBridgeModule(Module, layer=1):
         odom.pose.orientation.y = float(ny)
         odom.pose.orientation.z = float(nz)
         odom.pose.orientation.w = float(nw)
-        odom.frame_id = "map"
+        odom.frame_id = FRAMES.map
         return odom
 
     def _cache_map_odom_tf(self, tx, ty, tz, qx, qy, qz, qw):
@@ -1686,8 +1731,8 @@ class SlamBridgeModule(Module, layer=1):
                     linear=Vector3(x=float(t.linear.x), y=float(t.linear.y), z=float(t.linear.z)),
                     angular=Vector3(x=float(t.angular.x), y=float(t.angular.y), z=float(t.angular.z)),
                 ),
-                frame_id=str(getattr(msg.header, "frame_id", "") or "odom"),
-                child_frame_id=str(getattr(msg, "child_frame_id", "") or "body"),
+                frame_id=str(getattr(msg.header, "frame_id", "") or FRAMES.odom),
+                child_frame_id=str(getattr(msg, "child_frame_id", "") or FRAMES.body),
             )
             # Track max position covariance from IESKF P matrix (filled by lio_node.cpp)
             cov = msg.pose.covariance  # 36-element row-major 6x6
@@ -1695,6 +1740,11 @@ class SlamBridgeModule(Module, layer=1):
                 self._max_pos_cov = max(float(cov[0]), float(cov[7]), float(cov[14]))
 
             fused = self._fuse_odometry(slam_odom)
+            # Keep the rclpy fallback under the same drift guard as DDS. Live
+            # sim and desktop setups often use rclpy, so a diverged LIO pose
+            # must not reach navigation just because it bypassed CycloneDDS.
+            if self._check_drift(fused):
+                return
             # Localizer publishes odom-frame poses plus map->odom TF; Super-LIO
             # relocation already publishes its optimized world/map pose.
             fused = self._maybe_apply_map_odom_to_odometry(fused)
@@ -2204,7 +2254,7 @@ class SlamBridgeModule(Module, layer=1):
         return self._last_gnss_odom.fix_type in (
             GnssFixType.RTK_FIXED, GnssFixType.RTK_FLOAT)
 
-    # ── Localization health watchdog ──────────────────────────────��──────
+    # Localization health watchdog.
 
     def _watchdog_loop(self) -> None:
         """Periodic localization health check."""

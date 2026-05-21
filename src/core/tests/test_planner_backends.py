@@ -112,6 +112,69 @@ class TestPCTBackend:
         b = self._backend(tomogram_path="not_a_real_file.pickle")
         assert len(b._load_error) > 0
 
+    def test_near_zero_route_bypasses_native_pct_plan(self, monkeypatch):
+        from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+
+        class FakeNativePlanner:
+            def __init__(self):
+                self.plan_calls = 0
+
+            def pos2idx(self, _pos):
+                return np.array([10.0, 20.0])
+
+            def plan(self, *_args):
+                self.plan_calls += 1
+                raise AssertionError("native PCT plan must not be called")
+
+        planner = FakeNativePlanner()
+        backend = _PCTBackend.__new__(_PCTBackend)
+        backend._planner = planner
+        backend._resolution = 0.2
+        backend._load_error = ""
+        monkeypatch.setattr(
+            backend,
+            "_select_traversable_height",
+            lambda _pos, fallback_z: float(fallback_z),
+        )
+
+        path = backend.plan(
+            np.array([1.0, 2.0, 0.3]),
+            np.array([1.35, 2.0, 0.4]),
+        )
+
+        assert planner.plan_calls == 0
+        assert path == [(1.0, 2.0, 0.3), (1.35, 2.0, 0.4)]
+
+    def test_near_xy_route_bypasses_native_pct_plan(self, monkeypatch):
+        from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+
+        class FakeNativePlanner:
+            def __init__(self):
+                self.plan_calls = 0
+
+            def plan(self, *_args):
+                self.plan_calls += 1
+                raise AssertionError("native PCT plan must not be called")
+
+        planner = FakeNativePlanner()
+        backend = _PCTBackend.__new__(_PCTBackend)
+        backend._planner = planner
+        backend._resolution = 0.2
+        backend._load_error = ""
+        monkeypatch.setattr(
+            backend,
+            "_select_traversable_height",
+            lambda _pos, fallback_z: float(fallback_z),
+        )
+
+        path = backend.plan(
+            np.array([1.0, 2.0, 0.3]),
+            np.array([1.1, 2.0, 0.4]),
+        )
+
+        assert planner.plan_calls == 0
+        assert path == [(1.0, 2.0, 0.3), (1.1, 2.0, 0.4)]
+
 
 # ---------------------------------------------------------------------------
 # _AStarBackend tests

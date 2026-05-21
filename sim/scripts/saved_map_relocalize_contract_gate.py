@@ -127,6 +127,23 @@ def run_gate() -> dict[str, Any]:
     return {
         "schema_version": "lingtu.saved_map_relocalize_contract.v1",
         "ok": not blockers,
+        "validation_level": "contract_only_no_runtime_relocalization",
+        "runtime_stage": "saved_map_relocalization",
+        "map_dependency": "saved_map_required",
+        "requires_saved_map": True,
+        "requires_live_slam": False,
+        "requires_tomogram": False,
+        "runtime_relocalization_executed": False,
+        "runtime_relocalization_validated": False,
+        "validated_claims": (
+            "saved_map_relocalization_service_contract",
+            "localizer_bridge_status_contract",
+        ),
+        "forbidden_claims": (
+            "runtime_relocalization_validated",
+            "saved_map_navigation_validated",
+            "pct_saved_map_navigation_validated",
+        ),
         "simulation_only": True,
         "real_robot_motion": False,
         "cmd_vel_sent_to_hardware": False,

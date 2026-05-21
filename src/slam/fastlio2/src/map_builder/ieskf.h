@@ -86,6 +86,21 @@ class IESKF
 public:
     IESKF() = default;
     void setMaxIter(size_t iter) { m_max_iter = iter; }
+    void setDegeneracyGuard(
+        int max_update_dof,
+        double max_condition,
+        double max_update_translation_m,
+        double max_update_rotation_rad,
+        bool reject_nonconverged_update,
+        bool reject_degenerate_nonconverged_update)
+    {
+        m_degeneracy_max_update_dof = max_update_dof;
+        m_degeneracy_max_condition = max_condition;
+        m_max_update_translation_m = max_update_translation_m;
+        m_max_update_rotation_rad = max_update_rotation_rad;
+        m_reject_nonconverged_update = reject_nonconverged_update;
+        m_reject_degenerate_nonconverged_update = reject_degenerate_nonconverged_update;
+    }
     void setLossFunction(loss_func func) { m_loss_func = func; }
     void setStopFunction(stop_func func) { m_stop_func = func; }
 
@@ -93,11 +108,15 @@ public:
 
     void update();
 
-    // Clamp P diagonal to physical upper bounds (prevents unbounded covariance growth)
+    // Clamp P into a numerically valid covariance envelope.
     void clampCovariance();
 
     // ZUPT: inject zero-velocity pseudo-observation to constrain drift during static periods
     void injectZUPT(double sigma_v = 0.02, double sigma_pos = 0.1);
+
+    // Ground-robot vertical velocity constraint: observe world-frame v_z = 0
+    // without constraining x/y velocity or z position.
+    void injectVerticalVelocityConstraint(double sigma_v = 0.05);
 
     State &x() { return m_x; }
 
@@ -116,6 +135,15 @@ public:
         1e-2,  1e-2,  1e-2,   // bg    gyro bias
         1.0,   1.0,   1.0,    // ba    acc bias
     };
+    static constexpr double P_MIN[21] = {
+        1e-12, 1e-12, 1e-12,
+        1e-9,  1e-9,  1e-9,
+        1e-12, 1e-12, 1e-12,
+        1e-12, 1e-12, 1e-12,
+        1e-9,  1e-9,  1e-9,
+        1e-12, 1e-12, 1e-12,
+        1e-12, 1e-12, 1e-12,
+    };
 
 private:
     size_t m_max_iter = 10;
@@ -126,4 +154,10 @@ private:
     M21D m_F;
     M21X12D m_G;
     DegeneracyInfo m_degeneracy;
+    int m_degeneracy_max_update_dof = 2;
+    double m_degeneracy_max_condition = 50000.0;
+    double m_max_update_translation_m = 0.5;
+    double m_max_update_rotation_rad = 0.35;
+    bool m_reject_nonconverged_update = true;
+    bool m_reject_degenerate_nonconverged_update = true;
 };

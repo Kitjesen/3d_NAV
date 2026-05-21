@@ -15,6 +15,7 @@ running robot driver cannot accidentally consume the simulated command stream.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -36,6 +37,9 @@ if str(ROOT) not in sys.path:
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+
+DEFAULT_MID360_PATTERN = ROOT / "sim/assets/livox/mid360.npy"
+DEFAULT_MID360_SAMPLES_PER_FRAME = 24000
 
 
 @dataclass(frozen=True)
@@ -126,6 +130,51 @@ def _select_case(report: dict[str, Any], route: str) -> dict[str, Any]:
     raise ValueError(f"source report is not for route {route!r}")
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _selection_value(case: dict[str, Any], key: str, default: Any = "") -> Any:
+    selection = case.get("selection")
+    if isinstance(selection, dict) and key in selection:
+        return selection.get(key)
+    return case.get(key, default)
+
+
+def _planner_contract(route: "PctRoute", planner: str) -> dict[str, Any]:
+    assets = route.case.get("assets") or {}
+    selection = route.case.get("selection") if isinstance(route.case.get("selection"), dict) else {}
+    tomogram_raw = str(assets.get("tomogram") or "")
+    tomogram = Path(tomogram_raw) if tomogram_raw else None
+    safety = route.plan.get("path_safety")
+    if safety is None and str(_selection_value(route.case, "primary_planner", "")).lower() == planner:
+        safety = route.case.get("path_safety")
+    if not isinstance(safety, dict):
+        safety = {}
+    return {
+        "source_report": str(route.source_report),
+        "route": route.route,
+        "source_validation_level": str((json.loads(route.source_report.read_text(encoding="utf-8")) or {}).get("validation_level", "")),
+        "tomogram": tomogram_raw,
+        "tomogram_exists": bool(tomogram is not None and tomogram.exists()),
+        "tomogram_sha256": _sha256(tomogram) if tomogram is not None and tomogram.exists() else "",
+        "primary_planner": str(_selection_value(route.case, "primary_planner", route.plan.get("planner", ""))).lower(),
+        "selected_planner": str(_selection_value(route.case, "selected_planner", route.plan.get("planner", ""))).lower(),
+        "fallback_used": bool(_selection_value(route.case, "fallback_used", False)),
+        "selection_policy": str(selection.get("policy") or ""),
+        "selected_route_ok": bool(selection.get("selected_route_ok", route.plan.get("route_ok", True))),
+        "path_safety_ok": bool(safety.get("ok", True)),
+        "path_safety": safety,
+        "plan_backend_class": route.plan.get("backend_class"),
+        "native_backend_used": bool(route.plan.get("native_backend_used")),
+        "native_runtime_ok": bool((route.plan.get("native_runtime") or {}).get("ok", True)),
+    }
+
+
 def _load_pct_route(source_report: Path, *, route: str, planner: str = "pct") -> PctRoute:
     data = json.loads(source_report.read_text(encoding="utf-8"))
     case = _select_case(data, route)
@@ -146,6 +195,19 @@ def _load_pct_route(source_report: Path, *, route: str, planner: str = "pct") ->
         raise ValueError(f"planner {planner!r} not found in source report")
 
     if planner == "pct":
+        selection = case.get("selection") if isinstance(case.get("selection"), dict) else {}
+        selected_planner = str(selection.get("selected_planner") or selected.get("planner", "")).lower()
+        primary_planner = str(selection.get("primary_planner") or case.get("primary_planner") or selected.get("planner", "")).lower()
+        if primary_planner and primary_planner != "pct":
+            raise ValueError(f"source report primary planner is {primary_planner!r}, not pct")
+        if selected_planner and selected_planner != "pct":
+            raise ValueError(
+                f"source report selected planner is {selected_planner!r}; refusing PCT no-fallback gate"
+            )
+        if selection.get("fallback_used") is True:
+            raise ValueError("source report used planner fallback; refusing PCT no-fallback gate")
+        if selection.get("selected_route_ok") is False:
+            raise ValueError("source report selected PCT route is not route_ok")
         if not selected.get("native_backend_used"):
             raise ValueError("PCT plan did not use native backend")
         runtime = selected.get("native_runtime") or {}
@@ -172,6 +234,13 @@ def _load_pct_route(source_report: Path, *, route: str, planner: str = "pct") ->
     scene_xml = Path(scene_xml_raw)
     if not scene_xml.exists():
         raise FileNotFoundError(f"MuJoCo scene XML is missing: {scene_xml}")
+    if planner == "pct":
+        tomogram_raw = assets.get("tomogram")
+        if not tomogram_raw:
+            raise ValueError("source report assets.tomogram is required for PCT no-fallback gate")
+        tomogram = Path(tomogram_raw)
+        if not tomogram.exists():
+            raise FileNotFoundError(f"PCT source tomogram is missing: {tomogram}")
 
     start = _as_xyz(assets.get("start") or selected.get("start") or path[0], field="start")
     start[2] = 0.55
@@ -480,8 +549,10 @@ def _local_path_obstacle_evidence(
     route: PctRoute,
     robot_radius: float,
     sample_step_m: float,
+    extra_boxes: list[dict[str, Any]] | None = None,
+    include_route_boxes: bool = True,
 ) -> dict[str, Any]:
-    boxes = _obstacle_boxes(route)
+    boxes = (_obstacle_boxes(route) if include_route_boxes else []) + list(extra_boxes or [])
     robot_frame = _path_is_robot_frame(local_path_frame_id)
     if len(local_path) < 2:
         return {
@@ -878,6 +949,133 @@ def _build_safe_follow_path(
         "rejected_detour_count": rejected_detours,
         "skipped_unsafe_waypoint_count": skipped_unsafe_waypoints,
         "insertions": insertions,
+    }
+
+
+def _route_frame_at_ratio(route: PctRoute, ratio: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    path = np.asarray(route.path, dtype=np.float64)[:, :2]
+    if path.shape[0] < 2:
+        anchor = np.asarray(route.goal[:2], dtype=np.float64)
+        tangent = np.asarray([1.0, 0.0], dtype=np.float64)
+        return anchor, tangent, np.asarray([0.0, 1.0], dtype=np.float64)
+    segments = path[1:] - path[:-1]
+    lengths = np.linalg.norm(segments, axis=1)
+    total = float(np.sum(lengths))
+    if total < 1e-6:
+        anchor = path[0]
+        tangent = np.asarray([1.0, 0.0], dtype=np.float64)
+        return anchor, tangent, np.asarray([0.0, 1.0], dtype=np.float64)
+    target = float(np.clip(float(ratio), 0.0, 1.0)) * total
+    accum = 0.0
+    anchor = path[-1]
+    tangent = np.asarray([1.0, 0.0], dtype=np.float64)
+    for idx, (segment, length) in enumerate(zip(segments, lengths)):
+        seg_len = float(length)
+        if seg_len < 1e-6:
+            continue
+        if target <= accum + seg_len or idx == len(segments) - 1:
+            local_t = float(np.clip((target - accum) / seg_len, 0.0, 1.0))
+            anchor = path[idx] + segment * local_t
+            tangent = segment / seg_len
+            break
+        accum += seg_len
+    normal = np.asarray([-float(tangent[1]), float(tangent[0])], dtype=np.float64)
+    return anchor, tangent, normal
+
+
+def _moving_obstacle_boxes(route: PctRoute, args: argparse.Namespace, elapsed_s: float) -> list[dict[str, Any]]:
+    mode = str(getattr(args, "moving_obstacle_mode", "none") or "none")
+    if mode == "none":
+        return []
+    start_s = float(getattr(args, "moving_obstacle_start_s", 0.0))
+    duration_s = float(getattr(args, "moving_obstacle_duration_s", 0.0))
+    if elapsed_s < start_s:
+        return []
+    if duration_s > 0.0 and elapsed_s > start_s + duration_s:
+        return []
+
+    base_ratio = float(getattr(args, "moving_obstacle_route_ratio", 0.5))
+    count = int(max(1, min(32, int(getattr(args, "moving_obstacle_count", 1)))))
+    ratio_step = max(0.0, float(getattr(args, "moving_obstacle_route_ratio_step", 0.0)))
+    phase_step = float(getattr(args, "moving_obstacle_lateral_phase_step_rad", 0.0))
+    t = elapsed_s - start_s
+    period = max(0.1, float(getattr(args, "moving_obstacle_period_s", 10.0)))
+    base_phase = 2.0 * math.pi * t / period
+    lateral_amp = float(getattr(args, "moving_obstacle_lateral_amplitude_m", 0.75))
+    along_amp = float(getattr(args, "moving_obstacle_along_amplitude_m", 0.25))
+    radius = max(0.02, float(getattr(args, "moving_obstacle_radius_m", 0.22)))
+    height = max(0.05, float(getattr(args, "moving_obstacle_height_m", 0.7)))
+
+    boxes: list[dict[str, Any]] = []
+    for obstacle_idx in range(count):
+        route_offset = (float(obstacle_idx) - (float(count) - 1.0) * 0.5) * ratio_step
+        anchor, tangent, normal = _route_frame_at_ratio(route, base_ratio + route_offset)
+        phase = base_phase + float(obstacle_idx) * phase_step
+        lateral = lateral_amp * math.sin(phase)
+        along = along_amp * math.sin(phase * 0.5)
+        center = anchor + normal * lateral + tangent * along
+        boxes.append(
+            {
+                "name": "moving_crossing_obstacle" if count == 1 else f"moving_crossing_obstacle_{obstacle_idx}",
+                "floor_id": 0,
+                "position": [float(center[0]), float(center[1]), height * 0.5],
+                "half_size": [radius, radius, height * 0.5],
+                "elapsed_s": float(elapsed_s),
+            }
+        )
+    return boxes
+
+
+def _moving_obstacle_points(
+    boxes: list[dict[str, Any]],
+    *,
+    spacing: float,
+    intensity: float,
+) -> list[tuple[float, float, float, float]]:
+    points: list[tuple[float, float, float, float]] = []
+    for box in boxes:
+        points.extend(_box_surface_points(box, spacing=spacing, intensity=intensity))
+    return points
+
+
+def _moving_obstacle_trail_clearance(
+    *,
+    timed_trail: list[tuple[float, float, float]],
+    route: PctRoute,
+    args: argparse.Namespace,
+    robot_radius: float,
+) -> dict[str, Any]:
+    if str(getattr(args, "moving_obstacle_mode", "none") or "none") == "none":
+        return {"checked": False, "collision": False}
+    best: float | None = None
+    best_sample: dict[str, Any] | None = None
+    active_count = 0
+    for elapsed_s, x, y in timed_trail:
+        boxes = _moving_obstacle_boxes(route, args, elapsed_s)
+        if not boxes:
+            continue
+        active_count += 1
+        for box in boxes:
+            clearance = _point_box_clearance((x, y), box)
+            if best is None or clearance < best:
+                best = clearance
+                best_sample = {
+                    "elapsed_s": round(float(elapsed_s), 3),
+                    "robot_xy": [round(float(x), 4), round(float(y), 4)],
+                    "obstacle": box.get("name"),
+                    "obstacle_xy": [
+                        round(float(box["position"][0]), 4),
+                        round(float(box["position"][1]), 4),
+                    ],
+                }
+    margin = None if best is None else float(best) - float(robot_radius)
+    return {
+        "checked": True,
+        "active_trail_sample_count": int(active_count),
+        "min_clearance_m": None if best is None else round(float(best), 4),
+        "min_clearance_minus_robot_radius_m": None if margin is None else round(float(margin), 4),
+        "collision": bool(margin is not None and margin < 0.0),
+        "nearest_sample": best_sample,
     }
 
 
@@ -1781,10 +1979,11 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
 
     planner_name = str(getattr(args, "planner", "pct")).lower().strip()
     route = _load_pct_route(args.source_report, route=args.route, planner=planner_name)
+    source_contract = _planner_contract(route, planner_name)
     mods = _load_ros_modules()
 
     from sim.engine.core.engine import VelocityCommand
-    from sim.scripts.mujoco_fastlio2_live_gate import _build_engine
+    from sim.scripts.mujoco_fastlio2_live_gate import _build_engine, _resolve_mid360_pattern
 
     rclpy = mods["rclpy"]
     Odometry = mods["Odometry"]
@@ -1820,6 +2019,13 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             "path_follower": "cmu_ros2_native/pathFollower",
             "sim_driver": "MuJoCoEngine(kinematic)",
         },
+        "planning_chain": {
+            "global_planner": "source_report/native_pct_tomogram",
+            "local_planner": "cmu_ros2_native/localPlanner",
+            "path_follower": "cmu_ros2_native/pathFollower",
+            "motion_executor": "MuJoCoEngine(kinematic)",
+            "fallback_allowed": False,
+        },
         "frames": {
             "goal": "map",
             "global_path": "map",
@@ -1838,6 +2044,13 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         "scene_xml": str(route.scene_xml),
         "ros_domain_id": str(args.ros_domain_id),
         "planner": planner_name,
+        "primary_planner": source_contract["primary_planner"],
+        "selected_planner": source_contract["selected_planner"],
+        "fallback_used": source_contract["fallback_used"],
+        "global_planner_source": "source_report/native_pct_tomogram",
+        "source_planning_contract": source_contract,
+        "source_tomogram": source_contract["tomogram"],
+        "source_tomogram_sha256": source_contract["tomogram_sha256"],
         "pct_backend_class": route.plan.get("backend_class"),
         "pct_native_backend_used": bool(route.plan.get("native_backend_used")) if planner_name == "pct" else False,
         "pct_runtime_ok": bool((route.plan.get("native_runtime") or {}).get("ok", True)),
@@ -1889,6 +2102,22 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         "metadata_points": len(obstacle_points),
         "obstacles": obstacle_names,
         "source": "metadata.added_obstacles" if obstacle_points else "",
+    }
+    report["moving_obstacles"] = {
+        "enabled": str(args.moving_obstacle_mode) != "none",
+        "mode": str(args.moving_obstacle_mode),
+        "route_ratio": float(args.moving_obstacle_route_ratio),
+        "count": int(args.moving_obstacle_count),
+        "route_ratio_step": float(args.moving_obstacle_route_ratio_step),
+        "lateral_phase_step_rad": float(args.moving_obstacle_lateral_phase_step_rad),
+        "start_s": float(args.moving_obstacle_start_s),
+        "duration_s": float(args.moving_obstacle_duration_s),
+        "period_s": float(args.moving_obstacle_period_s),
+        "radius_m": float(args.moving_obstacle_radius_m),
+        "lateral_amplitude_m": float(args.moving_obstacle_lateral_amplitude_m),
+        "along_amplitude_m": float(args.moving_obstacle_along_amplitude_m),
+        "published_update_count": 0,
+        "published_point_count_max": 0,
     }
     follow_path, waypoint_filter = _build_safe_follow_path(
         route,
@@ -1977,6 +2206,11 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             base_body_name="base_link",
             lidar_body_name="lidar_link",
             leg_joint_names=[] if sim_vehicle == "omni_cart" else None,
+            mid360_pattern=None if args.allow_golden_spiral_lidar else args.mid360_pattern,
+            mid360_samples_per_frame=args.mid360_samples_per_frame,
+        )
+        resolved_mid360_pattern = _resolve_mid360_pattern(
+            None if args.allow_golden_spiral_lidar else args.mid360_pattern
         )
         state = engine.get_robot_state()
         if args.video_out:
@@ -2034,12 +2268,17 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         trajectory_samples: list[list[float]] = []
         local_path_samples: list[dict[str, Any]] = []
         local_path_evidence_samples: list[dict[str, Any]] = []
+        moving_local_path_evidence_samples: list[dict[str, Any]] = []
         stop_samples: list[int] = []
         slow_down_samples: list[int] = []
         latest_local_path: list[list[float]] = []
         latest_local_path_frame_id = ""
         latest_lidar_points = np.zeros((0, 4), dtype=np.float32)
         video_trail: list[tuple[float, float]] = []
+        timed_video_trail: list[tuple[float, float, float]] = []
+        current_moving_obstacle_boxes: list[dict[str, Any]] = []
+        current_moving_obstacle_points: list[tuple[float, float, float, float]] = []
+        moving_obstacle_samples: list[dict[str, Any]] = []
 
         def on_cmd(msg: Any) -> None:
             latest_cmd["linear_x"] = float(msg.twist.linear.x)
@@ -2085,6 +2324,20 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
                         route=route,
                         robot_radius=float(args.robot_radius),
                         sample_step_m=float(args.waypoint_collision_sample_step),
+                        extra_boxes=current_moving_obstacle_boxes,
+                    )
+                )
+            if current_moving_obstacle_boxes and len(moving_local_path_evidence_samples) < args.sample_limit:
+                moving_local_path_evidence_samples.append(
+                    _local_path_obstacle_evidence(
+                        local_path=latest_local_path,
+                        local_path_frame_id=latest_local_path_frame_id,
+                        state=state,
+                        route=route,
+                        robot_radius=float(args.robot_radius),
+                        sample_step_m=float(args.waypoint_collision_sample_step),
+                        extra_boxes=current_moving_obstacle_boxes,
+                        include_route_boxes=False,
                     )
                 )
 
@@ -2126,11 +2379,17 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             msg.twist.twist.angular.z = float(st.angular_velocity[2])
             odom_pub.publish(msg)
 
-        def publish_clouds(st: Any) -> None:
-            nonlocal latest_lidar_points
+        def publish_clouds(st: Any, elapsed_s: float = 0.0) -> None:
+            nonlocal latest_lidar_points, current_moving_obstacle_boxes, current_moving_obstacle_points
             x = float(st.position[0])
             y = float(st.position[1])
             latest_lidar_points = _sample_lidar_points(engine, args.lidar_sample_count)
+            current_moving_obstacle_boxes = _moving_obstacle_boxes(route, args, elapsed_s)
+            current_moving_obstacle_points = _moving_obstacle_points(
+                current_moving_obstacle_boxes,
+                spacing=args.obstacle_point_spacing,
+                intensity=args.moving_obstacle_intensity,
+            )
             if obstacle_aware:
                 # localPlanner treats every /cloud_map point as an obstacle when
                 # useTerrainAnalysis=false. Keep this cloud empty as a trigger
@@ -2145,11 +2404,42 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             cloud = point_cloud2.create_cloud(header, fields, points)
             cloud_pub.publish(cloud)
             terrain_pub.publish(cloud)
-            if obstacle_aware and obstacle_points:
+            published_obstacles = [*obstacle_points, *current_moving_obstacle_points]
+            if obstacle_aware and published_obstacles:
                 obstacle_header = Header()
                 obstacle_header.frame_id = "map"
                 _stamp(node, obstacle_header)
-                added_obstacles_pub.publish(point_cloud2.create_cloud(obstacle_header, fields, obstacle_points))
+                added_obstacles_pub.publish(point_cloud2.create_cloud(obstacle_header, fields, published_obstacles))
+                if current_moving_obstacle_boxes:
+                    report["moving_obstacles"]["published_update_count"] = int(
+                        report["moving_obstacles"].get("published_update_count", 0)
+                    ) + 1
+                    report["moving_obstacles"]["published_point_count_max"] = max(
+                        int(report["moving_obstacles"].get("published_point_count_max", 0)),
+                        len(current_moving_obstacle_points),
+                    )
+                    if len(moving_obstacle_samples) < args.sample_limit:
+                        box = current_moving_obstacle_boxes[0]
+                        moving_obstacle_samples.append(
+                            {
+                                "elapsed_s": round(float(elapsed_s), 3),
+                                "box_count": len(current_moving_obstacle_boxes),
+                                "position": [
+                                    round(float(box["position"][0]), 4),
+                                    round(float(box["position"][1]), 4),
+                                    round(float(box["position"][2]), 4),
+                                ],
+                                "positions": [
+                                    [
+                                        round(float(sample_box["position"][0]), 4),
+                                        round(float(sample_box["position"][1]), 4),
+                                        round(float(sample_box["position"][2]), 4),
+                                    ]
+                                    for sample_box in current_moving_obstacle_boxes[:8]
+                                ],
+                                "point_count": len(current_moving_obstacle_points),
+                            }
+                        )
 
         def publish_speed_goal(st: Any, target: list[float]) -> None:
             speed = Float32()
@@ -2176,7 +2466,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         }
         for _ in range(args.warmup_ticks):
             publish_odom(state)
-            publish_clouds(state)
+            publish_clouds(state, 0.0)
             publish_speed_goal(state, control_route.path[target_idx])
             rclpy.spin_once(node, timeout_sec=args.spin_timeout_s)
             time.sleep(args.step_s)
@@ -2256,6 +2546,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             current_after_xy = (float(state.position[0]), float(state.position[1]))
             if not video_trail or math.hypot(current_after_xy[0] - video_trail[-1][0], current_after_xy[1] - video_trail[-1][1]) > 0.01:
                 video_trail.append(current_after_xy)
+                timed_video_trail.append((elapsed_s, current_after_xy[0], current_after_xy[1]))
             if steps % args.trajectory_sample_stride == 0:
                 trajectory_samples.append(
                     [
@@ -2265,7 +2556,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
                     ]
                 )
             publish_odom(state)
-            publish_clouds(state)
+            publish_clouds(state, elapsed_s)
             publish_speed_goal(state, control_route.path[target_idx])
             rclpy.spin_once(node, timeout_sec=args.spin_timeout_s)
             if video_writer is not None and elapsed_s >= next_video_t:
@@ -2291,7 +2582,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
                         path_count=int(path_stats["count"]),
                         latest_local_path=latest_local_path,
                         latest_local_path_frame_id=latest_local_path_frame_id,
-                        obstacle_points=obstacle_points,
+                        obstacle_points=[*obstacle_points, *current_moving_obstacle_points],
                         lidar_points=latest_lidar_points,
                         camera_name=args.camera_name,
                         width=int(args.video_width),
@@ -2347,6 +2638,12 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             route,
             robot_radius=args.robot_radius,
         )
+        moving_obstacle_clearance = _moving_obstacle_trail_clearance(
+            timed_trail=timed_video_trail,
+            route=route,
+            args=args,
+            robot_radius=args.robot_radius,
+        )
         trajectory_quality = _trajectory_correctness(
             trail=video_trail,
             reference_path=control_route.path,
@@ -2361,6 +2658,22 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             slow_down_samples=slow_down_samples,
             obstacle_aware=bool(obstacle_aware),
         )
+        moving_local_path_evidence = _summarize_local_path_obstacle_evidence(
+            samples=moving_local_path_evidence_samples,
+            path_count=int(path_stats["count"]),
+            stop_samples=[],
+            slow_down_samples=[],
+            obstacle_aware=bool(str(args.moving_obstacle_mode) != "none"),
+        )
+        moving_obstacle_ok = (
+            str(args.moving_obstacle_mode) == "none"
+            or (
+                int(report["moving_obstacles"].get("published_update_count") or 0) > 0
+                and bool(moving_obstacle_clearance.get("checked"))
+                and not bool(moving_obstacle_clearance.get("collision"))
+                and bool(moving_local_path_evidence.get("ok"))
+            )
+        )
         ok = (
             reached_goal
             and path_stats["count"] > 0
@@ -2370,6 +2683,16 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             and (not obstacle_aware or not obstacle_clearance["collision"])
             and bool(trajectory_quality["ok"])
             and bool(local_path_evidence["ok"])
+            and bool(moving_obstacle_ok)
+        )
+        report["moving_obstacles"].update(
+            {
+                "samples": moving_obstacle_samples,
+                "trail_clearance": moving_obstacle_clearance,
+                "local_path_obstacle_evidence": moving_local_path_evidence,
+                "local_path_obstacle_samples": moving_local_path_evidence_samples,
+                "ok": bool(moving_obstacle_ok),
+            }
         )
         report.update(
             {
@@ -2412,8 +2735,16 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                     "scene_overlay_point_limit": int(args.scene_overlay_point_limit),
                     "lidar_source": {
-                        "kind": "MuJoCo ray-cast simulated Livox MID-360 style scan",
-                        "n_rays": int(args.n_rays),
+                        "kind": (
+                            "MuJoCo mj_multiRay with official Livox MID-360 scan pattern"
+                            if resolved_mid360_pattern is not None
+                            else "MuJoCo golden-spiral fallback scan"
+                        ),
+                        "forced_pattern": resolved_mid360_pattern is not None,
+                        "pattern_path": str(resolved_mid360_pattern) if resolved_mid360_pattern is not None else "",
+                        "pattern_sha256": _sha256(resolved_mid360_pattern) if resolved_mid360_pattern is not None else "",
+                        "samples_per_frame": int(args.mid360_samples_per_frame),
+                        "fallback_n_rays": int(args.n_rays),
                         "sample_count": int(args.lidar_sample_count),
                         "body": "lidar_link",
                     },
@@ -2512,6 +2843,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--check-rot-obstacle", action="store_true")
     parser.add_argument("--obstacle-point-spacing", type=float, default=0.08)
     parser.add_argument("--obstacle-intensity", type=float, default=200.0)
+    parser.add_argument("--moving-obstacle-mode", choices=["none", "route_crossing"], default="none")
+    parser.add_argument("--moving-obstacle-route-ratio", type=float, default=0.5)
+    parser.add_argument("--moving-obstacle-count", type=int, default=1)
+    parser.add_argument("--moving-obstacle-route-ratio-step", type=float, default=0.08)
+    parser.add_argument("--moving-obstacle-lateral-phase-step-rad", type=float, default=math.pi / 2.0)
+    parser.add_argument("--moving-obstacle-start-s", type=float, default=8.0)
+    parser.add_argument("--moving-obstacle-duration-s", type=float, default=0.0)
+    parser.add_argument("--moving-obstacle-period-s", type=float, default=12.0)
+    parser.add_argument("--moving-obstacle-lateral-amplitude-m", type=float, default=0.75)
+    parser.add_argument("--moving-obstacle-along-amplitude-m", type=float, default=0.25)
+    parser.add_argument("--moving-obstacle-radius-m", type=float, default=0.22)
+    parser.add_argument("--moving-obstacle-height-m", type=float, default=0.7)
+    parser.add_argument("--moving-obstacle-intensity", type=float, default=220.0)
     parser.add_argument("--robot-radius", type=float, default=0.28)
     parser.add_argument("--disable-waypoint-safety-filter", action="store_true")
     parser.add_argument("--waypoint-safety-margin", type=float, default=0.12)
@@ -2526,6 +2870,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cmd-timeout-s", type=float, default=0.4)
     parser.add_argument("--n-rays", type=int, default=64)
     parser.add_argument("--lidar-sample-count", type=int, default=64)
+    parser.add_argument("--mid360-pattern", type=Path, default=DEFAULT_MID360_PATTERN)
+    parser.add_argument("--mid360-samples-per-frame", type=int, default=DEFAULT_MID360_SAMPLES_PER_FRAME)
+    parser.add_argument(
+        "--allow-golden-spiral-lidar",
+        action="store_true",
+        help="Use the legacy synthetic ray fan instead of the official MID-360 scan pattern.",
+    )
     parser.add_argument("--mujoco-memory", default="512M")
     parser.add_argument("--sample-limit", type=int, default=60)
     parser.add_argument("--trajectory-sample-stride", type=int, default=25)

@@ -66,6 +66,8 @@ NB_MODULE(_nav_core, m) {
     .def_rw("max_yaw_rate", &PathFollowerParams::maxYawRate)
     .def_rw("max_speed", &PathFollowerParams::maxSpeed)
     .def_rw("max_accel", &PathFollowerParams::maxAccel)
+    .def_rw("turn_speed_yaw_rate_start", &PathFollowerParams::turnSpeedYawRateStart)
+    .def_rw("turn_speed_min_scale", &PathFollowerParams::turnSpeedMinScale)
     .def_rw("switch_time_thre", &PathFollowerParams::switchTimeThre)
     .def_rw("dir_diff_thre", &PathFollowerParams::dirDiffThre)
     .def_rw("omni_dir_goal_thre", &PathFollowerParams::omniDirGoalThre)
@@ -86,6 +88,7 @@ NB_MODULE(_nav_core, m) {
     .def_rw("cmd", &PathFollowerOutput::cmd)
     .def_rw("dir_diff", &PathFollowerOutput::dirDiff)
     .def_rw("end_dis", &PathFollowerOutput::endDis)
+    .def_rw("turn_speed_scale", &PathFollowerOutput::turnSpeedScale)
     .def_rw("can_accel", &PathFollowerOutput::canAccel);
 
   m.def("adaptive_look_ahead", &adaptiveLookAhead);

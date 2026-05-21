@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from sim.scripts.native_pct_mujoco_gate import (
     _default_local_planner_path_folder,
     _load_pct_route,
     _local_path_obstacle_evidence,
+    _moving_obstacle_boxes,
     _native_node_commands,
     _omni_cart_cmd,
     _path_is_robot_frame,
@@ -26,6 +29,8 @@ from sim.scripts.native_pct_mujoco_gate import (
 def _write_source_report(tmp_path: Path, *, native_backend_used: bool = True) -> Path:
     scene_xml = tmp_path / "scene.xml"
     scene_xml.write_text("<mujoco><worldbody/></mujoco>\n", encoding="utf-8")
+    tomogram = tmp_path / "tomogram.pickle"
+    tomogram.write_bytes(b"pct test tomogram")
     metadata = {
         "obstacles": [
             {
@@ -44,6 +49,7 @@ def _write_source_report(tmp_path: Path, *, native_backend_used: bool = True) ->
                 "route": "same_floor",
                 "assets": {
                     "scene_xml": str(scene_xml),
+                    "tomogram": str(tomogram),
                     "metadata": str(metadata_path),
                     "start": [-0.4, -2.1, 0.0],
                     "goal": [1.9, -1.25, 0.0],
@@ -185,6 +191,45 @@ def test_sample_lidar_points_pads_intensity_and_downsamples() -> None:
     assert pts.shape == (4, 4)
     assert pts[:, 3].tolist() == [1.0, 1.0, 1.0, 1.0]
     assert pts[:, 0].tolist() == [0.0, 3.0, 6.0, 9.0]
+
+
+def test_moving_obstacle_boxes_support_density_and_phase_offsets() -> None:
+    route = PctRoute(
+        route="unit",
+        source_report=Path("report.json"),
+        scene_xml=Path("scene.xml"),
+        start=[0.0, 0.0, 0.0],
+        goal=[4.0, 0.0, 0.0],
+        path=[[float(idx), 0.0, 0.0] for idx in range(5)],
+        plan={},
+        case={},
+    )
+    args = argparse.Namespace(
+        moving_obstacle_mode="route_crossing",
+        moving_obstacle_route_ratio=0.5,
+        moving_obstacle_count=3,
+        moving_obstacle_route_ratio_step=0.1,
+        moving_obstacle_lateral_phase_step_rad=math.pi / 2.0,
+        moving_obstacle_start_s=0.0,
+        moving_obstacle_duration_s=10.0,
+        moving_obstacle_period_s=8.0,
+        moving_obstacle_lateral_amplitude_m=1.0,
+        moving_obstacle_along_amplitude_m=0.0,
+        moving_obstacle_radius_m=0.12,
+        moving_obstacle_height_m=0.4,
+    )
+
+    boxes = _moving_obstacle_boxes(route, args, elapsed_s=2.0)
+
+    assert len(boxes) == 3
+    assert [box["name"] for box in boxes] == [
+        "moving_crossing_obstacle_0",
+        "moving_crossing_obstacle_1",
+        "moving_crossing_obstacle_2",
+    ]
+    assert [box["half_size"] for box in boxes] == [[0.12, 0.12, 0.2]] * 3
+    assert boxes[0]["position"][0] < boxes[1]["position"][0] < boxes[2]["position"][0]
+    assert boxes[0]["position"][1] != boxes[1]["position"][1]
 
 
 def test_omni_cart_tracker_uses_native_local_path_without_saturating_yaw() -> None:

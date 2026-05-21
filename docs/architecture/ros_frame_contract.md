@@ -4,6 +4,11 @@ This document records the frame and topic contract used by the navigation
 stack. It describes the boundary that modules, ROS 2 launch files, simulators,
 and App/Web telemetry must preserve.
 
+The canonical Python source is `src/core/runtime_interface.py`. The
+human-readable mirror is `config/topic_contract.yaml`. Real hardware, Gazebo,
+MuJoCo, and CMU Unity must differ only at the source-adapter layer; every
+adapter normalizes into the same runtime frames, topics, and algorithm inputs.
+
 ## Canonical Frames
 
 | Frame | Meaning | Owner |
@@ -31,6 +36,10 @@ map -> odom -> body
                  -> camera_link
 ```
 
+Body axes are fixed as `x` forward, `y` left, `z` up. LiDAR source adapters
+must prove this with known front/left/up point checks before their clouds are
+accepted as LingTu runtime data.
+
 For simulation, `world` may be identical to `map` at startup, but it should not
 appear as the frame on `/nav/*` topics. Publish `map -> odom` as identity when
 there is no relocalization correction.
@@ -48,6 +57,16 @@ there is no relocalization correction.
 | `/nav/terrain_map` | `sensor_msgs/PointCloud2` | `body` or `odom`, matching the local planner profile |
 | `/nav/local_path` | `nav_msgs/Path` | `body` |
 | `/nav/cmd_vel` | `geometry_msgs/TwistStamped` | `body` |
+
+## Raw Sensor And Algorithm Boundary
+
+| Surface | Inputs | Outputs | Owner |
+| --- | --- | --- | --- |
+| Fast-LIO mapping/localization | `/nav/lidar_scan`, `/nav/imu` | `/nav/odometry`, `/nav/registered_cloud`, `/nav/map_cloud` | SLAM |
+| Fast-LIO raw validation | `/points_raw`, `/imu_raw` | `/nav/odometry`, `/nav/registered_cloud`, `/nav/map_cloud` | MuJoCo/raw-sensor gate |
+| Exploration strategy | `/nav/odometry`, `/nav/map_cloud`, `/nav/exploration_grid` | `/exploration/way_point` | TARE or frontier |
+| Global planning | `/nav/odometry`, `/nav/map_cloud`, `/exploration/way_point` or `/nav/goal_pose` | `/nav/global_path` | LingTu navigation |
+| Local planning/following | `/nav/odometry`, `/nav/registered_cloud`, `/nav/global_path` | `/nav/local_path`, `/nav/cmd_vel` | LingTu autonomy |
 
 The Python `NavigationModule` deliberately rejects odometry, goals, and
 costmaps that do not match its configured `planning_frame_id`. Real robot

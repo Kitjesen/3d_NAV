@@ -1,5 +1,6 @@
 #include "lidar_processor.h"
 #include <pcl/io/pcd_io.h>
+#include <algorithm>
 
 LidarProcessor::LidarProcessor(Config &config, std::shared_ptr<IESKF> kf) : m_config(config), m_kf(kf)
 {
@@ -18,6 +19,14 @@ LidarProcessor::LidarProcessor(Config &config, std::shared_ptr<IESKF> kf) : m_co
         m_scan_filter.setLeafSize(m_config.scan_resolution, m_config.scan_resolution, m_config.scan_resolution);
     }
 
+    m_kf->setMaxIter(static_cast<size_t>(std::max(1, m_config.ieskf_max_iter)));
+    m_kf->setDegeneracyGuard(
+        m_config.degeneracy_max_update_dof,
+        m_config.degeneracy_max_condition,
+        m_config.max_update_translation_m,
+        m_config.max_update_rotation_rad,
+        m_config.reject_nonconverged_update,
+        m_config.reject_degenerate_nonconverged_update);
     m_kf->setLossFunction([&](State &s, SharedState &d)
                           { updateLossFunc(s, d); });
     m_kf->setStopFunction([&](const V21D &delta) -> bool

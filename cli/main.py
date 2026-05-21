@@ -41,6 +41,94 @@ logger = logging.getLogger("lingtu")
 _SPECIAL_COMMANDS = {"stop", "restart", "status", "show-config", "log", "health", "doctor", "rerun"}
 
 
+def _runtime_endpoint(name: str):
+    from core.blueprints.runtime_endpoint import runtime_endpoint
+
+    return runtime_endpoint(name)
+
+
+def _runtime_endpoint_names() -> tuple[str, ...]:
+    from core.blueprints.runtime_endpoint import runtime_endpoint_names
+
+    return runtime_endpoint_names()
+
+
+def _apply_runtime_endpoint_config(profile_name: str, cfg: dict, endpoint_name: str) -> dict:
+    from core.blueprints.runtime_endpoint import apply_runtime_endpoint_config
+
+    return apply_runtime_endpoint_config(profile_name, cfg, endpoint_name)
+
+
+def _is_runtime_endpoint_error(exc: Exception) -> bool:
+    from core.blueprints.runtime_endpoint import RuntimeEndpointError
+
+    return isinstance(exc, RuntimeEndpointError)
+
+
+def _run_external_profile_launcher(
+    profile_name: str,
+    cfg: dict,
+    args: argparse.Namespace,
+    repo_root: Path,
+) -> None:
+    """Run a first-class profile that delegates to a simulator launcher."""
+
+    import os
+    import subprocess
+
+    launcher = cfg.get("_external_launcher")
+    if not launcher:
+        raise RuntimeError("external profile missing _external_launcher")
+    launcher_path = (repo_root / str(launcher)).resolve()
+    if not launcher_path.exists():
+        print(f"  {T.red('Error')}: launcher not found: {launcher_path}")
+        sys.exit(1)
+    if args.daemon:
+        print(
+            f"  {T.red('Error')}: --daemon is not supported for external simulation launchers; "
+            "use the launcher's status/stop commands."
+        )
+        sys.exit(2)
+
+    if args.extra:
+        launcher_args = list(args.extra)
+    elif getattr(args, "record", False):
+        launcher_args = list(
+            cfg.get("_external_record_args")
+            or cfg.get("_external_default_args")
+            or ("gate",)
+        )
+    else:
+        launcher_args = list(cfg.get("_external_default_args") or ("gate",))
+    env = os.environ.copy()
+    env.setdefault("LINGTU_PROFILE", profile_name)
+    runtime_endpoint_name = cfg.get("_runtime_endpoint")
+    if runtime_endpoint_name:
+        env.setdefault("LINGTU_ENDPOINT", str(runtime_endpoint_name))
+    endpoint_data_source = cfg.get("_endpoint_data_source")
+    if endpoint_data_source:
+        env.setdefault("LINGTU_DATA_SOURCE", str(endpoint_data_source))
+    runtime_contract = cfg.get("_runtime_contract")
+    if runtime_contract:
+        env.setdefault("LINGTU_RUNTIME_CONTRACT", str(runtime_contract))
+
+    print(f"\n  Launching external simulation profile ({T.green(profile_name)})...", flush=True)
+    print(f"  Launcher: {launcher}", flush=True)
+    print(f"  Command:  bash {launcher} {' '.join(launcher_args)}", flush=True)
+    try:
+        proc = subprocess.run(
+            ["bash", str(launcher), *launcher_args],
+            cwd=str(repo_root),
+            env=env,
+            check=False,
+        )
+    except FileNotFoundError:
+        print(f"  {T.red('Error')}: bash is required to run {launcher}")
+        sys.exit(127)
+    if proc.returncode:
+        sys.exit(proc.returncode)
+
+
 def _resolve_profile_name(explicit_profile: str | None, args: argparse.Namespace) -> str:
     profile_name = explicit_profile
     if profile_name is None:
@@ -73,9 +161,22 @@ def _resolve_config(
         print(f"  Available: {', '.join(PROFILES.keys())}")
         sys.exit(1)
 
+    endpoint_name = getattr(args, "endpoint", None)
     cfg = dict(PROFILES[profile_name])
+    profile_default_robot = cfg.pop("_default_robot", "stub")
+    if endpoint_name:
+        try:
+            endpoint = _runtime_endpoint(endpoint_name)
+            endpoint.require_profile(profile_name)
+        except Exception as exc:
+            if not _is_runtime_endpoint_error(exc):
+                raise
+            print(f"  {T.red('Error')}: {exc}")
+            sys.exit(2)
+        robot_key = args.robot or endpoint.robot_preset
+    else:
+        robot_key = args.robot or profile_default_robot
 
-    robot_key = args.robot or cfg.pop("_default_robot", "stub")
     if robot_key in ROBOT_PRESETS:
         preset = ROBOT_PRESETS[robot_key]
         for k, v in preset.items():
@@ -85,6 +186,9 @@ def _resolve_config(
                 cfg[k] = v
     else:
         cfg["robot"] = robot_key
+
+    if endpoint_name:
+        cfg = _apply_runtime_endpoint_config(profile_name, cfg, endpoint_name)
 
     overrides = {
         "dog_host": args.dog_host,
@@ -127,10 +231,23 @@ def main() -> None:
             profiles:
               stub      No hardware, framework testing
               sim       MuJoCo kinematic simulation
+              sim_mujoco_live MuJoCo raw MID-360 + Fast-LIO live simulation
               sim_gazebo Gazebo/GZ ROS-native simulation
+              sim_industrial Gazebo industrial-yard delivery simulation
+              sim_cmu_tare CMU Unity + external TARE simulation
               dev       Semantic pipeline, no C++ nodes
               nav       Navigation with pre-built map
               explore   Exploration, no pre-built map
+
+            runtime endpoints:
+              --endpoint mujoco_live  Run a product task against MuJoCo raw MID-360 + Fast-LIO
+              --endpoint gazebo       Run a product task against Gazebo/GZ industrial adapter
+              --endpoint cmu_unity    Run TARE task against CMU Unity external runtime
+
+            product simulation examples:
+              python lingtu.py explore --endpoint mujoco_live
+              python lingtu.py tare_explore --endpoint mujoco_live
+              python lingtu.py tare_explore --endpoint cmu_unity --record
 
             lifecycle commands:
               stop         Stop running daemon
@@ -154,6 +271,17 @@ def main() -> None:
     parser.add_argument("--follow", "-f", action="store_true", help="Follow output for `lingtu log`")
     parser.add_argument("--lines", type=int, default=80, help="Number of lines for `lingtu log` (default: 80)")
     parser.add_argument("--force", action="store_true", help="Force action for commands like `lingtu stop`")
+    parser.add_argument(
+        "--endpoint",
+        choices=_runtime_endpoint_names(),
+        default=None,
+        help="Runtime endpoint/connection layer for map/nav/explore/tare_explore",
+    )
+    parser.add_argument(
+        "--record",
+        action="store_true",
+        help="Use the endpoint's visible recording/demo action when available",
+    )
     parser.add_argument("--robot", default=None)
     parser.add_argument("--dog-host", default=None, dest="dog_host")
     parser.add_argument("--dog-port", type=int, default=None, dest="dog_port")
@@ -185,7 +313,9 @@ def main() -> None:
     parser.add_argument("--log-level", default="INFO", dest="log_level")
     parser.add_argument("--log-format", default="text", choices=["text", "json"],
                         dest="log_format", help="Log file format: text (default) or json")
-    args = parser.parse_args()
+    args, trailing_extra = parser.parse_known_args()
+    if trailing_extra:
+        args.extra.extend(trailing_extra)
 
     if args.version:
         print(f"lingtu {_lingtu_version()}")
@@ -239,12 +369,23 @@ def main() -> None:
         cmd_show_config_external(profile_name, cfg, as_json=args.json)
         return
 
-    if args.target not in _SPECIAL_COMMANDS and args.extra:
+    profile_name = _resolve_profile_name(args.target, args)
+    endpoint_external = False
+    if args.endpoint:
+        endpoint_external = bool(_runtime_endpoint(args.endpoint).external_launcher)
+    external_profile = bool(
+        PROFILES.get(profile_name, {}).get("_external_launcher") or endpoint_external
+    )
+
+    if args.target not in _SPECIAL_COMMANDS and args.extra and not external_profile:
         print(f"  {T.red('Error')}: Unexpected extra positional arguments: {' '.join(args.extra)}")
         sys.exit(1)
 
-    profile_name = _resolve_profile_name(args.target, args)
     cfg = _resolve_config(profile_name, args, allow_wizard=True)
+
+    if cfg.get("_external_launcher"):
+        _run_external_profile_launcher(profile_name, cfg, args, _repo)
+        return
 
     if args.daemon:
         args.no_repl = True

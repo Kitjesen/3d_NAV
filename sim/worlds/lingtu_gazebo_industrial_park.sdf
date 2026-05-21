@@ -1,0 +1,248 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <world name="lingtu_gazebo_industrial_park">
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <gravity>0 0 -9.81</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+
+    <light name="sun" type="directional">
+      <cast_shadows>true</cast_shadows>
+      <pose>6 -4 14 0 0 0</pose>
+      <diffuse>0.86 0.84 0.80 1</diffuse>
+      <specular>0.25 0.25 0.25 1</specular>
+      <direction>-0.35 0.25 -0.90</direction>
+    </light>
+
+    <model name="industrial_ground_plane">
+      <static>true</static>
+      <pose>8 0 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>36 22</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>1.25</mu>
+                <mu2>1.25</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>36 22</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.45 0.48 0.47 1</ambient>
+            <diffuse>0.58 0.62 0.60 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="main_asphalt_road">
+      <static>true</static>
+      <pose>8 0 0.015 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>28 5.0 0.03</size></box></geometry>
+          <material><ambient>0.10 0.11 0.12 1</ambient><diffuse>0.18 0.19 0.20 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="cross_asphalt_road">
+      <static>true</static>
+      <pose>9 0 0.018 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>4.4 13.5 0.03</size></box></geometry>
+          <material><ambient>0.10 0.11 0.12 1</ambient><diffuse>0.18 0.19 0.20 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="perimeter_fence_north">
+      <static>true</static>
+      <pose>8 9 0.8 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>32 0.28 1.6</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>32 0.28 1.6</size></box></geometry><material><ambient>0.18 0.20 0.20 1</ambient><diffuse>0.36 0.39 0.39 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="perimeter_fence_south">
+      <static>true</static>
+      <pose>8 -9 0.8 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>32 0.28 1.6</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>32 0.28 1.6</size></box></geometry><material><ambient>0.18 0.20 0.20 1</ambient><diffuse>0.36 0.39 0.39 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="perimeter_fence_east">
+      <static>true</static>
+      <pose>24 0 0.8 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.28 18 1.6</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.28 18 1.6</size></box></geometry><material><ambient>0.18 0.20 0.20 1</ambient><diffuse>0.36 0.39 0.39 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="perimeter_gate_west_left">
+      <static>true</static>
+      <pose>-8 5.45 0.8 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.28 7.1 1.6</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.28 7.1 1.6</size></box></geometry><material><ambient>0.18 0.20 0.20 1</ambient><diffuse>0.36 0.39 0.39 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="perimeter_gate_west_right">
+      <static>true</static>
+      <pose>-8 -5.45 0.8 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.28 7.1 1.6</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.28 7.1 1.6</size></box></geometry><material><ambient>0.18 0.20 0.20 1</ambient><diffuse>0.36 0.39 0.39 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="warehouse_north_hall">
+      <static>true</static>
+      <pose>9.5 6.4 1.55 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>10.5 2.6 3.1</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>10.5 2.6 3.1</size></box></geometry><material><ambient>0.25 0.29 0.33 1</ambient><diffuse>0.42 0.48 0.54 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="factory_south_hall">
+      <static>true</static>
+      <pose>13.5 -6.3 1.55 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>12.0 2.8 3.1</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>12.0 2.8 3.1</size></box></geometry><material><ambient>0.30 0.28 0.24 1</ambient><diffuse>0.55 0.51 0.43 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="loading_dock_wall">
+      <static>true</static>
+      <pose>4.2 5.0 0.55 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>4.2 0.28 1.1</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>4.2 0.28 1.1</size></box></geometry><material><ambient>0.32 0.25 0.18 1</ambient><diffuse>0.62 0.47 0.30 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="container_stack_blue">
+      <static>true</static>
+      <pose>15.2 3.5 0.8 0 0 0.08</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>2.4 1.2 1.6</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>2.4 1.2 1.6</size></box></geometry><material><ambient>0.08 0.18 0.30 1</ambient><diffuse>0.12 0.35 0.62 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="container_stack_yellow">
+      <static>true</static>
+      <pose>17.8 -3.4 0.8 0 0 -0.12</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>2.6 1.2 1.6</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>2.6 1.2 1.6</size></box></geometry><material><ambient>0.36 0.29 0.08 1</ambient><diffuse>0.74 0.58 0.16 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="pipe_rack_left">
+      <static>true</static>
+      <pose>6.6 -5.0 0.65 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.4 0.32 1.3</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.4 0.32 1.3</size></box></geometry><material><ambient>0.10 0.25 0.25 1</ambient><diffuse>0.16 0.48 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="pipe_rack_right">
+      <static>true</static>
+      <pose>6.6 5.0 0.65 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.4 0.32 1.3</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.4 0.32 1.3</size></box></geometry><material><ambient>0.10 0.25 0.25 1</ambient><diffuse>0.16 0.48 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="pallet_cluster">
+      <static>true</static>
+      <pose>3.5 -4.6 0.38 0 0 0.35</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.3 1.0 0.75</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.3 1.0 0.75</size></box></geometry><material><ambient>0.32 0.21 0.12 1</ambient><diffuse>0.60 0.40 0.22 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="forklift_silhouette">
+      <static>true</static>
+      <pose>12.2 4.5 0.45 0 0 0.15</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.5 0.8 0.9</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.5 0.8 0.9</size></box></geometry><material><ambient>0.42 0.24 0.06 1</ambient><diffuse>0.86 0.50 0.10 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="tank_silo_a">
+      <static>true</static>
+      <pose>20.0 4.0 1.15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.65</radius><length>2.3</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.65</radius><length>2.3</length></cylinder></geometry><material><ambient>0.30 0.30 0.30 1</ambient><diffuse>0.62 0.62 0.60 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="tank_silo_b">
+      <static>true</static>
+      <pose>21.7 4.0 1.15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.65</radius><length>2.3</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.65</radius><length>2.3</length></cylinder></geometry><material><ambient>0.30 0.30 0.30 1</ambient><diffuse>0.62 0.62 0.60 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="guard_post_left">
+      <static>true</static>
+      <pose>-5.0 3.4 0.65 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.25</radius><length>1.3</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.25</radius><length>1.3</length></cylinder></geometry><material><ambient>0.35 0.08 0.08 1</ambient><diffuse>0.74 0.16 0.14 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="guard_post_right">
+      <static>true</static>
+      <pose>-5.0 -3.4 0.65 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.25</radius><length>1.3</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.25</radius><length>1.3</length></cylinder></geometry><material><ambient>0.35 0.08 0.08 1</ambient><diffuse>0.74 0.16 0.14 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <physics name="lingtu_industrial_physics" type="ode">
+      <max_step_size>0.005</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>200</real_time_update_rate>
+    </physics>
+  </world>
+</sdf>

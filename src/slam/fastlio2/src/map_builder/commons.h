@@ -48,6 +48,12 @@ struct Config
     int imu_init_num = 20;
     int near_search_num = 5;
     int ieskf_max_iter = 5;
+    int degeneracy_max_update_dof = 2;
+    double degeneracy_max_condition = 50000.0;
+    double max_update_translation_m = 0.5;
+    double max_update_rotation_rad = 0.35;
+    bool reject_nonconverged_update = true;
+    bool reject_degenerate_nonconverged_update = true;
     bool gravity_align = true;
     bool esti_il = false;
     M3D r_il = M3D::Identity();
@@ -61,6 +67,13 @@ struct Config
     int    zupt_min_static_frames = 5;      // consecutive undistort() calls required to trigger ZUPT
     double zupt_sigma_v           = 0.02;   // ZUPT velocity measurement noise (m/s)
     double zupt_sigma_pos         = 0.1;    // ZUPT position covariance ceiling (m)
+
+    // Optional ground-robot vertical-velocity pseudo-observation. This is
+    // disabled by default because real off-road motion can include vertical
+    // velocity on slopes; simulation gates may enable it for planar kinematic
+    // MuJoCo motion where the IMU model is gravity-only.
+    bool   vertical_velocity_constraint_enabled = false;
+    double vertical_velocity_sigma_v            = 0.05;
 };
 
 struct IMUData

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 ROS 2 话题频率验证测试
 确保关键话题以预期频率发布
@@ -10,6 +10,8 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 import time
 import sys
 from collections import defaultdict
+
+from core.runtime_interface import TOPICS
 
 
 class Colors:
@@ -29,10 +31,10 @@ class TopicHzChecker(Node):
 
         # 定义预期频率（Hz）：(最小值, 最大值)
         self.expected_hz = {
-            '/nav/odometry': (8.0, 12.0),      # 期望 10 Hz ± 20%
-            '/nav/terrain_map': (0.5, 2.0),    # 期望 1 Hz
-            '/nav/path': (0.5, 2.0),           # 期望 1 Hz
-            '/cmd_vel': (8.0, 12.0),           # 期望 10 Hz
+            TOPICS.odometry: (8.0, 12.0),      # 期望 10 Hz ± 20%
+            TOPICS.terrain_map: (0.5, 2.0),    # 期望 1 Hz
+            TOPICS.global_path: (0.5, 2.0),           # 期望 1 Hz
+            TOPICS.cmd_vel: (8.0, 12.0),           # 期望 10 Hz
         }
 
         self.message_counts = defaultdict(int)
@@ -68,8 +70,8 @@ class TopicHzChecker(Node):
                 from nav_msgs.msg import Path
                 return Path
             elif 'cmd_vel' in topic.lower():
-                from geometry_msgs.msg import Twist
-                return Twist
+                from geometry_msgs.msg import TwistStamped
+                return TwistStamped
         except ImportError as e:
             self.get_logger().warn(f"无法导入消息类型: {e}")
             return None
@@ -199,3 +201,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

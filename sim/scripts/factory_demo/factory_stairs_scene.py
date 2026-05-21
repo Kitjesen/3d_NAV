@@ -2,8 +2,8 @@
 """Generate MuJoCo XML: 3-floor factory with staircases aligned to planned path.
 
 Path analysis (from ele_planner global path):
-  Stair 1: climb x=26.5鈫?1, y~8.0, z=0.7鈫?.1
-  Stair 2: climb x=26.5鈫?0, y~6.75, z=3.9鈫?.5
+  Stair 1: climb x=26.5 to 21.0, y~8.0, z=0.7 to 3.1
+  Stair 2: climb x=26.5 to 20.0, y~6.75, z=3.9 to 6.5
 
 Each staircase: 17 steps x 18cm rise, with bright tread overlays.
 Top of each staircase connects to the upper floor edge.
@@ -799,10 +799,10 @@ def generate_scene_xml(start_pos=None):
     n_steps = 17
     fz = [0.0, n_steps * step_h, 2 * n_steps * step_h]  # [0, 3.06, 6.12]
 
-    # --- Staircase 1鈫? ---
-    # Path climbs: x=26.5鈫?1, y~8.0, z=0.7鈫?.1
-    s1_x_edge = 21.0     # top connects to floor 2 at x鈮?1
-    s1_y = 8.0           # path y during climb 鈮?7.8-8.3
+    # --- Staircase 1 to floor 2 ---
+    # Path climbs: x=26.5 to 21.0, y~8.0, z=0.7 to 3.1
+    s1_x_edge = 21.0     # top connects to floor 2 at x ~= 21
+    s1_y = 8.0           # path y during climb ~= 7.8-8.3
     s1_step_d = 0.32     # run = 17*0.32 = 5.44, bottom at x=26.44
     s1_w = 2.4           # slightly wider for visibility
 
@@ -811,10 +811,10 @@ def generate_scene_xml(start_pos=None):
     rail1 = _stair_railings("s12", n_steps, s1_x_edge, s1_y, fz[0],
                              step_h, s1_step_d, s1_w)
 
-    # --- Staircase 2鈫? ---
-    # Path climbs: x=26.5鈫?0, y~6.75, z=3.9鈫?.5
-    s2_x_edge = 20.0     # top connects to floor 3 at x鈮?0
-    s2_y = 6.75          # path y during climb 鈮?6.7-6.8
+    # --- Staircase 2 to floor 3 ---
+    # Path climbs: x=26.5 to 20.0, y~6.75, z=3.9 to 6.5
+    s2_x_edge = 20.0     # top connects to floor 3 at x ~= 20
+    s2_y = 6.75          # path y during climb ~= 6.7-6.8
     s2_step_d = 0.38     # run = 17*0.38 = 6.46, bottom at x=26.46
     s2_w = 2.4
 

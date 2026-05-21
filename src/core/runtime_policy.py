@@ -25,6 +25,7 @@ SLAM_PROFILE_ALIASES: dict[str, str] = {
 }
 
 SUPPORTED_SLAM_PROFILES = {
+    "none",
     "fastlio2",
     "localizer",
     "super_lio",
@@ -70,6 +71,15 @@ def backend_capability_defaults(backend_name: Any) -> dict[str, Any]:
     """
 
     backend = normalize_slam_profile(backend_name)
+    if backend in {"", "none"}:
+        return {
+            "map_save_supported": False,
+            "map_save_source": None,
+            "relocalization_supported": False,
+            "saved_map_relocalization_supported": False,
+            "restart_recovery_supported": False,
+            "recovery_method": "external_or_disabled_slam",
+        }
     if backend == "super_lio":
         return {
             "map_save_supported": True,
@@ -120,6 +130,13 @@ def slam_backend_contract(profile: Any) -> dict[str, Any]:
     """SLAM-bridge-facing backend contract including health/recovery action."""
 
     backend = normalize_slam_profile(profile) or "bridge"
+    if backend == "none":
+        return {
+            "backend": "none",
+            "health_source": "external_or_disabled_slam",
+            **backend_capability_defaults("none"),
+            "recovery_action": "none",
+        }
     if backend == "super_lio":
         return {
             "backend": "super_lio",
@@ -163,6 +180,16 @@ def slam_backend_contract(profile: Any) -> dict[str, Any]:
 
 def slam_switch_plan(profile: Any) -> ServiceTransitionPlan:
     profile = normalize_slam_profile(profile)
+    if profile == "none":
+        return ServiceTransitionPlan(
+            stop=(
+                "super_lio_relocation",
+                "super_lio",
+                "slam_pgo",
+                "localizer",
+                "slam",
+            ),
+        )
     if profile == "fastlio2":
         return ServiceTransitionPlan(
             stop=("localizer", "super_lio", "super_lio_relocation"),
@@ -205,6 +232,11 @@ def session_transition_plan(mode: str, backend: Any) -> ServiceTransitionPlan:
 
     mode = str(mode or "").strip().lower()
     backend = normalize_slam_profile(backend)
+    if backend in {"", "none"}:
+        return ServiceTransitionPlan(
+            stop=(),
+            clear_live_map=mode in {"mapping", "exploring"},
+        )
     if backend == "super_lio":
         return ServiceTransitionPlan(
             stop=("slam", "slam_pgo", "localizer", "super_lio_relocation"),

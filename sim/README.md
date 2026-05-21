@@ -131,7 +131,22 @@ python sim/scripts/go1_indoor_nav.py    # Go1 indoor navigation demo
 python lingtu.py sim                     # Full LingTu stack in simulation
 ```
 
-### 6.2.1 Headless Navigation Smoke Mode
+### 6.2.1 Product Tasks On Simulation Endpoints
+
+LingTu now keeps the task profile separate from the runtime connection layer.
+Use these entries when validating the product stack instead of calling scattered
+gate scripts directly:
+
+```bash
+python lingtu.py explore --endpoint mujoco_live        # MuJoCo raw MID-360 + Fast-LIO
+python lingtu.py explore --endpoint gazebo --record    # Gazebo industrial demo + RViz
+python lingtu.py tare_explore --endpoint cmu_unity     # CMU Unity external TARE adapter
+```
+
+The older `sim_mujoco_live`, `sim_industrial`, and `sim_cmu_tare` profiles stay
+as compatibility aliases for CI/server gates.
+
+### 6.2.2 Headless Navigation Smoke Mode
 
 `MujocoDriverModule` supports two drive modes:
 
@@ -646,7 +661,7 @@ of the higher level:
 |------|--------|--------|----------------|
 | Raw CDR bridge replay | `sim/scripts/rosbag_slam_bridge_replay.py` | Real rosbag2 CDR messages can enter `SlamBridgeModule` and produce localization health | Fast-LIO2/Super-LIO/localizer algorithm output |
 | Fast-LIO2 algorithm replay | `sim/scripts/fastlio2_rosbag_replay_gate.py` | Real `/imu_raw + /points_raw` rosbag replay through `fastlio2/lio_node`, then `/Odometry + /cloud_registered` into `SlamBridgeModule` | Saved-map relocalization |
-| MuJoCo live Fast-LIO2 gate | `sim/scripts/mujoco_fastlio2_live_gate.py` | Live MuJoCo LiDAR/IMU publishes `/points_raw + /imu_raw`, Fast-LIO2 publishes `/Odometry + /cloud_map`, and `SlamBridgeModule` reaches tracking | Real robot gait, real MID-360 driver timing, saved-map relocalization |
+| MuJoCo live Fast-LIO2 gate | `python lingtu.py sim_mujoco_live gate` | Live MuJoCo LiDAR/IMU publishes `/points_raw + /imu_raw`, Fast-LIO2 publishes `/Odometry + /cloud_map`, and canonical `/nav/*` topics are present | Real robot gait, real MID-360 driver timing, saved-map relocalization |
 | Localizer replay | localizer node with `/Odometry + /cloud_registered` and a static map | ICP localizer contract against a map | BBS3D global relocalization unless `libcpu_bbs3d` is installed |
 
 Server evidence from the 2026-05-07 validation run:
@@ -673,25 +688,18 @@ PYTHONPATH=src:.:$PYTHONPATH python3 sim/scripts/fastlio2_rosbag_replay_gate.py 
   --json-out artifacts/fastlio2_rosbag_replay/grass_window_final_tracking/report.json \
   --strict
 
-# MuJoCo live LiDAR/IMU -> Fast-LIO2 -> SlamBridge
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-export LD_LIBRARY_PATH="$PWD/.third_party/livox_sdk2/lib:$LD_LIBRARY_PATH"
-PYTHONPATH=src:.:$PYTHONPATH python3 sim/scripts/mujoco_fastlio2_live_gate.py \
-  --world building_scene \
-  --duration 10 \
-  --drive-mode kinematic \
-  --json-out artifacts/mujoco_fastlio2_live/building_scene/report.json \
-  --strict
+# MuJoCo live LiDAR/IMU -> Fast-LIO2 -> canonical /nav/*.
+python lingtu.py sim_mujoco_live gate
 
-# Rich factory scene; use a flat start pose to avoid the low dock contact zone.
-PYTHONPATH=src:.:$PYTHONPATH python3 sim/scripts/mujoco_fastlio2_live_gate.py \
-  --world factory_scene \
-  --start 5,8,0.55 \
-  --duration 10 \
-  --drive-mode kinematic \
-  --json-out artifacts/mujoco_fastlio2_live/factory_scene_flat_start/report.json \
-  --strict
+# Same source path plus LingTu frontier/navigation driving /nav/cmd_vel.
+python lingtu.py sim_mujoco_live explore
+
+# Long-running live review: starts exploration and opens RViz with cloud,
+# map, path, odometry, and TF displays.
+python lingtu.py sim_mujoco_live demo
+
+# Same as explore, with MP4 evidence.
+python lingtu.py sim_mujoco_live video
 ```
 
 Expected Fast-LIO2 strict evidence:
@@ -715,6 +723,23 @@ Expected MuJoCo live strict evidence:
 - `outputs.fastlio2_odometry > 0`
 - `outputs.fastlio2_cloud_map > 0`
 - `final_bridge_status.state=TRACKING`
+
+MuJoCo live LiDAR topic inventory:
+
+| Topic | Message Type | Frame | Purpose |
+|-------|--------------|-------|---------|
+| `/points_raw` | `livox_ros_driver2/msg/CustomMsg` by default, or `sensor_msgs/msg/PointCloud2` with `--fastlio-lidar-input timed_pointcloud2` | `body` | Raw MID-360-pattern LiDAR input to Fast-LIO2 |
+| `/imu_raw` | `sensor_msgs/msg/Imu` | `body` | Raw simulated IMU input to Fast-LIO2 |
+| `/cloud_registered` | `sensor_msgs/msg/PointCloud2` | `body` | Fast-LIO2 registered scan output |
+| `/cloud_map` | `sensor_msgs/msg/PointCloud2` | `odom` | Fast-LIO2 local map output |
+| `/Odometry` | `nav_msgs/msg/Odometry` | `odom -> body` | Fast-LIO2 localization output |
+| `/nav/registered_cloud` | `sensor_msgs/msg/PointCloud2` | `body` | LingTu canonical current cloud |
+| `/nav/map_cloud` | `sensor_msgs/msg/PointCloud2` | `odom` | LingTu canonical map cloud |
+| `/nav/odometry` | `nav_msgs/msg/Odometry` | `odom -> body` | LingTu canonical odometry |
+| `/nav/exploration_grid` | `nav_msgs/msg/OccupancyGrid` | `odom` | Occupancy map used by exploration |
+| `/nav/global_path` | `nav_msgs/msg/Path` | `odom` | LingTu global path for RViz and gates |
+| `/nav/local_path` | `nav_msgs/msg/Path` | `odom` | LingTu local path for RViz and gates |
+| `/nav/cmd_vel` | `geometry_msgs/msg/TwistStamped` | `body` | LingTu navigation command fed back to MuJoCo only |
 
 For large MuJoCo scenes, the live gate injects a temporary `<size
 memory="64M"/>` into the scene before the engine merges the world with the

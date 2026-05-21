@@ -1423,9 +1423,22 @@ class GatewayModule(Module, layer=6):
                 if self._exploring:
                     return "exploring", None
                 return "mapping", None
+            if self._exploring and self._session_uses_external_slam_none():
+                return "exploring", None
             return "idle", None
         except Exception:
+            if self._exploring and self._session_uses_external_slam_none():
+                return "exploring", None
             return "idle", None
+
+    def _session_uses_external_slam_none(self) -> bool:
+        """True when an active session intentionally uses external sim odometry."""
+        profile = str(self._session_slam_profile or "").strip().lower()
+        return (
+            profile == "none"
+            and self._session_mode in ("mapping", "navigating", "exploring")
+            and self._explorer_available()
+        )
 
     def _session_active_map_name(self) -> str | None:
         """Read active map symlink target."""
@@ -1732,6 +1745,8 @@ class GatewayModule(Module, layer=6):
                 profile = "localizer"
             elif services.get("slam") in ("running", "active"):
                 profile = "slam"
+            elif self._session_uses_external_slam_none():
+                profile = "none"
             else:
                 profile = "stopped"
             self._cached_slam_profile = profile

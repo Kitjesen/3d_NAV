@@ -13,8 +13,8 @@ import numpy as np
 
 from sim.engine.core.sensor import LidarConfig
 
-# Add sim/sensors/ to path so livox_mid360 can be imported
-_SIM_SENSORS = Path(__file__).resolve().parent.parent.parent / "sim" / "sensors"
+# Add sim/sensors/ to path so livox_mid360 can be imported.
+_SIM_SENSORS = Path(__file__).resolve().parents[2] / "sensors"
 if str(_SIM_SENSORS) not in sys.path:
     sys.path.insert(0, str(_SIM_SENSORS))
 
@@ -39,8 +39,12 @@ class MuJoCoLidar:
         self._data = data
         self._config = config
 
-        # Import unified interface from sim/sensors/livox_mid360.py
+        # Import unified interface from sim/sensors/livox_mid360.py. If an
+        # official scan-mode file is configured, keep the local fallback path so
+        # we can replay that exact MID-360 pattern instead of the legacy spiral.
         try:
+            if config.mid360_npy_path:
+                raise ImportError("configured scan-mode file uses local fallback")
             from livox_mid360 import LidarSensor
             self._sensor = LidarSensor(
                 model, data,
@@ -64,7 +68,12 @@ class MuJoCoLidar:
 
         # Pre-compute fallback ray directions (golden angle spiral)
         if not self._use_livox_module:
-            self._ray_dirs_local = self._build_golden_spiral(config.n_rays)
+            self._ray_angles = self._load_scan_mode_angles(config.mid360_npy_path)
+            if self._ray_angles is None:
+                self._ray_dirs_local = self._build_golden_spiral(config.n_rays)
+            else:
+                self._ray_cursor = 0
+                self._ray_dirs_local = None
             self._frame_idx = 0
 
         print(f'[MuJoCoLidar] Initialized: body={config.body_name}, '
@@ -92,6 +101,60 @@ class MuJoCoLidar:
         va = vfov_min + i / n * (vfov_max - vfov_min)
         cv = np.cos(va)
         return np.column_stack([cv * np.cos(ha), cv * np.sin(ha), np.sin(va)])
+
+    @staticmethod
+    def _load_scan_mode_angles(path: Optional[str]) -> Optional[np.ndarray]:
+        """Load Livox scan-mode angles as ``[theta, phi]`` radians.
+
+        ``.npy`` files are expected to already contain the same two-column
+        representation used by MuJoCo-LiDAR. Official Livox CSV files use
+        ``Time/s,Azimuth/deg,Zenith/deg``; convert zenith to elevation phi.
+        """
+        if not path:
+            return None
+        scan_path = Path(path).expanduser()
+        if not scan_path.exists():
+            raise FileNotFoundError(f"MID-360 scan-mode file not found: {scan_path}")
+        if scan_path.suffix.lower() == ".npy":
+            angles = np.load(scan_path)
+        else:
+            csv_angles = np.loadtxt(
+                scan_path,
+                delimiter=",",
+                skiprows=1,
+                usecols=(1, 2),
+                dtype=np.float32,
+            )
+            theta = np.deg2rad(csv_angles[:, 0])
+            phi = np.deg2rad(90.0 - csv_angles[:, 1])
+            angles = np.column_stack([theta, phi])
+        angles = np.asarray(angles, dtype=np.float32)
+        if angles.ndim != 2 or angles.shape[1] != 2:
+            raise ValueError(
+                f"MID-360 scan-mode file must contain Nx2 theta/phi angles: {scan_path}"
+            )
+        if len(angles) == 0:
+            raise ValueError(f"MID-360 scan-mode file is empty: {scan_path}")
+        return angles
+
+    def _next_pattern_dirs_local(self) -> np.ndarray:
+        assert self._ray_angles is not None
+        samples = max(1, int(self._config.samples_per_frame))
+        n_angles = len(self._ray_angles)
+        start = int(getattr(self, "_ray_cursor", 0))
+        end = start + samples
+        if end <= n_angles:
+            angles = self._ray_angles[start:end]
+        else:
+            angles = np.concatenate(
+                [self._ray_angles[start:], self._ray_angles[: end % n_angles]],
+                axis=0,
+            )
+        self._ray_cursor = end % n_angles
+        theta = angles[:, 0].astype(np.float64, copy=False)
+        phi = angles[:, 1].astype(np.float64, copy=False)
+        cp = np.cos(phi)
+        return np.column_stack([cp * np.cos(theta), cp * np.sin(theta), np.sin(phi)])
 
     def scan(self) -> np.ndarray:
         """Perform one LiDAR scan.
@@ -132,12 +195,15 @@ class MuJoCoLidar:
         pos = self._data.xpos[body_id].copy()
         rmat = self._data.xmat[body_id].reshape(3, 3).copy()
 
-        # Per-frame rotation offset (simulates non-repetitive coverage)
-        ang = self._frame_idx * 0.628
-        self._frame_idx += 1
-        c, s = np.cos(ang), np.sin(ang)
-        Rz = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]], dtype=np.float64)
-        dirs_local = self._ray_dirs_local @ Rz.T     # (N, 3) sensor frame
+        if self._ray_angles is not None:
+            dirs_local = self._next_pattern_dirs_local()
+        else:
+            # Per-frame rotation offset (simulates non-repetitive coverage).
+            ang = self._frame_idx * 0.628
+            self._frame_idx += 1
+            c, s = np.cos(ang), np.sin(ang)
+            Rz = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]], dtype=np.float64)
+            dirs_local = self._ray_dirs_local @ Rz.T     # (N, 3) sensor frame
         dirs_world = dirs_local @ rmat.T              # sensor -> world frame
 
         n_rays = len(dirs_world)

@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[2]
+MID360_PATTERN_REL = "sim/assets/livox/mid360.npy"
+MID360_PATTERN_SHA256 = "448821576a658673e8f7929992c8c0d687eb052657d7b584d038729a83da1bfb"
+LIVE_NAV_MAP_TOPIC = "/nav/map_cloud"
 
 
 @dataclass(frozen=True)
@@ -37,9 +41,369 @@ def _safe_float(value: Any, default: float = 999.0) -> float:
         return default
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _require_live_nav_map_growth(map_growth: dict[str, Any], blockers: list[str]) -> None:
+    source = str(map_growth.get("accepted_cumulative_growth_source") or "")
+    if source != LIVE_NAV_MAP_TOPIC:
+        blockers.append(f"map_growth.accepted_cumulative_growth_source is not {LIVE_NAV_MAP_TOPIC}")
+
+    min_nav = _safe_float(map_growth.get("min_map_area_growth_m2"), default=0.0)
+    if min_nav <= 0.0:
+        blockers.append("map_growth.min_map_area_growth_m2 is not positive")
+
+    if _safe_int(map_growth.get("nav_map_cloud_area_samples")) <= 0:
+        blockers.append("map_growth.nav_map_cloud_area_samples missing")
+
+    nav_area = map_growth.get("nav_map_cloud_xy_area") or {}
+    if _safe_float(nav_area.get("growth_m2"), default=0.0) < min_nav:
+        blockers.append(f"{LIVE_NAV_MAP_TOPIC} area growth below threshold")
+
+
+def _require_exploration_grid_signal(
+    explorer: dict[str, Any],
+    blockers: list[str],
+    *,
+    prefix: str,
+) -> None:
+    if _safe_int(explorer.get("exploration_grid_samples")) <= 0:
+        blockers.append(f"{prefix}.exploration_grid_samples missing")
+
+    metadata = (
+        explorer.get("exploration_grid_metadata_last")
+        if isinstance(explorer.get("exploration_grid_metadata_last"), dict)
+        else {}
+    )
+    if str(metadata.get("source") or "") != "raycast_lidar_exploration_grid":
+        blockers.append(f"{prefix}.exploration_grid source is not raycast_lidar_exploration_grid")
+
+    for grid_name in ("exploration_grid_first", "exploration_grid_last"):
+        counts = explorer.get(grid_name) if isinstance(explorer.get(grid_name), dict) else {}
+        for cell_name in ("free", "unknown"):
+            if _safe_int(counts.get(cell_name)) <= 0:
+                blockers.append(f"{prefix}.{grid_name}.{cell_name} missing")
+
+
+def _require_exploration_progress(map_growth: dict[str, Any], blockers: list[str]) -> None:
+    if _safe_int(map_growth.get("exploration_area_samples")) <= 0:
+        blockers.append("map_growth.exploration_area_samples missing")
+
+    min_explored = _safe_float(map_growth.get("min_explored_area_growth_m2"), default=0.0)
+    if min_explored <= 0.0:
+        blockers.append("map_growth.min_explored_area_growth_m2 is not positive")
+
+    min_coverage = _safe_float(
+        map_growth.get("min_exploration_coverage_growth_ratio"),
+        default=0.0,
+    )
+    if min_coverage <= 0.0:
+        blockers.append("map_growth.min_exploration_coverage_growth_ratio is not positive")
+
+    explored_area = map_growth.get("exploration_known_area") or {}
+    if _safe_float(explored_area.get("growth_m2"), default=0.0) < min_explored:
+        blockers.append("exploration known area growth below threshold")
+
+    coverage = map_growth.get("exploration_coverage") or {}
+    if _safe_float(coverage.get("growth_ratio"), default=0.0) < min_coverage:
+        blockers.append("exploration coverage growth below threshold")
+
+
+def _moving_obstacle_trail_margin(trail: dict[str, Any]) -> Any:
+    margin = trail.get("min_clearance_minus_robot_radius_m")
+    if margin is None:
+        margin = trail.get("min_margin_m")
+    return margin
+
+
+def _moving_obstacles_enabled(moving_obstacles: dict[str, Any]) -> bool:
+    mode = str(moving_obstacles.get("mode") or "none")
+    return bool(moving_obstacles.get("enabled")) or mode != "none"
+
+
+def _require_moving_obstacle_evidence(
+    moving_obstacles: dict[str, Any],
+    blockers: list[str],
+    *,
+    prefix: str = "moving_obstacles",
+) -> dict[str, Any]:
+    trail = (
+        moving_obstacles.get("trail_clearance")
+        if isinstance(moving_obstacles.get("trail_clearance"), dict)
+        else {}
+    )
+    margin = _moving_obstacle_trail_margin(trail)
+    if moving_obstacles.get("ok") is not True:
+        blockers.append(f"{prefix}.ok is not true")
+    if _safe_int(moving_obstacles.get("published_update_count")) <= 0:
+        blockers.append(f"{prefix}.published_update_count missing")
+    if _safe_int(moving_obstacles.get("published_point_count_max")) <= 0:
+        blockers.append(f"{prefix}.published_point_count_max missing")
+    if trail.get("checked") is not True:
+        blockers.append(f"{prefix}.trail_clearance.checked is not true")
+    if trail.get("collision") is True:
+        blockers.append(f"{prefix}.trail_clearance.collision is true")
+    if _safe_float(margin, default=-999.0) < 0.0:
+        blockers.append(f"{prefix}.trail_clearance margin is negative")
+    return {
+        "enabled": moving_obstacles.get("enabled"),
+        "mode": str(moving_obstacles.get("mode") or "none"),
+        "count": moving_obstacles.get("count"),
+        "period_s": moving_obstacles.get("period_s"),
+        "ok": moving_obstacles.get("ok"),
+        "published_update_count": moving_obstacles.get("published_update_count"),
+        "published_point_count_max": moving_obstacles.get("published_point_count_max"),
+        "trail_collision": trail.get("collision"),
+        "trail_min_margin_m": margin,
+    }
+
+
+def _fastlio2_live_video_evidence(report: dict[str, Any]) -> dict[str, Any]:
+    video = report.get("video") if isinstance(report.get("video"), dict) else {}
+    path = str(report.get("video_path") or video.get("path") or "")
+    frame_count = _safe_int(report.get("video_frame_count", video.get("frames")))
+    sample_count = _safe_int(report.get("video_sample_count", video.get("samples")))
+    return {
+        "required": bool(path),
+        "path": path,
+        "frame_count": frame_count,
+        "sample_count": sample_count,
+    }
+
+
+def _require_fastlio2_live_video_evidence(
+    report: dict[str, Any],
+    blockers: list[str],
+    *,
+    prefix: str = "fastlio2_live",
+) -> dict[str, Any]:
+    evidence = _fastlio2_live_video_evidence(report)
+    if evidence["required"]:
+        if _safe_int(evidence.get("frame_count")) <= 0:
+            blockers.append(f"{prefix} video_frame_count missing")
+        if _safe_int(evidence.get("sample_count")) <= 0:
+            blockers.append(f"{prefix} video_sample_count missing")
+    return evidence
+
+
+def _resolve_report_relative_path(report: dict[str, Any], path_value: Any) -> Path:
+    path = Path(str(path_value or ""))
+    if path.is_absolute():
+        return path
+    report_path = report.get("_report_path")
+    if report_path:
+        report_dir = Path(str(report_path)).resolve().parent
+        candidate = (report_dir / path).resolve()
+        if candidate.exists():
+            return candidate
+    return (ROOT / path).resolve()
+
+
+def _verify_video_artifact(
+    report: dict[str, Any],
+    video: dict[str, Any],
+    blockers: list[str],
+    *,
+    prefix: str,
+) -> dict[str, Any]:
+    path_text = str(video.get("path") or "")
+    evidence = {
+        "exists": False,
+        "decode_checked": False,
+        "decode_ok": False,
+        "nonblack_checked": False,
+        "nonblack_ok": False,
+    }
+    if not path_text:
+        return evidence
+
+    path = _resolve_report_relative_path(report, path_text)
+    evidence["resolved_path"] = str(path)
+    if not path.exists():
+        blockers.append(f"{prefix} video file missing")
+        return evidence
+    evidence["exists"] = True
+    evidence["size_bytes"] = path.stat().st_size
+    if path.stat().st_size <= 0:
+        blockers.append(f"{prefix} video file is empty")
+        return evidence
+
+    try:
+        import cv2  # type: ignore
+    except Exception as exc:
+        evidence["decode_error"] = f"{type(exc).__name__}: {exc}"
+        return evidence
+
+    capture = cv2.VideoCapture(str(path))
+    try:
+        evidence["decode_checked"] = True
+        ok, frame = capture.read()
+        if not ok or frame is None:
+            blockers.append(f"{prefix} video first frame is not decodable")
+            return evidence
+        evidence["decode_ok"] = True
+        evidence["first_frame_shape"] = list(frame.shape)
+        try:
+            import numpy as np
+
+            mean_intensity = float(np.mean(frame))
+            evidence["first_frame_mean_intensity"] = round(mean_intensity, 3)
+            evidence["nonblack_checked"] = True
+            if mean_intensity <= 1.0:
+                blockers.append(f"{prefix} video first frame is black")
+            else:
+                evidence["nonblack_ok"] = True
+        except Exception as exc:
+            evidence["nonblack_error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        capture.release()
+    return evidence
+
+
+def _runtime_contract_blockers(
+    report: dict[str, Any],
+    *,
+    expected_name: str,
+) -> tuple[list[str], dict[str, Any]]:
+    contract = report.get("runtime_contract")
+    if not isinstance(contract, dict):
+        return ["runtime_contract missing"], {}
+    blockers: list[str] = []
+    if contract.get("name") != expected_name:
+        blockers.append(f"runtime_contract.name is not {expected_name}")
+    if contract.get("ok") is not True:
+        blockers.append("runtime_contract.ok is not true")
+    definition = contract.get("definition") if isinstance(contract.get("definition"), dict) else {}
+
+    canonical: dict[str, Any] = {}
+    try:
+        import sys
+
+        for candidate in (ROOT / "src", ROOT):
+            path = str(candidate)
+            if path not in sys.path:
+                sys.path.insert(0, path)
+        from core.blueprints.simulation_contract import simulation_runtime_contract
+
+        canonical = simulation_runtime_contract(expected_name).as_report()
+    except Exception as exc:
+        blockers.append(f"runtime_contract canonical definition unavailable: {type(exc).__name__}: {exc}")
+
+    if definition.get("name") != expected_name:
+        blockers.append(f"runtime_contract.definition.name is not {expected_name}")
+    if definition.get("simulation_only") is not True:
+        blockers.append("runtime_contract.definition.simulation_only is not true")
+    if definition.get("isolated_domain_required") is not True:
+        blockers.append("runtime_contract.definition.isolated_domain_required is not true")
+    for key in (
+        "provider",
+        "profile",
+        "world",
+        "launch_script",
+        "rviz_config",
+        "adapter_script",
+        "data_source_contract",
+        "command_topic",
+        "simulation_only",
+        "isolated_domain_required",
+        "contract_role",
+        "runtime_stage",
+        "map_dependency",
+        "world_sensor_owner",
+        "slam_source",
+        "localization_source",
+        "mapping_source",
+        "slam_validated",
+        "requires_live_slam",
+        "requires_saved_map",
+        "requires_tomogram",
+    ):
+        if canonical and definition.get(key) != canonical.get(key):
+            blockers.append(f"runtime_contract.definition.{key} does not match canonical contract")
+    for key in (
+        "canonical_topics",
+        "native_topics",
+        "lingtu_owns",
+        "simulator_owns",
+        "required_runtime_topics",
+        "required_path_topics",
+        "required_map_growth_topics",
+        "required_scan_topics",
+        "required_slam_topics",
+    ):
+        if canonical and list(definition.get(key) or []) != list(canonical.get(key) or []):
+            blockers.append(f"runtime_contract.definition.{key} does not match canonical contract")
+
+    topic_evidence = contract.get("topic_evidence") if isinstance(contract.get("topic_evidence"), dict) else {}
+    for topic in list((canonical or definition).get("required_runtime_topics") or []):
+        if (topic_evidence.get(topic) or {}).get("ok") is not True:
+            blockers.append(f"runtime_contract topic evidence missing or failed for {topic}")
+
+    for topic in list((canonical or definition).get("required_path_topics") or []):
+        requirement = (report.get("path_requirements") or {}).get(topic)
+        evidence = topic_evidence.get(topic) or {}
+        if not (isinstance(requirement, dict) and requirement.get("ok") is True) and evidence.get("ok") is not True:
+            blockers.append(f"runtime_contract path evidence missing or failed for {topic}")
+    for topic in list((canonical or definition).get("required_map_growth_topics") or []):
+        requirement = (report.get("map_requirements") or {}).get(topic)
+        evidence = topic_evidence.get(topic) or {}
+        if not (isinstance(requirement, dict) and requirement.get("ok") is True) and evidence.get("ok") is not True:
+            blockers.append(f"runtime_contract map-growth evidence missing or failed for {topic}")
+    for topic in list((canonical or definition).get("required_scan_topics") or []):
+        requirement = (report.get("scan_requirements") or {}).get(topic)
+        evidence = topic_evidence.get(topic) or {}
+        if not (isinstance(requirement, dict) and requirement.get("ok") is True) and evidence.get("ok") is not True:
+            blockers.append(f"runtime_contract scan evidence missing or failed for {topic}")
+    for topic in list((canonical or definition).get("required_slam_topics") or []):
+        evidence = topic_evidence.get(topic) or {}
+        if evidence.get("ok") is not True:
+            blockers.append(f"runtime_contract slam evidence missing or failed for {topic}")
+
+    publisher_identity = (
+        contract.get("publisher_identity")
+        if isinstance(contract.get("publisher_identity"), dict)
+        else {}
+    )
+    if publisher_identity.get("blocked_hardware_nodes"):
+        blockers.append("runtime_contract publisher_identity has hardware-looking endpoints")
+    if publisher_identity.get("unexpected_command_publishers"):
+        blockers.append("runtime_contract publisher_identity has unexpected command publishers")
+    for error in contract.get("errors") or []:
+        blockers.append(f"runtime_contract: {error}")
+    return blockers, contract
+
+
 def _frame(report: dict[str, Any], key: str) -> str:
     frames = report.get("frames") or {}
     return str(frames.get(key) or "")
+
+
+def _lidar_source(report: dict[str, Any]) -> dict[str, Any]:
+    source = report.get("lidar_source")
+    if isinstance(source, dict):
+        return source
+    video = report.get("video")
+    if isinstance(video, dict) and isinstance(video.get("lidar_source"), dict):
+        return video["lidar_source"]
+    return {}
+
+
+def _require_mid360_pattern(report: dict[str, Any], blockers: list[str], prefix: str) -> dict[str, Any]:
+    source = _lidar_source(report)
+    if source.get("forced_pattern") is not True:
+        blockers.append(f"{prefix}.forced_pattern is not true")
+    if str(source.get("pattern_sha256") or "").lower() != MID360_PATTERN_SHA256:
+        blockers.append(f"{prefix}.pattern_sha256 is not official MID-360 asset")
+    pattern_path = str(source.get("pattern_path") or "").replace("\\", "/")
+    if not pattern_path.endswith(MID360_PATTERN_REL):
+        blockers.append(f"{prefix}.pattern_path is not {MID360_PATTERN_REL}")
+    if int(source.get("samples_per_frame") or 0) <= 0:
+        blockers.append(f"{prefix}.samples_per_frame missing")
+    return source
 
 
 def _eval_large_terrain(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
@@ -93,6 +457,36 @@ def _eval_native_pct_mujoco(report: dict[str, Any]) -> tuple[bool, list[str], di
         blockers.append("planner is not pct")
     if report.get("pct_native_backend_used") is not True:
         blockers.append("pct_native_backend_used is not true")
+    if str(report.get("primary_planner") or "").lower() != "pct":
+        blockers.append("primary_planner is not pct")
+    if str(report.get("selected_planner") or "").lower() != "pct":
+        blockers.append("selected_planner is not pct")
+    if report.get("fallback_used") is not False:
+        blockers.append("fallback_used is not false")
+    if str(report.get("global_planner_source") or "") != "source_report/native_pct_tomogram":
+        blockers.append("global_planner_source is not source_report/native_pct_tomogram")
+    chain = report.get("planning_chain") or {}
+    if chain.get("fallback_allowed") is not False:
+        blockers.append("planning_chain.fallback_allowed is not false")
+    if str(chain.get("local_planner") or "") != "cmu_ros2_native/localPlanner":
+        blockers.append("planning_chain.local_planner is not cmu_ros2_native/localPlanner")
+    if str(chain.get("path_follower") or "") != "cmu_ros2_native/pathFollower":
+        blockers.append("planning_chain.path_follower is not cmu_ros2_native/pathFollower")
+    source_contract = report.get("source_planning_contract") or {}
+    if str(source_contract.get("primary_planner") or "").lower() != "pct":
+        blockers.append("source_planning_contract.primary_planner is not pct")
+    if str(source_contract.get("selected_planner") or "").lower() != "pct":
+        blockers.append("source_planning_contract.selected_planner is not pct")
+    if source_contract.get("fallback_used") is not False:
+        blockers.append("source_planning_contract.fallback_used is not false")
+    if source_contract.get("path_safety_ok") is not True:
+        blockers.append("source_planning_contract.path_safety_ok is not true")
+    if source_contract.get("native_backend_used") is not True:
+        blockers.append("source_planning_contract.native_backend_used is not true")
+    if source_contract.get("tomogram_exists") is not True:
+        blockers.append("source_planning_contract.tomogram_exists is not true")
+    if not str(source_contract.get("tomogram_sha256") or ""):
+        blockers.append("source_planning_contract.tomogram_sha256 is missing")
     obstacle_aware = report.get("obstacle_aware") or {}
     if obstacle_aware.get("enabled") is not True:
         blockers.append("obstacle_aware.enabled is not true")
@@ -109,15 +503,49 @@ def _eval_native_pct_mujoco(report: dict[str, Any]) -> tuple[bool, list[str], di
     trajectory_quality = report.get("trajectory_quality") or {}
     if trajectory_quality.get("ok") is not True:
         blockers.append("trajectory_quality.ok is not true")
+    moving_obstacles = report.get("moving_obstacles") or {}
+    moving_mode = str(moving_obstacles.get("mode") or "none")
+    moving_enabled = bool(moving_obstacles.get("enabled")) or moving_mode != "none"
+    moving_trail = moving_obstacles.get("trail_clearance") or {}
+    moving_trail_margin = moving_trail.get("min_clearance_minus_robot_radius_m")
+    if moving_trail_margin is None:
+        moving_trail_margin = moving_trail.get("min_margin_m")
+    if moving_enabled:
+        if moving_obstacles.get("ok") is not True:
+            blockers.append("moving_obstacles.ok is not true")
+        if int(moving_obstacles.get("published_update_count") or 0) <= 0:
+            blockers.append("moving_obstacles.published_update_count missing")
+        if int(moving_obstacles.get("published_point_count_max") or 0) <= 0:
+            blockers.append("moving_obstacles.published_point_count_max missing")
+        if moving_trail.get("checked") is not True:
+            blockers.append("moving_obstacles.trail_clearance.checked is not true")
+        if moving_trail.get("collision") is True:
+            blockers.append("moving_obstacles.trail_clearance.collision is true")
+        if _safe_float(moving_trail_margin, default=-999.0) < 0.0:
+            blockers.append("moving_obstacles.trail_clearance margin is negative")
+    video = report.get("video") or {}
+    video_path = str(video.get("path") or "")
+    video_required = bool(video_path)
+    if video_required:
+        if video.get("exists") is not True:
+            blockers.append("native_pct video.exists is not true")
+        if int(video.get("frames") or 0) <= 0:
+            blockers.append("native_pct video.frames missing")
     if _safe_float(report.get("final_distance_m")) > 0.8:
         blockers.append("final_distance_m > 0.8")
     if _frame(report, "goal") and _frame(report, "goal") != "map":
         blockers.append("goal frame is not map")
     if _frame(report, "cmd_vel") and _frame(report, "cmd_vel") != "base_link":
         blockers.append("cmd_vel frame is not base_link")
+    lidar_source = _require_mid360_pattern(report, blockers, "lidar_source")
 
     return not blockers, blockers, {
         "planner": report.get("planner"),
+        "primary_planner": report.get("primary_planner"),
+        "selected_planner": report.get("selected_planner"),
+        "fallback_used": report.get("fallback_used"),
+        "global_planner_source": report.get("global_planner_source"),
+        "source_planning_contract": source_contract,
         "pct_native_backend_used": report.get("pct_native_backend_used"),
         "final_distance_m": report.get("final_distance_m"),
         "moved_m": report.get("moved_m"),
@@ -134,7 +562,82 @@ def _eval_native_pct_mujoco(report: dict[str, Any]) -> tuple[bool, list[str], di
             "p95_lateral_error_m": trajectory_quality.get("p95_lateral_error_m"),
             "final_progress_ratio": trajectory_quality.get("final_progress_ratio"),
         },
+        "moving_obstacles": {
+            "enabled": moving_obstacles.get("enabled"),
+            "mode": moving_mode,
+            "count": moving_obstacles.get("count"),
+            "period_s": moving_obstacles.get("period_s"),
+            "ok": moving_obstacles.get("ok"),
+            "published_update_count": moving_obstacles.get("published_update_count"),
+            "published_point_count_max": moving_obstacles.get("published_point_count_max"),
+            "trail_collision": moving_trail.get("collision"),
+            "trail_min_margin_m": moving_trail_margin,
+        },
+        "video": {
+            "required": video_required,
+            "path": video_path,
+            "exists": video.get("exists"),
+            "frames": video.get("frames"),
+            "layout": video.get("layout"),
+        },
+        "lidar_source": lidar_source,
         "frames": report.get("frames") or {},
+    }
+
+
+def _eval_pct_saved_map_navigation(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("ok") is not True:
+        blockers.append("report.ok is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+    if report.get("validation_level") != "saved_map_relocalized_pct_navigation":
+        blockers.append("validation_level is not saved_map_relocalized_pct_navigation")
+
+    relocalization = report.get("relocalization") or {}
+    if relocalization.get("ok") is not True:
+        blockers.append("relocalization.ok is not true")
+    if str(relocalization.get("latest_health_state") or "").upper() != "LOCKED":
+        blockers.append("relocalization latest_health_state is not LOCKED")
+
+    preview = report.get("plan_preview") or {}
+    if preview.get("ok") is not True:
+        blockers.append("plan_preview.ok is not true")
+    if preview.get("selected_planner") != "pct":
+        blockers.append("plan_preview.selected_planner is not pct")
+    if preview.get("fallback_reason"):
+        blockers.append("plan_preview fallback_reason is non-empty")
+    if int(preview.get("path_count") or 0) < 2:
+        blockers.append("plan_preview path_count < 2")
+
+    native = report.get("native_gate") or {}
+    native_ok, native_blockers, native_evidence = _eval_native_pct_mujoco(native)
+    if not native_ok:
+        blockers.extend(f"native_gate.{item}" for item in native_blockers)
+
+    scene_meta = report.get("scene_obstacle_metadata") or {}
+    if int(scene_meta.get("obstacle_count") or 0) <= 0:
+        blockers.append("scene_obstacle_metadata.obstacle_count missing")
+
+    return not blockers, blockers, {
+        "tomogram": report.get("tomogram"),
+        "relocalize_report": report.get("relocalize_report"),
+        "relocalization": {
+            "latest_health_state": relocalization.get("latest_health_state"),
+            "saved_map_cloud_points_latest": relocalization.get("saved_map_cloud_points_latest"),
+            "map_to_odom_xy_m": relocalization.get("map_to_odom_xy_m"),
+        },
+        "plan_preview": {
+            "selected_case": preview.get("selected_case"),
+            "selected_planner": preview.get("selected_planner"),
+            "path_count": preview.get("path_count"),
+        },
+        "native_gate": native_evidence,
+        "scene_obstacle_metadata": scene_meta,
     }
 
 
@@ -202,6 +705,7 @@ def _eval_fastlio2_live(report: dict[str, Any]) -> tuple[bool, list[str], dict[s
         "live_mujoco_lidar_verified",
         "live_mujoco_imu_verified",
         "slam_algorithm_output_verified",
+        "canonical_nav_outputs_verified",
         "bridge_verified",
     ):
         if report.get(key) is not True:
@@ -210,14 +714,441 @@ def _eval_fastlio2_live(report: dict[str, Any]) -> tuple[bool, list[str], dict[s
         blockers.append("real_robot_motion is not false")
     if report.get("cmd_vel_sent_to_hardware") is not False:
         blockers.append("cmd_vel_sent_to_hardware is not false")
-    if _frame(report, "published_lidar") and _frame(report, "published_lidar") != "body":
-        blockers.append("published_lidar frame is not body")
+    published_lidar_frame = _frame(report, "published_lidar")
+    if published_lidar_frame and published_lidar_frame not in {"body", "lidar_link"}:
+        blockers.append("published_lidar frame is not body or lidar_link")
+    outputs = report.get("outputs") or {}
+    for key in ("nav_odometry", "nav_registered_cloud", "nav_map_cloud"):
+        if int(outputs.get(key) or 0) <= 0:
+            blockers.append(f"outputs.{key} missing")
+    lidar_source = _require_mid360_pattern(report, blockers, "lidar_source")
+    frontier = report.get("lingtu_frontier") or {}
+    tare = report.get("lingtu_tare") or {}
+    inspection = report.get("lingtu_inspection") or {}
+    navigation_chain = report.get("navigation_chain") or {}
+    map_growth = report.get("map_growth") or {}
+    if (
+        frontier.get("enabled") is True
+        or tare.get("enabled") is True
+        or inspection.get("enabled") is True
+    ):
+        _require_live_nav_map_growth(map_growth, blockers)
+    if frontier.get("enabled") is True:
+        if frontier.get("verified") is not True:
+            blockers.append("lingtu_frontier.verified is not true")
+        if frontier.get("started_after_slam_ready") is not True:
+            blockers.append("lingtu_frontier.started_after_slam_ready is not true")
+        if int(frontier.get("goal_count") or 0) <= 0:
+            blockers.append("lingtu_frontier.goal_count missing")
+        min_required_goals = int(frontier.get("min_required_goals") or 1)
+        if int(frontier.get("successful_navigation_goal_count") or 0) < min_required_goals:
+            blockers.append("lingtu_frontier.successful_navigation_goal_count below required")
+        if int(frontier.get("failed_navigation_goal_count") or 0) > 0:
+            blockers.append("lingtu_frontier.failed_navigation_goal_count is nonzero")
+        frontier_health = frontier.get("frontier_health")
+        if (
+            isinstance(frontier_health, dict)
+            and int(frontier_health.get("blocked_goal_count") or 0) > 0
+        ):
+            blockers.append("lingtu_frontier.frontier_health.blocked_goal_count is nonzero")
+        if int(outputs.get("nav_cmd_vel_nonzero") or 0) <= 0:
+            blockers.append("outputs.nav_cmd_vel_nonzero missing")
+        if navigation_chain.get("planner_fallback_used") is True:
+            blockers.append("navigation_chain.planner_fallback_used is true")
+        if navigation_chain.get("planner_repair_used") is True:
+            blockers.append("navigation_chain.planner_repair_used is true")
+        direct_goal_fallback = navigation_chain.get("direct_goal_fallback")
+        if isinstance(direct_goal_fallback, dict) and direct_goal_fallback.get("used") is True:
+            blockers.append("navigation_chain.direct_goal_fallback.used is true")
+        health = navigation_chain.get("health") if isinstance(navigation_chain.get("health"), dict) else {}
+        if health and str(health.get("plan_safety_policy") or "") != "reject":
+            blockers.append("navigation_chain.health.plan_safety_policy is not reject")
+        explored_area = map_growth.get("exploration_known_area") or {}
+        coverage = map_growth.get("exploration_coverage") or {}
+        grid_growth_is_acceptance_metric = (
+            map_growth.get("exploration_grid_growth_is_acceptance_metric") is not False
+        )
+        min_explored = _safe_float(map_growth.get("min_explored_area_growth_m2"), default=0.0)
+        min_coverage = _safe_float(
+            map_growth.get("min_exploration_coverage_growth_ratio"),
+            default=0.0,
+        )
+        if grid_growth_is_acceptance_metric:
+            if _safe_float(explored_area.get("growth_m2"), default=0.0) < min_explored:
+                blockers.append("exploration known area growth below threshold")
+            if _safe_float(coverage.get("growth_ratio"), default=0.0) < min_coverage:
+                blockers.append("exploration coverage growth below threshold")
+    if tare.get("enabled") is True:
+        if tare.get("verified") is not True:
+            blockers.append("lingtu_tare.verified is not true")
+        if tare.get("started_after_slam_ready") is not True:
+            blockers.append("lingtu_tare.started_after_slam_ready is not true")
+        _require_exploration_grid_signal(tare, blockers, prefix="lingtu_tare")
+        _require_exploration_progress(map_growth, blockers)
+        if int(tare.get("goal_count") or 0) <= 0:
+            blockers.append("lingtu_tare.goal_count missing")
+        min_required_goals = int(tare.get("min_required_goals") or 1)
+        if int(tare.get("successful_navigation_goal_count") or 0) < min_required_goals:
+            blockers.append("lingtu_tare.successful_navigation_goal_count below required")
+        if int(tare.get("failed_navigation_goal_count") or 0) > 0:
+            blockers.append("lingtu_tare.failed_navigation_goal_count is nonzero")
+        if int(outputs.get("nav_cmd_vel_nonzero") or 0) <= 0:
+            blockers.append("outputs.nav_cmd_vel_nonzero missing")
+        if navigation_chain.get("planner_fallback_used") is True:
+            blockers.append("navigation_chain.planner_fallback_used is true")
+        if navigation_chain.get("planner_repair_used") is True:
+            blockers.append("navigation_chain.planner_repair_used is true")
+        direct_goal_fallback = navigation_chain.get("direct_goal_fallback")
+        if isinstance(direct_goal_fallback, dict) and direct_goal_fallback.get("used") is True:
+            blockers.append("navigation_chain.direct_goal_fallback.used is true")
+        health = navigation_chain.get("health") if isinstance(navigation_chain.get("health"), dict) else {}
+        if health and str(health.get("plan_safety_policy") or "") != "reject":
+            blockers.append("navigation_chain.health.plan_safety_policy is not reject")
+        if int(tare.get("global_path_points_max") or 0) < 2:
+            blockers.append("lingtu_tare.global_path_points_max below required")
+        if int(tare.get("local_path_points_max") or 0) < 2:
+            blockers.append("lingtu_tare.local_path_points_max below required")
+
+    if inspection.get("enabled") is True:
+        inspection_success_count = int(inspection.get("successful_navigation_goal_count") or 0)
+        if inspection.get("verified") is not True:
+            blockers.append("lingtu_inspection.verified is not true")
+        if inspection.get("started_after_slam_ready") is not True:
+            blockers.append("lingtu_inspection.started_after_slam_ready is not true")
+        if int(inspection.get("goal_count") or 0) <= 0:
+            blockers.append("lingtu_inspection.goal_count missing")
+        min_required_checkpoints = int(inspection.get("min_required_checkpoints") or 1)
+        inspection_success_requirement_met = inspection_success_count >= min_required_checkpoints
+        if not inspection_success_requirement_met:
+            blockers.append("lingtu_inspection.successful_navigation_goal_count below required")
+        if (
+            int(inspection.get("failed_navigation_goal_count") or 0) > 0
+            and not inspection_success_requirement_met
+        ):
+            blockers.append("lingtu_inspection.failed_navigation_goal_count is nonzero")
+        if int(outputs.get("nav_cmd_vel_nonzero") or 0) <= 0:
+            blockers.append("outputs.nav_cmd_vel_nonzero missing")
+        if navigation_chain.get("planner_fallback_used") is True:
+            blockers.append("navigation_chain.planner_fallback_used is true")
+        if navigation_chain.get("planner_repair_used") is True:
+            blockers.append("navigation_chain.planner_repair_used is true")
+        direct_goal_fallback = navigation_chain.get("direct_goal_fallback")
+        if isinstance(direct_goal_fallback, dict) and direct_goal_fallback.get("used") is True:
+            blockers.append("navigation_chain.direct_goal_fallback.used is true")
+        health = navigation_chain.get("health") if isinstance(navigation_chain.get("health"), dict) else {}
+        if health and str(health.get("plan_safety_policy") or "") != "reject":
+            blockers.append("navigation_chain.health.plan_safety_policy is not reject")
+        if int(inspection.get("global_path_points_max") or 0) < 2:
+            blockers.append("lingtu_inspection.global_path_points_max below required")
+        if int(inspection.get("local_path_points_max") or 0) < 2:
+            blockers.append("lingtu_inspection.local_path_points_max below required")
+
+    moving_obstacles = (
+        report.get("moving_obstacles")
+        if isinstance(report.get("moving_obstacles"), dict)
+        else {}
+    )
+    if _moving_obstacles_enabled(moving_obstacles):
+        moving_obstacle_evidence = _require_moving_obstacle_evidence(
+            moving_obstacles,
+            blockers,
+        )
+    else:
+        moving_obstacle_evidence = {
+            "enabled": moving_obstacles.get("enabled"),
+            "mode": str(moving_obstacles.get("mode") or "none"),
+            "count": moving_obstacles.get("count"),
+            "period_s": moving_obstacles.get("period_s"),
+            "ok": moving_obstacles.get("ok"),
+            "published_update_count": moving_obstacles.get("published_update_count"),
+            "published_point_count_max": moving_obstacles.get("published_point_count_max"),
+            "trail_collision": None,
+            "trail_min_margin_m": None,
+        }
+    video_evidence = _require_fastlio2_live_video_evidence(report, blockers)
 
     return not blockers, blockers, {
-        "outputs": report.get("outputs") or {},
+        "outputs": outputs,
         "states_seen": report.get("states_seen") or [],
         "point_count": report.get("point_count") or {},
+        "lidar_source": lidar_source,
+        "map_growth": map_growth,
+        "lingtu_frontier": frontier,
+        "lingtu_tare": tare,
+        "lingtu_inspection": inspection,
+        "navigation_chain": navigation_chain,
+        "moving_obstacles": moving_obstacle_evidence,
+        "video": video_evidence,
         "frames": report.get("frames") or {},
+    }
+
+
+def _subcheck_ok(report: dict[str, Any], key: str, blockers: list[str]) -> dict[str, Any]:
+    value = report.get(key) if isinstance(report.get(key), dict) else {}
+    if value.get("checked") is not True:
+        blockers.append(f"{key}.checked is not true")
+    if value.get("ok") is not True:
+        blockers.append(f"{key}.ok is not true")
+    return value
+
+
+def _eval_fastlio2_dynamic_inspection(
+    report: dict[str, Any],
+) -> tuple[bool, list[str], dict[str, Any]]:
+    base_ok, blockers, evidence = _eval_fastlio2_live(report)
+    blockers = list(blockers)
+    inspection = report.get("lingtu_inspection") if isinstance(report.get("lingtu_inspection"), dict) else {}
+    navigation_chain = report.get("navigation_chain") if isinstance(report.get("navigation_chain"), dict) else {}
+    moving_obstacles = (
+        report.get("moving_obstacles")
+        if isinstance(report.get("moving_obstacles"), dict)
+        else {}
+    )
+    video = _fastlio2_live_video_evidence(report)
+
+    if inspection.get("enabled") is not True:
+        blockers.append("lingtu_inspection.enabled is not true")
+    if str(inspection.get("global_planner") or "").lower() != "pct":
+        blockers.append("lingtu_inspection.global_planner is not pct")
+    if inspection.get("replan_on_costmap_update") is not False:
+        blockers.append("lingtu_inspection.replan_on_costmap_update is not false")
+    if str(inspection.get("patrol_state") or "").upper() != "SUCCESS":
+        blockers.append("lingtu_inspection.patrol_state is not SUCCESS")
+    min_checkpoints = max(3, _safe_int(inspection.get("min_required_checkpoints"), default=3))
+    if _safe_int(inspection.get("successful_navigation_goal_count")) < min_checkpoints:
+        blockers.append("lingtu_inspection successful checkpoints below core algorithm threshold")
+
+    if navigation_chain.get("planner_fallback_used") is not False:
+        blockers.append("navigation_chain.planner_fallback_used is not false")
+    if navigation_chain.get("planner_repair_used") is not False:
+        blockers.append("navigation_chain.planner_repair_used is not false")
+
+    if not _moving_obstacles_enabled(moving_obstacles):
+        blockers.append("moving_obstacles are not enabled")
+    if _safe_int(moving_obstacles.get("count")) < 3:
+        blockers.append("moving_obstacles.count < 3")
+    speed = (
+        moving_obstacles.get("speed_bounds")
+        if isinstance(moving_obstacles.get("speed_bounds"), dict)
+        else {}
+    )
+    if _safe_float(speed.get("peak_planar_speed_bound_mps"), default=0.0) < 0.75:
+        blockers.append("moving_obstacles peak_planar_speed_bound_mps < 0.75")
+    trail = (
+        moving_obstacles.get("trail_clearance")
+        if isinstance(moving_obstacles.get("trail_clearance"), dict)
+        else {}
+    )
+    trail_margin = _moving_obstacle_trail_margin(trail)
+    if _safe_float(trail_margin, default=-999.0) < 0.25:
+        blockers.append("moving_obstacles trail clearance margin < 0.25")
+
+    if not video.get("path"):
+        blockers.append("fastlio2_dynamic_inspection video_path missing")
+    if _safe_int(video.get("frame_count")) <= 0:
+        blockers.append("fastlio2_dynamic_inspection video_frame_count missing")
+    if _safe_int(video.get("sample_count")) <= 0:
+        blockers.append("fastlio2_dynamic_inspection video_sample_count missing")
+    if report.get("video_mujoco_render_error"):
+        blockers.append("video_mujoco_render_error is present")
+    video_artifact = _verify_video_artifact(
+        report,
+        video,
+        blockers,
+        prefix="fastlio2_dynamic_inspection",
+    )
+
+    true_mapping_path = str(report.get("true_mapping_input_path") or "")
+    for token in ("/points_raw", "/imu_raw", "fastlio2", "/nav/odometry", "/nav/map_cloud"):
+        if token not in true_mapping_path:
+            blockers.append(f"true_mapping_input_path missing {token}")
+
+    z_consistency = _subcheck_ok(report, "fastlio2_z_consistency", blockers)
+    yaw_consistency = _subcheck_ok(report, "fastlio2_yaw_consistency", blockers)
+    motion_consistency = _subcheck_ok(report, "fastlio2_motion_consistency", blockers)
+
+    contract = report.get("deliverable_contract") if isinstance(report.get("deliverable_contract"), dict) else {}
+    checks = contract.get("checks") if isinstance(contract.get("checks"), dict) else {}
+    for key in (
+        "raw_mujoco_lidar",
+        "raw_mujoco_imu",
+        "fastlio2_odometry_and_map",
+        "inspection_patrol",
+        "moving_obstacle_evidence",
+        "nav_cmd_vel_nonzero",
+        "same_source_map_artifact",
+    ):
+        if checks.get(key) is not True:
+            blockers.append(f"deliverable_contract.checks.{key} is not true")
+
+    dynamic_evidence = {
+        "inspection": {
+            "global_planner": inspection.get("global_planner"),
+            "replan_on_costmap_update": inspection.get("replan_on_costmap_update"),
+            "successful_navigation_goal_count": inspection.get("successful_navigation_goal_count"),
+            "min_required_checkpoints": inspection.get("min_required_checkpoints"),
+            "patrol_state": inspection.get("patrol_state"),
+            "local_path_count": inspection.get("local_path_count"),
+        },
+        "moving_obstacles": {
+            "count": moving_obstacles.get("count"),
+            "period_s": moving_obstacles.get("period_s"),
+            "speed_bounds": speed,
+            "trail_min_margin_m": trail_margin,
+            "published_update_count": moving_obstacles.get("published_update_count"),
+            "published_point_count_max": moving_obstacles.get("published_point_count_max"),
+        },
+        "video": video,
+        "video_artifact": video_artifact,
+        "fastlio2_consistency": {
+            "z_delta_error_m": z_consistency.get("z_delta_error_m"),
+            "yaw_delta_error_rad": yaw_consistency.get("yaw_delta_error_rad"),
+            "fastlio2_moved_m": motion_consistency.get("fastlio2_moved_m"),
+            "sim_moved_m": motion_consistency.get("sim_moved_m"),
+        },
+        "true_mapping_input_path": true_mapping_path,
+    }
+    evidence["core_algorithm"] = dynamic_evidence
+    return bool(base_ok) and not blockers, blockers, evidence
+
+
+def _eval_moving_obstacle_sweep(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("ok") is not True:
+        blockers.append("moving_obstacle_sweep report.ok is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+
+    required_speed_bins = list(report.get("required_speed_bins") or [])
+    required_density_bins = list(report.get("required_density_bins") or [])
+    required_pairs = list(report.get("required_pairs") or [])
+    covered_pairs = list(report.get("covered_pairs") or [])
+    missing_pairs = list(report.get("missing_pairs") or [])
+    required_live_nav_chain = report.get("required_live_nav_chain")
+    required_scan_time_profile = str(report.get("required_scan_time_profile") or "")
+    cases = list(report.get("cases") or [])
+    for speed_bin in ("slow", "fast"):
+        if speed_bin not in required_speed_bins:
+            blockers.append(f"required_speed_bins missing {speed_bin}")
+    for density_bin in ("sparse", "dense"):
+        if density_bin not in required_density_bins:
+            blockers.append(f"required_density_bins missing {density_bin}")
+    if len(required_pairs) < 4:
+        blockers.append("required speed/density pair count < 4")
+    if _safe_int(report.get("case_count")) < len(required_pairs):
+        blockers.append("case_count below required pair count")
+    if _safe_int(report.get("passed_pair_count")) < len(required_pairs):
+        blockers.append("passed_pair_count below required pair count")
+    for pair in required_pairs:
+        if pair not in covered_pairs:
+            blockers.append(f"required speed/density pair missing: {pair}")
+    for pair in missing_pairs:
+        blockers.append(f"missing required speed/density pair: {pair}")
+    if required_live_nav_chain is not True:
+        blockers.append("required_live_nav_chain is not true")
+    if required_scan_time_profile != "physical_rolling":
+        blockers.append("required_scan_time_profile is not physical_rolling")
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        pair = str(case.get("pair") or case.get("path") or "unknown")
+        if str(case.get("scan_time_profile") or "") != "physical_rolling":
+            blockers.append(f"moving_obstacle_sweep case {pair} scan_time_profile is not physical_rolling")
+        live_nav_chain = (
+            case.get("live_nav_chain")
+            if isinstance(case.get("live_nav_chain"), dict)
+            else {}
+        )
+        if live_nav_chain.get("ok") is not True:
+            blockers.append(f"moving_obstacle_sweep case {pair} live nav chain is not ok")
+            for child_blocker in live_nav_chain.get("blockers") or []:
+                blockers.append(
+                    f"moving_obstacle_sweep case {pair}: live nav chain: {child_blocker}"
+                )
+    for blocker in report.get("blockers") or []:
+        blockers.append(str(blocker))
+
+    return not blockers, blockers, {
+        "case_count": report.get("case_count"),
+        "passed_case_count": report.get("passed_case_count"),
+        "failed_case_count": report.get("failed_case_count"),
+        "passed_pair_count": report.get("passed_pair_count"),
+        "minimal_red_defect": report.get("minimal_red_defect") or {},
+        "blocking_subsystems": report.get("blocking_subsystems") or [],
+        "required_speed_bins": required_speed_bins,
+        "required_density_bins": required_density_bins,
+        "required_pairs": required_pairs,
+        "covered_speed_bins": report.get("covered_speed_bins") or [],
+        "covered_density_bins": report.get("covered_density_bins") or [],
+        "covered_pairs": covered_pairs,
+        "missing_pairs": missing_pairs,
+        "required_live_nav_chain": required_live_nav_chain,
+        "required_scan_time_profile": required_scan_time_profile,
+        "min_clearance_m": report.get("min_clearance_m"),
+        "require_video": report.get("require_video"),
+        "cases": cases,
+    }
+
+
+def _eval_large_loop_closure(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("ok") is not True:
+        blockers.append("large_loop_closure report.ok is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+
+    best_case = report.get("best_case") if isinstance(report.get("best_case"), dict) else {}
+    thresholds = report.get("thresholds") if isinstance(report.get("thresholds"), dict) else {}
+    min_path_length = _safe_float(thresholds.get("min_path_length_m"), default=20.0)
+    max_loop_error = _safe_float(thresholds.get("max_loop_closure_error_m"), default=0.75)
+    required_scan_time_profile = str(thresholds.get("required_scan_time_profile") or "")
+    passed_case_count = _safe_int(report.get("passed_case_count"))
+    if required_scan_time_profile != "physical_rolling":
+        blockers.append("large_loop_closure required_scan_time_profile is not physical_rolling")
+    if passed_case_count <= 0:
+        blockers.append("passed_case_count is 0")
+    else:
+        if str(best_case.get("scan_time_profile") or "") != "physical_rolling":
+            blockers.append("best_case.scan_time_profile is not physical_rolling")
+        if str(best_case.get("global_planner") or "").lower() != "pct":
+            blockers.append("best_case.global_planner is not pct")
+        if _safe_float(best_case.get("sim_path_length_m"), default=0.0) < min_path_length:
+            blockers.append("best_case.sim_path_length_m below threshold")
+        if _safe_float(best_case.get("fastlio2_path_length_m"), default=0.0) < min_path_length * 0.8:
+            blockers.append("best_case.fastlio2_path_length_m below threshold")
+        if _safe_float(best_case.get("sim_loop_closure_error_m"), default=999.0) > max_loop_error:
+            blockers.append("best_case.sim_loop_closure_error_m above threshold")
+        if _safe_int(best_case.get("nav_cmd_vel_nonzero")) <= 0:
+            blockers.append("best_case.nav_cmd_vel_nonzero missing")
+        if _safe_int(best_case.get("local_path_count")) <= 0:
+            blockers.append("best_case.local_path_count missing")
+        if _safe_int(best_case.get("video_frame_count")) <= 0:
+            blockers.append("best_case.video_frame_count missing")
+    for blocker in report.get("blockers") or []:
+        blockers.append(str(blocker))
+    for index, case in enumerate(report.get("cases") or []):
+        if not isinstance(case, dict) or case.get("ok") is True:
+            continue
+        for blocker in case.get("blockers") or []:
+            blockers.append(f"case[{index}]: {blocker}")
+
+    return not blockers, blockers, {
+        "case_count": report.get("case_count"),
+        "passed_case_count": report.get("passed_case_count"),
+        "failed_case_count": report.get("failed_case_count"),
+        "best_case": best_case,
+        "minimal_red_defect": report.get("minimal_red_defect") or {},
+        "blocking_subsystems": report.get("blocking_subsystems") or [],
+        "thresholds": thresholds,
+        "cases": report.get("cases") or [],
     }
 
 
@@ -250,6 +1181,13 @@ def _eval_policy_nav(report: dict[str, Any]) -> tuple[bool, list[str], dict[str,
     for check in checks:
         if check.get("cmd_vel_sent_to_hardware") is not False:
             blockers.append(f"{check.get('mode')} did not report hardware-safe cmd_vel")
+        contacts = check.get("contacts") if isinstance(check.get("contacts"), dict) else {}
+        if int(contacts.get("foot_contact_sample_count") or 0) <= 0:
+            blockers.append(f"{check.get('mode')} missing foot-ground contact samples")
+        if int(contacts.get("unique_feet_count") or 0) < 2:
+            blockers.append(f"{check.get('mode')} saw fewer than two contacting feet")
+        if int(contacts.get("non_foot_ground_contacts") or 0) != 0:
+            blockers.append(f"{check.get('mode')} had non-foot ground contacts")
 
     last_nav = nav_checks[-1] if nav_checks else {}
     return not blockers, blockers, {
@@ -260,6 +1198,7 @@ def _eval_policy_nav(report: dict[str, Any]) -> tuple[bool, list[str], dict[str,
         "nav_seen": last_nav.get("seen") or {},
         "nav_state": last_nav.get("nav_state"),
         "nav_dist_to_goal_m": last_nav.get("dist_to_goal_m"),
+        "contacts": [check.get("contacts") for check in checks if check.get("contacts")],
         "frames": [check.get("frames") for check in checks if check.get("frames")],
     }
 
@@ -423,6 +1362,11 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
     for topic in ("/nav/global_path", "/nav/local_path", "/nav/cmd_vel", "/nav/odometry"):
         if int(nav_samples.get(topic) or 0) <= 0:
             blockers.append(f"nav_loop {topic} samples missing")
+    publisher_contract = nav_loop.get("publisher_contract") or {}
+    if publisher_contract.get("ok") is not True:
+        blockers.append("nav_loop.publisher_contract.ok is not true")
+    for error in publisher_contract.get("errors") or []:
+        blockers.append(f"nav_loop publisher contract: {error}")
 
     frontier = report.get("frontier_exploration") or {}
     if frontier.get("ok") is not True:
@@ -449,6 +1393,9 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
     frontier_odom_delta = _safe_float(frontier.get("odom_delta_m"), default=0.0)
     if frontier_odom_delta < 0.05:
         blockers.append("frontier_exploration.odom_delta_m < 0.05")
+    frontier_odom_delta_x = _safe_float(frontier.get("odom_delta_x_m"), default=0.0)
+    if frontier_odom_delta_x < 0.05:
+        blockers.append("frontier_exploration.odom_delta_x_m < 0.05")
     frontier_area_delta = _safe_float(frontier.get("explored_area_delta_m2"), default=0.0)
     if frontier_area_delta <= 0.0:
         blockers.append("frontier_exploration.explored_area_delta_m2 <= 0")
@@ -456,10 +1403,44 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
         blockers.append("frontier_exploration.known_cells_delta <= 0")
     if int(frontier.get("frontier_count_max") or 0) <= 0:
         blockers.append("frontier_exploration.frontier_count_max <= 0")
+    frontier_goal = frontier.get("frontier_goal") or []
+    if not isinstance(frontier_goal, list) or len(frontier_goal) < 2:
+        blockers.append("frontier_exploration.frontier_goal missing")
+    elif _safe_float(frontier_goal[0], default=0.0) < 0.75:
+        blockers.append("frontier_exploration.frontier_goal.x < 0.75")
     frontier_samples = frontier.get("samples") or {}
-    for topic in ("/nav/goal_pose", "/nav/global_path", "/nav/local_path", "/nav/cmd_vel", "/nav/odometry"):
+    for topic in (
+        "/nav/goal_pose",
+        "/nav/global_path",
+        "/nav/local_path",
+        "/nav/cmd_vel",
+        "/nav/odometry",
+        "/nav/terrain_map",
+        "/nav/terrain_map_ext",
+    ):
         if int(frontier_samples.get(topic) or 0) <= 0:
             blockers.append(f"frontier_exploration {topic} samples missing")
+    if frontier.get("terrain_map_seen") is not True:
+        blockers.append("frontier_exploration.terrain_map_seen is not true")
+    if frontier.get("terrain_map_ext_seen") is not True:
+        blockers.append("frontier_exploration.terrain_map_ext_seen is not true")
+    trajectory_quality = frontier.get("trajectory_quality") or {}
+    if trajectory_quality.get("ok") is not True:
+        blockers.append("frontier_exploration.trajectory_quality.ok is not true")
+    if int(trajectory_quality.get("room_violation_count") or 0) > 0:
+        blockers.append("frontier_exploration trajectory left room")
+    if float(trajectory_quality.get("max_out_of_room_m") or 0.0) > 0.05:
+        blockers.append("frontier_exploration max_out_of_room_m > 0.05")
+    if int(trajectory_quality.get("local_path_occupied_overlap_count") or 0) > 0:
+        blockers.append("frontier_exploration local_path occupied overlap")
+    clearance = trajectory_quality.get("min_obstacle_clearance_m")
+    if clearance is None or float(clearance) < 0.18:
+        blockers.append("frontier_exploration min_obstacle_clearance_m < 0.18")
+    topic_sync = frontier.get("topic_sync") or {}
+    if topic_sync.get("ok") is not True:
+        blockers.append("frontier_exploration.topic_sync.ok is not true")
+    if _safe_float(topic_sync.get("max_cloud_odom_skew_ms"), default=999999.0) > 250.0:
+        blockers.append("frontier_exploration cloud/odom skew > 250 ms")
     cumulative = frontier.get("cumulative_map_cloud") or {}
     if frontier.get("cumulative_map_cloud_seen") is not True:
         blockers.append("frontier_exploration.cumulative_map_cloud_seen is not true")
@@ -477,7 +1458,7 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
     static = frontier.get("static_obstacles") or {}
     if not any(
         int(item.get("samples") or 0) >= 2
-        and float(item.get("centroid_drift_max_m") or 999.0) <= 0.25
+        and _safe_float(item.get("centroid_drift_max_m"), default=999.0) <= 0.25
         for item in static.values()
     ):
         blockers.append("frontier_exploration stable static obstacle ROI missing")
@@ -515,6 +1496,7 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
             "odom_start_xy": nav_loop.get("odom_start_xy"),
             "odom_last_xy": nav_loop.get("odom_last_xy"),
             "topic_samples": nav_samples,
+            "publisher_contract": publisher_contract,
         },
         "frontier_exploration": {
             "ok": frontier.get("ok"),
@@ -528,6 +1510,8 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
             "cumulative_map_cloud": cumulative,
             "registered_cloud": registered,
             "static_obstacles": static,
+            "trajectory_quality": trajectory_quality,
+            "topic_sync": topic_sync,
             "topic_samples": frontier_samples,
         },
         "tare_exploration": {
@@ -541,6 +1525,254 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
     }
 
 
+def _eval_cmu_unity_sim(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("schema_version") != "lingtu.cmu_unity_sim_gate.v1":
+        blockers.append("schema_version is not lingtu.cmu_unity_sim_gate.v1")
+    if report.get("ok") is not True:
+        blockers.append("report.ok is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+    if report.get("runtime_executed") is not False:
+        blockers.append("runtime_executed is not false")
+
+    checks = list(report.get("checks") or [])
+    check_by_name = {str(item.get("name")): item for item in checks}
+    required_checks = (
+        "host_ros_humble_setup",
+        "host_ros2_cli",
+        "host_ros2_cli_functional",
+        "host_colcon_cli",
+        "host_colcon_cli_functional",
+        "cmu_workspace_exists",
+        "cmu_git_workspace",
+        "cmu_humble_branch",
+        "cmu_required_source_paths",
+        "cmu_unity_environment_assets",
+        "cmu_colcon_build_output",
+        "cmu_topic_contract",
+        "lingtu_tare_remap_contract",
+        "lingtu_tare_explore_profile",
+        "lingtu_cmu_tare_profile",
+        "lingtu_cmu_adapter_exists",
+        "lingtu_cmu_adapter_launch_exists",
+        "lingtu_cmu_adapter_relay_contract",
+        "lingtu_cmu_adapter_safety_contract",
+    )
+    for name in required_checks:
+        if (check_by_name.get(name) or {}).get("ok") is not True:
+            blockers.append(f"{name} is not true")
+
+    cmu = report.get("cmu_workspace") or {}
+    topic_contract = cmu.get("topic_contract") or {}
+    for topic in (
+        "/registered_scan",
+        "/state_estimation",
+        "/terrain_map",
+        "/terrain_map_ext",
+        "/way_point",
+        "/cmd_vel",
+    ):
+        if topic_contract.get(topic) is not True:
+            blockers.append(f"cmu topic {topic} missing")
+
+    lingtu = report.get("lingtu_contract") or {}
+    remaps = lingtu.get("remaps") or {}
+    if remaps.get("/registered_scan") != "/nav/map_cloud":
+        blockers.append("LingTu /registered_scan remap is not /nav/map_cloud")
+    if remaps.get("/state_estimation") != "/nav/odometry":
+        blockers.append("LingTu /state_estimation remap is not /nav/odometry")
+    if remaps.get("/state_estimation_at_scan") != "/nav/odometry":
+        blockers.append("LingTu /state_estimation_at_scan remap is not /nav/odometry")
+    if remaps.get("/way_point") != "/exploration/way_point":
+        blockers.append("LingTu /way_point remap is not /exploration/way_point")
+
+    adapter_required_relays = lingtu.get("adapter_required_relays") or {}
+    for relay in (
+        "/state_estimation->/nav/odometry",
+        "/state_estimation_at_scan->/nav/state_estimation_at_scan",
+        "/registered_scan->/nav/map_cloud",
+        "/terrain_map->/nav/terrain_map",
+        "/terrain_map_ext->/nav/terrain_map_ext",
+        "/way_point->/exploration/way_point",
+        "/exploration/start->/start_exploration",
+        "/nav/cmd_vel->/cmd_vel",
+    ):
+        if relay not in adapter_required_relays:
+            blockers.append(f"LingTu adapter relay {relay} missing")
+
+    return not blockers, blockers, {
+        "workspace": cmu.get("path"),
+        "branch": cmu.get("branch"),
+        "head": cmu.get("head"),
+        "remote": cmu.get("remote"),
+        "checks": {str(item.get("name")): bool(item.get("ok")) for item in checks},
+        "blockers": report.get("blockers") or [],
+    }
+
+
+def _eval_cmu_unity_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("schema_version") != "lingtu.cmu_unity_runtime_gate.v1":
+        blockers.append("schema_version is not lingtu.cmu_unity_runtime_gate.v1")
+    if report.get("ok") is not True:
+        blockers.append("report.ok is not true")
+    if report.get("runtime_executed") is not True:
+        blockers.append("runtime_executed is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+    if str(report.get("ros_domain_id") or "") in {"", "0"}:
+        blockers.append("ROS_DOMAIN_ID is empty or default")
+    contract_blockers, runtime_contract = _runtime_contract_blockers(
+        report,
+        expected_name="cmu_unity_external",
+    )
+    blockers.extend(contract_blockers)
+
+    thresholds = report.get("thresholds") or {}
+    waypoints = report.get("waypoints") or {}
+    min_waypoint_samples = int(thresholds.get("min_waypoint_samples") or 1)
+    if int((waypoints.get("/way_point") or {}).get("samples") or 0) < min_waypoint_samples:
+        blockers.append("/way_point samples below threshold")
+    waypoint_unique_requirements = report.get("waypoint_unique_requirements") or {}
+    for topic, requirement in waypoint_unique_requirements.items():
+        if requirement.get("ok") is not True:
+            blockers.append(f"{topic} unique waypoint requirement failed")
+
+    cmd = report.get("cmd_vel") or {}
+    if int(cmd.get("nonzero_samples") or 0) < int(thresholds.get("min_cmd_vel_samples") or 3):
+        blockers.append("/nav/cmd_vel nonzero_samples below threshold")
+    if _safe_float(cmd.get("max_norm"), default=0.0) < _safe_float(thresholds.get("min_cmd_vel"), default=0.01):
+        blockers.append("/nav/cmd_vel max_norm below threshold")
+
+    odometry = report.get("odometry") or {}
+    odom_delta = max(
+        (_safe_float((item or {}).get("delta_m"), default=0.0) for item in odometry.values()),
+        default=0.0,
+    )
+    if odom_delta < _safe_float(thresholds.get("min_odom_delta_m"), default=0.10):
+        blockers.append("odom delta below threshold")
+
+    cloud = report.get("cloud_coverage") or {}
+    if _safe_float(cloud.get("best_area_delta_m2"), default=0.0) < _safe_float(
+        thresholds.get("min_map_area_delta_m2"),
+        default=0.5,
+    ):
+        blockers.append("map/exploration area delta below threshold")
+
+    hardware = report.get("hardware_safety") or {}
+    if hardware.get("blocked_hardware_nodes"):
+        blockers.append("hardware-looking command subscriber present")
+
+    tare_navigation = report.get("tare_navigation") or {}
+    if int(tare_navigation.get("success_count") or 0) < 1:
+        blockers.append("TARE navigation success_count below threshold")
+    if int(tare_navigation.get("failure_count") or 0) > 0:
+        blockers.append("TARE navigation failure_count is nonzero")
+
+    return not blockers, blockers, {
+        "ros_domain_id": report.get("ros_domain_id"),
+        "waypoints": waypoints,
+        "waypoint_unique_requirements": waypoint_unique_requirements,
+        "cmd_vel": cmd,
+        "odometry_delta_m": odom_delta,
+        "motion_progress": report.get("motion_progress") or {},
+        "progress_requirements": report.get("progress_requirements") or {},
+        "cloud_coverage": cloud,
+        "hardware_safety": hardware,
+        "runtime_contract": runtime_contract,
+        "tare_navigation": tare_navigation,
+        "blockers": report.get("blockers") or [],
+    }
+
+
+def _eval_cmu_unity_pct_strict(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    _, blockers, runtime_evidence = _eval_cmu_unity_runtime(report)
+    blockers = list(blockers)
+
+    if report.get("cmd_vel_exclusive_to_lingtu") is not True:
+        blockers.append("cmd_vel_exclusive_to_lingtu is not true")
+
+    planner = report.get("planner_diagnostics") or {}
+    if planner.get("available") is not True:
+        blockers.append("planner diagnostics unavailable")
+    if planner.get("primary_planner") != "pct":
+        blockers.append("primary_planner is not pct")
+    if planner.get("selected_planner") != "pct":
+        blockers.append("selected_planner is not pct")
+    if planner.get("fallback_used") is not False:
+        blockers.append("planner fallback was used")
+    if int(planner.get("rejected_plan_count") or 0) != 0:
+        blockers.append("planner rejected_plan_count is not 0")
+    if planner.get("reached_goal") is not True:
+        blockers.append("PCT did not report reached_goal")
+
+    navigation_failure = report.get("navigation_failure") or {}
+    if navigation_failure.get("failed") is True:
+        blockers.append("navigation mission failed")
+    if str(navigation_failure.get("state") or "").upper() in {"FAILED", "STUCK"}:
+        blockers.append("navigation state is failed/stuck")
+
+    direct_goal_fallback = report.get("direct_goal_fallback") or {}
+    if direct_goal_fallback.get("used") is True:
+        blockers.append("direct goal fallback was used")
+
+    path_requirements = report.get("path_requirements") or {}
+    paths = report.get("paths") or {}
+    for topic in ("/nav/global_path", "/nav/local_path"):
+        req = path_requirements.get(topic) or {}
+        item = paths.get(topic) or {}
+        observed_nonempty = int(req.get("observed_nonempty_samples") or item.get("nonempty_samples") or 0)
+        observed_poses = int(req.get("observed_max_poses") or item.get("max_poses") or 0)
+        if req.get("ok") is not True or observed_nonempty <= 0 or observed_poses < 2:
+            blockers.append(f"{topic} strict path requirement failed")
+
+    scan_requirements = report.get("scan_requirements") or {}
+    registered_scan = scan_requirements.get("/nav/registered_cloud") or {}
+    if registered_scan.get("ok") is not True or int(registered_scan.get("observed_samples") or 0) <= 0:
+        blockers.append("/nav/registered_cloud strict scan requirement failed")
+
+    map_requirements = report.get("map_requirements") or {}
+    map_cloud = map_requirements.get("/nav/map_cloud") or {}
+    if map_cloud.get("ok") is not True or _safe_float(map_cloud.get("observed_area_delta_m2"), default=0.0) <= 0.0:
+        blockers.append("/nav/map_cloud strict map-growth requirement failed")
+    terrain_map = map_requirements.get("/nav/terrain_map_ext") or {}
+    if terrain_map.get("ok") is not True or _safe_float(terrain_map.get("observed_area_delta_m2"), default=0.0) <= 0.0:
+        blockers.append("/nav/terrain_map_ext strict map-growth requirement failed")
+
+    hardware = report.get("hardware_safety") or {}
+    if hardware.get("unexpected_command_publishers"):
+        blockers.append("unexpected /cmd_vel publisher present")
+
+    return not blockers, blockers, {
+        **runtime_evidence,
+        "planner_diagnostics": {
+            "available": planner.get("available"),
+            "primary_planner": planner.get("primary_planner"),
+            "selected_planner": planner.get("selected_planner"),
+            "policy": planner.get("policy"),
+            "fallback_used": planner.get("fallback_used"),
+            "fallback_reason": planner.get("fallback_reason"),
+            "rejected_plan_count": planner.get("rejected_plan_count"),
+            "reached_goal": planner.get("reached_goal"),
+        },
+        "cmd_vel_exclusive_to_lingtu": report.get("cmd_vel_exclusive_to_lingtu"),
+        "path_requirements": path_requirements,
+        "scan_requirements": scan_requirements,
+        "map_requirements": map_requirements,
+        "navigation_failure": navigation_failure,
+        "direct_goal_fallback": direct_goal_fallback,
+    }
+
+
 def _eval_saved_map_relocalize(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
     blockers: list[str] = []
     if report.get("ok") is not True:
@@ -551,67 +1783,94 @@ def _eval_saved_map_relocalize(report: dict[str, Any]) -> tuple[bool, list[str],
         blockers.append("real_robot_motion is not false")
     if not _bool_false(report, "cmd_vel_sent_to_hardware"):
         blockers.append("cmd_vel_sent_to_hardware is not false")
+    if report.get("validation_level") != "runtime_relocalization":
+        blockers.append("validation_level is not runtime_relocalization")
+    if report.get("runtime_stage") != "saved_map_relocalization":
+        blockers.append("runtime_stage is not saved_map_relocalization")
+    if report.get("map_dependency") != "saved_map_required":
+        blockers.append("map_dependency is not saved_map_required")
+    if report.get("requires_saved_map") is not True:
+        blockers.append("requires_saved_map is not true")
+    if report.get("requires_live_slam") is not True:
+        blockers.append("requires_live_slam is not true")
+    if report.get("runtime_relocalization_executed") is not True:
+        blockers.append("runtime_relocalization_executed is not true")
+    if report.get("runtime_relocalization_validated") is not True:
+        blockers.append("runtime_relocalization_validated is not true")
 
-    contracts = report.get("contracts") or {}
-    localizer = contracts.get("localizer") or {}
-    if localizer.get("health_source") != "localizer_health_topic":
-        blockers.append("localizer health_source is not localizer_health_topic")
-    if localizer.get("map_save_source") != "active_map":
-        blockers.append("localizer map_save_source is not active_map")
-    if localizer.get("recovery_method") != "relocalize_service":
-        blockers.append("localizer recovery_method is not relocalize_service")
-    if localizer.get("recovery_action") != "relocalize_service":
-        blockers.append("localizer recovery_action is not relocalize_service")
-    if localizer.get("saved_map_relocalization_supported") is not True:
-        blockers.append("localizer saved_map_relocalization_supported is not true")
-    for backend in ("fastlio2", "super_lio", "super_lio_relocation"):
-        if (contracts.get(backend) or {}).get("saved_map_relocalization_supported") is not False:
-            blockers.append(f"{backend} saved_map_relocalization_supported is not false")
+    service = report.get("service") if isinstance(report.get("service"), dict) else {}
+    global_reloc = report.get("global_relocalization_requested") is True
+    if service.get("available") is not True:
+        blockers.append(
+            "/nav/global_relocalize service was not available"
+            if global_reloc else "/nav/relocalize service was not available"
+        )
+    if service.get("success") is not True:
+        message = str(service.get("message") or "").lower()
+        if not (global_reloc and "already running" in message):
+            blockers.append(
+                "/nav/global_relocalize service did not succeed"
+                if global_reloc else "/nav/relocalize service did not succeed"
+            )
 
-    defaults = report.get("default_profiles") or {}
-    if defaults.get("navigating") != "localizer":
-        blockers.append("navigating default profile is not localizer")
-    plans = report.get("plans") or {}
-    nav_plan = plans.get("session_navigating_fastlio2") or {}
-    if tuple(nav_plan.get("ensure") or ()) != ("slam", "localizer"):
-        blockers.append("navigating plan does not ensure slam/localizer")
-    switch_plan = plans.get("switch_localizer") or {}
-    if tuple(switch_plan.get("ensure") or ()) != ("slam", "localizer"):
-        blockers.append("localizer switch plan does not ensure slam/localizer")
+    live_feed = report.get("live_feed") if isinstance(report.get("live_feed"), dict) else {}
+    if live_feed.get("ok") is not True:
+        blockers.append("live_feed.ok is not true")
+    if (live_feed.get("fastlio2_z_consistency") or {}).get("ok") is not True:
+        blockers.append("live_feed.fastlio2_z_consistency.ok is not true")
+    outputs = live_feed.get("outputs") if isinstance(live_feed.get("outputs"), dict) else {}
+    for key in ("fastlio2_odometry", "fastlio2_cloud_registered", "fastlio2_cloud_map"):
+        if int(outputs.get(key) or 0) <= 0:
+            blockers.append(f"live_feed.outputs.{key} missing")
 
-    launch_services = report.get("launch_services") or {}
-    for service in ("/nav/relocalize", "/nav/relocalize_check", "/nav/global_relocalize", "/nav/saved_map_cloud"):
-        if launch_services.get(service) is not True:
-            blockers.append(f"{service} launch remap missing")
-
-    bridge = report.get("bridge_status") or {}
-    localizer_status = bridge.get("localizer") or {}
-    super_lio_status = bridge.get("super_lio") or {}
-    if localizer_status.get("backend") != "localizer":
-        blockers.append("bridge localizer status backend is not localizer")
-    if localizer_status.get("localizer_health") != "LOCKED":
-        blockers.append("bridge localizer health is not LOCKED")
-    if localizer_status.get("relocalization_state") != "idle":
-        blockers.append("bridge localizer relocalization_state is not idle")
-    if localizer_status.get("saved_map_relocalization_supported") is not True:
-        blockers.append("bridge localizer saved_map_relocalization_supported is not true")
-    if super_lio_status.get("saved_map_relocalization_supported") is not False:
-        blockers.append("bridge super_lio saved_map_relocalization_supported is not false")
-    if super_lio_status.get("relocalization_state") != "unsupported":
-        blockers.append("bridge super_lio relocalization_state is not unsupported")
+    localizer = report.get("localizer") if isinstance(report.get("localizer"), dict) else {}
+    thresholds = report.get("thresholds") if isinstance(report.get("thresholds"), dict) else {}
+    min_points = int(thresholds.get("min_saved_map_points") or 1000)
+    min_tracking = int(thresholds.get("min_tracking_health_samples") or 1)
+    max_xy = _safe_float(thresholds.get("max_map_odom_xy_m"), default=5.0)
+    max_z = _safe_float(thresholds.get("max_map_odom_z_abs_m"), default=2.0)
+    if int(localizer.get("saved_map_cloud_samples") or 0) <= 0:
+        blockers.append("/nav/saved_map_cloud samples missing")
+    if int(localizer.get("saved_map_cloud_points_latest") or 0) < min_points:
+        blockers.append("/nav/saved_map_cloud point count below threshold")
+    if int(localizer.get("tracking_health_samples") or 0) < min_tracking:
+        blockers.append("localizer tracking health samples below threshold")
+    if str(localizer.get("latest_health_state") or "") not in {"LOCKED", "RECOVERED"}:
+        blockers.append("localizer latest health is not LOCKED/RECOVERED")
+    if int(localizer.get("map_to_odom_tf_samples") or 0) <= 0:
+        blockers.append("map->odom TF samples missing")
+    map_xy = _safe_float(localizer.get("map_to_odom_xy_m"), default=999.0)
+    if map_xy > max_xy:
+        blockers.append("map->odom XY correction exceeds threshold")
+    map_z = _safe_float(localizer.get("map_to_odom_z_abs_m"), default=999.0)
+    if map_z > max_z:
+        blockers.append("map->odom Z correction exceeds threshold")
+    if global_reloc:
+        if report.get("global_relocalization_validated") is not True:
+            blockers.append("global_relocalization_validated is not true")
+        if localizer.get("bbs3d_success_observed") is not True:
+            blockers.append("BBS3D success was not observed")
+        if localizer.get("bbs3d_disabled_observed") is True:
+            blockers.append("BBS3D disabled state was observed")
+        if int(localizer.get("lost_health_samples") or 0) <= 0:
+            blockers.append("kidnapped localizer did not report LOST before recovery")
+        min_global_xy = _safe_float(thresholds.get("min_global_map_odom_xy_m"), default=0.0)
+        if min_global_xy > 0.0 and map_xy < min_global_xy:
+            blockers.append("kidnapped map->odom XY correction below threshold")
 
     return not blockers, blockers, {
-        "default_profiles": defaults,
-        "localizer_contract": {
-            "health_source": localizer.get("health_source"),
-            "map_save_source": localizer.get("map_save_source"),
-            "saved_map_relocalization_supported": localizer.get(
-                "saved_map_relocalization_supported"
-            ),
-            "recovery_method": localizer.get("recovery_method"),
-        },
-        "launch_services": launch_services,
-        "bridge_status": bridge,
+        "validation_level": report.get("validation_level"),
+        "runtime_stage": report.get("runtime_stage"),
+        "map_dependency": report.get("map_dependency"),
+        "runtime_relocalization_executed": report.get("runtime_relocalization_executed"),
+        "runtime_relocalization_validated": report.get("runtime_relocalization_validated"),
+        "global_relocalization_requested": global_reloc,
+        "global_relocalization_validated": report.get("global_relocalization_validated"),
+        "service": service,
+        "live_feed": live_feed,
+        "localizer": localizer,
+        "thresholds": thresholds,
+        "map_pcd": report.get("map_pcd"),
     }
 
 
@@ -731,12 +1990,21 @@ GATES: tuple[GateSpec, ...] = (
         "Native PCT route through ROS2 localPlanner/pathFollower into MuJoCo kinematic motion",
         (
             "artifacts/server_sim_closure/native_pct_mujoco/report.json",
+            "artifacts/server_sim_closure/mujoco_fastlio2_live/pct-moving-obstacle-*/report.json",
             "artifacts/native_pct_mujoco_gate*/report.json",
             "artifacts/native_pct_large_terrain*/report.json",
             "artifacts/native_pct_effect/report.json",
             "artifacts/native_pct_effect/*pct*overlay*_report.json",
         ),
-        "PYTHONPATH=src:. python3 sim/scripts/native_pct_mujoco_gate.py --source-report artifacts/server_sim_closure/large_terrain/report.json --route terrain_long --planner pct --timeout-s 180 --json-out artifacts/server_sim_closure/native_pct_mujoco/report.json",
+        "bash -lc 'source /opt/ros/humble/setup.bash && "
+        "source install/setup.bash 2>/dev/null || true; "
+        "export MUJOCO_GL=${MUJOCO_GL:-egl}; "
+        "PYTHONPATH=src:.:/opt/ros/humble/local/lib/python3.10/dist-packages:"
+        "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
+        "LINGTU_MUJOCO_LIVE_RUN_DIR=artifacts/server_sim_closure/mujoco_fastlio2_live "
+        "LINGTU_MUJOCO_LIVE_PCT_SOURCE_REPORT=artifacts/server_sim_closure/large_terrain/report.json "
+        "LINGTU_MUJOCO_LIVE_PCT_CLOSURE=0 "
+        "bash sim/scripts/launch_mujoco_fastlio2_live.sh pct-moving-obstacle-video'",
         _eval_native_pct_mujoco,
     ),
     GateSpec(
@@ -756,11 +2024,115 @@ GATES: tuple[GateSpec, ...] = (
         "Fast-LIO2 on live MuJoCo LiDAR/IMU into SlamBridgeModule",
         (
             "artifacts/server_sim_closure/fastlio2_live/report.json",
+            "artifacts/server_sim_closure/mujoco_fastlio2_live/*/report.json",
+            "artifacts/server_sim_closure/mujoco_fastlio2_live*/*/report.json",
             "artifacts/mujoco_fastlio2_live*/report.json",
             "artifacts/mujoco_fastlio2_live*/*/report.json",
             "artifacts/fastlio2*/report.json",
         ),
-        "PYTHONPATH=src:. python3 sim/scripts/mujoco_fastlio2_live_gate.py --json-out artifacts/server_sim_closure/fastlio2_live/report.json --strict",
+        "LINGTU_MUJOCO_LIVE_RUN_DIR=artifacts/server_sim_closure/mujoco_fastlio2_live "
+        "bash sim/scripts/launch_mujoco_fastlio2_live.sh gate",
+        _eval_fastlio2_live,
+    ),
+    GateSpec(
+        "fastlio2_dynamic_inspection",
+        "Core end-to-end algorithm gate: live MID-360/IMU -> Fast-LIO2 -> PCT -> local planner with moving obstacles and MP4 evidence",
+        (
+            "artifacts/server_sim_closure/mujoco_fastlio2_live*/inspection*/*/report.json",
+            "artifacts/server_sim_closure/mujoco_fastlio2_live/inspection*/*/report.json",
+            "artifacts/mujoco_fastlio2_live*/inspection*/*/report.json",
+        ),
+        "bash -lc 'source /opt/ros/humble/setup.bash && "
+        "source install/setup.bash 2>/dev/null || true; "
+        "export MUJOCO_GL=${MUJOCO_GL:-egl}; "
+        "export PYOPENGL_PLATFORM=${PYOPENGL_PLATFORM:-egl}; "
+        "export LINGTU_MUJOCO_LIVE_RUN_DIR=${LINGTU_MUJOCO_LIVE_RUN_DIR:-artifacts/server_sim_closure/mujoco_fastlio2_live}; "
+        "export LINGTU_MUJOCO_LIVE_WORLD=${LINGTU_MUJOCO_LIVE_WORLD:-artifacts/server_sim_closure/large_terrain_odom/large_terrain_scene.xml}; "
+        "export LINGTU_MUJOCO_LIVE_INSPECTION_PLANNER=${LINGTU_MUJOCO_LIVE_INSPECTION_PLANNER:-pct}; "
+        "export LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM=${LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM:-artifacts/server_sim_closure/large_terrain_odom/tomogram.pickle}; "
+        "export LINGTU_MUJOCO_LIVE_INSPECTION_GOALS=${LINGTU_MUJOCO_LIVE_INSPECTION_GOALS:-0.5,0.05;1.0,0.1;1.5,0.15}; "
+        "export LINGTU_MUJOCO_LIVE_MOVING_OBSTACLE_COUNT=${LINGTU_MUJOCO_LIVE_MOVING_OBSTACLE_COUNT:-3}; "
+        "export LINGTU_MUJOCO_LIVE_MOVING_OBSTACLE_PERIOD_S=${LINGTU_MUJOCO_LIVE_MOVING_OBSTACLE_PERIOD_S:-6}; "
+        "PYTHONPATH=src:.:/opt/ros/humble/local/lib/python3.10/dist-packages:"
+        "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
+        "bash sim/scripts/launch_mujoco_fastlio2_live.sh inspection-moving-obstacle-video'",
+        _eval_fastlio2_dynamic_inspection,
+    ),
+    GateSpec(
+        "moving_obstacle_sweep",
+        "Aggregate live Fast-LIO2/PCT moving-obstacle inspection reports across speed and density bins",
+        (
+            "artifacts/server_sim_closure/moving_obstacle_sweep/report.json",
+            "artifacts/moving_obstacle_sweep*/report.json",
+        ),
+        "bash -lc 'source /opt/ros/humble/setup.bash && "
+        "source install/setup.bash 2>/dev/null || true; "
+        "export MUJOCO_GL=${MUJOCO_GL:-egl}; "
+        "export PYOPENGL_PLATFORM=${PYOPENGL_PLATFORM:-egl}; "
+        "PYTHONPATH=src:.:/opt/ros/humble/local/lib/python3.10/dist-packages:"
+        "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
+        "python3 sim/scripts/moving_obstacle_sweep_gate.py --run-matrix "
+        "--child-run-root artifacts/server_sim_closure/moving_obstacle_sweep/children "
+        "--world ${LINGTU_MUJOCO_LIVE_WORLD:-artifacts/server_sim_closure/large_terrain_odom/large_terrain_scene.xml} "
+        "--inspection-tomogram ${LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM:-artifacts/server_sim_closure/large_terrain_odom/tomogram.pickle} "
+        "--report-glob artifacts/server_sim_closure/mujoco_fastlio2_live*/inspection*/*/report.json "
+        "--report-glob artifacts/mujoco_fastlio2_live*/inspection*/*/report.json "
+        "--required-speed-bins slow,fast --required-density-bins sparse,dense "
+        "--required-scan-time-profile physical_rolling --require-video-file "
+        "--json-out artifacts/server_sim_closure/moving_obstacle_sweep/report.json --strict'",
+        _eval_moving_obstacle_sweep,
+    ),
+    GateSpec(
+        "large_loop_closure",
+        "Large-range loop route: live Fast-LIO2 mapping/localization -> PCT -> local planner/path follower -> closed-loop return",
+        (
+            "artifacts/server_sim_closure/large_loop_closure/report.json",
+            "artifacts/large_loop_closure*/report.json",
+        ),
+        "bash -lc 'source /opt/ros/humble/setup.bash && "
+        "source install/setup.bash 2>/dev/null || true; "
+        "export MUJOCO_GL=${MUJOCO_GL:-egl}; "
+        "export PYOPENGL_PLATFORM=${PYOPENGL_PLATFORM:-egl}; "
+        "export LINGTU_MUJOCO_LIVE_RUN_DIR=${LINGTU_MUJOCO_LIVE_RUN_DIR:-artifacts/server_sim_closure/mujoco_fastlio2_live}; "
+        "export LINGTU_MUJOCO_LIVE_WORLD=${LINGTU_MUJOCO_LIVE_WORLD:-artifacts/server_sim_closure/large_terrain_odom/large_terrain_scene.xml}; "
+        "export LINGTU_MUJOCO_LIVE_DURATION_INSPECTION=${LINGTU_MUJOCO_LIVE_DURATION_INSPECTION:-240}; "
+        "export LINGTU_MUJOCO_LIVE_MAX_WALL_TIME_S=${LINGTU_MUJOCO_LIVE_MAX_WALL_TIME_S:-900}; "
+        "export LINGTU_MUJOCO_LIVE_NAV_MAX_LINEAR_SPEED=${LINGTU_MUJOCO_LIVE_NAV_MAX_LINEAR_SPEED:-0.45}; "
+        "export LINGTU_MUJOCO_LIVE_CMD_VEL_LINEAR_LIMIT=${LINGTU_MUJOCO_LIVE_CMD_VEL_LINEAR_LIMIT:-0.45}; "
+        "export LINGTU_MUJOCO_LIVE_CMD_VEL_LINEAR_ACCEL_LIMIT=${LINGTU_MUJOCO_LIVE_CMD_VEL_LINEAR_ACCEL_LIMIT:-0.8}; "
+        "export LINGTU_MUJOCO_LIVE_INSPECTION_PLANNER=${LINGTU_MUJOCO_LIVE_INSPECTION_PLANNER:-pct}; "
+        "export LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM=${LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM:-artifacts/server_sim_closure/large_terrain_odom/tomogram.pickle}; "
+        "export LINGTU_MUJOCO_LIVE_INSPECTION_GOALS=${LINGTU_MUJOCO_LIVE_INSPECTION_GOALS:-6.0,0.0;6.0,6.0;0.0,6.0;0.0,0.0}; "
+        "export LINGTU_MUJOCO_LIVE_INSPECTION_MIN_CHECKPOINTS=${LINGTU_MUJOCO_LIVE_INSPECTION_MIN_CHECKPOINTS:-4}; "
+        "export LINGTU_MUJOCO_LIVE_SCAN_TIME_PROFILE=${LINGTU_MUJOCO_LIVE_SCAN_TIME_PROFILE:-physical_rolling}; "
+        "PYTHONPATH=src:.:/opt/ros/humble/local/lib/python3.10/dist-packages:"
+        "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
+        "bash sim/scripts/launch_mujoco_fastlio2_live.sh inspection-loop-video; "
+        "latest=$(sed -n \"s/^latest_run_dir=//p\" \"$LINGTU_MUJOCO_LIVE_RUN_DIR/latest.txt\" | tail -n 1); "
+        "python3 sim/scripts/large_loop_closure_gate.py --report \"$latest/report.json\" "
+        "--required-scan-time-profile physical_rolling --require-video-file "
+        "--json-out artifacts/server_sim_closure/large_loop_closure/report.json --strict'",
+        _eval_large_loop_closure,
+    ),
+    GateSpec(
+        "mujoco_tare_exploration",
+        "Native TARE on MuJoCo MID-360/Fast-LIO with LingTu navigation and cmd_vel closure",
+        (
+            "artifacts/server_sim_closure/mujoco_tare_exploration/report.json",
+            "artifacts/server_sim_closure/mujoco_tare_exploration*/tare-*/report.json",
+            "artifacts/server_sim_closure/mujoco_fastlio2_live*/tare-*/report.json",
+            "artifacts/mujoco_tare_exploration*/tare-*/report.json",
+        ),
+        "bash -lc 'source /opt/ros/humble/setup.bash && "
+        "source install/setup.bash 2>/dev/null || true; "
+        "export MUJOCO_GL=${MUJOCO_GL:-egl}; "
+        "export LINGTU_MUJOCO_LIVE_RUN_DIR=${LINGTU_MUJOCO_LIVE_RUN_DIR:-artifacts/server_sim_closure/mujoco_tare_exploration}; "
+        "export LINGTU_MUJOCO_LIVE_WORLD=${LINGTU_MUJOCO_LIVE_WORLD:-industrial_park}; "
+        "export LINGTU_MUJOCO_LIVE_DURATION_TARE=${LINGTU_MUJOCO_LIVE_DURATION_TARE:-180}; "
+        "export LINGTU_MUJOCO_LIVE_BUILD_TOMOGRAM=${LINGTU_MUJOCO_LIVE_BUILD_TOMOGRAM:-1}; "
+        "PYTHONPATH=src:.:/opt/ros/humble/local/lib/python3.10/dist-packages:"
+        "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
+        "bash sim/scripts/launch_mujoco_fastlio2_live.sh tare'",
         _eval_fastlio2_live,
     ),
     GateSpec(
@@ -806,32 +2178,450 @@ GATES: tuple[GateSpec, ...] = (
         "gazebo_runtime",
         "ROS-native Gazebo TF, point-cloud, navigation loop, cumulative map growth, wavefront frontier exploration, and TARE contract",
         (
+            "artifacts/server_sim_closure/gazebo_runtime_explore/report_grid_astar_odomfoot.json",
             "artifacts/server_sim_closure/gazebo_runtime_explore/report.json",
             "artifacts/server_sim_closure/gazebo_runtime_nav/report.json",
             "artifacts/server_sim_closure/gazebo_runtime/report.json",
         ),
         "bash -lc 'source /opt/ros/humble/setup.bash && "
         "source install/setup.bash 2>/dev/null || true; "
+        "DOMAIN=${ROS_DOMAIN_ID:-30}; "
+        "PART=lingtu_grid_astar_odomfoot_$(date +%s); "
         "PYTHONPATH=src:.:/opt/ros/humble/local/lib/python3.10/dist-packages:"
         "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
         "python3 sim/scripts/gazebo_runtime_gate.py --check-nav-loop "
         "--check-frontier-exploration --check-cumulative-map --check-tare-contract "
-        "--json-out artifacts/server_sim_closure/gazebo_runtime_explore/report.json "
-        "--launch-log artifacts/server_sim_closure/gazebo_runtime_explore/launch.log'",
+        "--warmup-sec 20 --smoke-timeout-sec 20 --nav-timeout-sec 35 "
+        "--nav-gazebo-warmup-sec 10 --nav-warmup-sec 0.0 "
+        "--nav-goal-delay-sec 0.0 --nav-goal-republish-sec 0.5 "
+        "--frontier-timeout-sec 60 --frontier-continue-after-pass-sec 5 "
+        "--spawn-x 0.0 --spawn-y 0.0 --nav-goal-x 3.0 --nav-goal-y 1.0 --nav-goal-z 0.0 "
+        "--ros-domain-id $DOMAIN --gz-partition $PART "
+        "--frontier-trace-out artifacts/server_sim_closure/gazebo_runtime_explore/frontier_trace_grid_astar_odomfoot.json "
+        "--json-out artifacts/server_sim_closure/gazebo_runtime_explore/report_grid_astar_odomfoot.json "
+        "--launch-log artifacts/server_sim_closure/gazebo_runtime_explore/launch_grid_astar_odomfoot.log'",
         _eval_gazebo_runtime,
     ),
     GateSpec(
-        "saved_map_relocalize",
-        "Saved-map relocalization contract for navigation mode and localizer bridge status",
+        "cmu_unity_sim",
+        "Isolated CMU Humble Unity/TARE benchmark preflight with LingTu adapter/remap contract and no hardware output",
         (
-            "artifacts/server_sim_closure/saved_map_relocalize/report.json",
-            "artifacts/saved_map_relocalize*/report.json",
+            "artifacts/server_sim_closure/cmu_unity_sim/report.json",
+            "artifacts/cmu_unity_sim*/report.json",
         ),
-        "PYTHONPATH=src:. python3 sim/scripts/saved_map_relocalize_contract_gate.py "
-        "--json-out artifacts/server_sim_closure/saved_map_relocalize/report.json --strict",
+        "PYTHONPATH=src:. python3 sim/scripts/cmu_unity_sim_gate.py "
+        "--json-out artifacts/server_sim_closure/cmu_unity_sim/report.json --strict",
+        _eval_cmu_unity_sim,
+    ),
+    GateSpec(
+        "cmu_unity_runtime",
+        "Runtime CMU Unity + LingTu adapter/TARE/nav closed loop with real waypoints, cmd_vel, odom, and map-area growth",
+        (
+            "artifacts/server_sim_closure/cmu_unity_runtime/report.json",
+            "artifacts/server_sim_closure/cmu_unity_pct_strict/report_unique_waypoints.json",
+            "artifacts/server_sim_closure/cmu_unity_pct_strict/report.json",
+            "artifacts/cmu_unity_runtime*/report.json",
+        ),
+        "bash -lc 'source /opt/ros/humble/setup.bash && "
+        "source install/setup.bash 2>/dev/null || true; "
+        "PYTHONPATH=src:.:/opt/ros/humble/local/lib/python3.10/dist-packages:"
+        "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
+        "python3 sim/scripts/cmu_unity_runtime_gate.py "
+        "--json-out artifacts/server_sim_closure/cmu_unity_runtime/report.json --strict'",
+        _eval_cmu_unity_runtime,
+    ),
+    GateSpec(
+        "cmu_unity_pct_strict",
+        "Runtime CMU Unity + TARE + LingTu PCT with same-source tomogram, no planner fallback, path topics, odom motion, and map growth",
+        (
+            "artifacts/server_sim_closure/cmu_unity_pct_strict/report_unique_waypoints.json",
+            "artifacts/server_sim_closure/cmu_unity_pct_strict/report.json",
+            "artifacts/server_sim_closure/cmu_unity_pct_strict_*/report.json",
+        ),
+        "bash -lc 'source /opt/ros/humble/setup.bash && "
+        "source install/setup.bash 2>/dev/null || true; "
+        "export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-75}; "
+        "export DISPLAY=${DISPLAY:-:1}; "
+        "export FASTDDS_BUILTIN_TRANSPORTS=${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}; "
+        "export LINGTU_CMU_RUN_DIR=${LINGTU_CMU_RUN_DIR:-artifacts/server_sim_closure/cmu_unity_pct_strict}; "
+        "export LINGTU_CMU_PLANNER=pct; "
+        "export LINGTU_CMU_START_CMU_TARE=1; "
+        "export LINGTU_CMU_TARE_SCENARIO=${LINGTU_CMU_TARE_SCENARIO:-indoor_large}; "
+        "export LINGTU_CMU_TARE_AUTOSTART=0; "
+        "export LINGTU_CMU_ENABLE_FRONTIER=0; "
+        "export LINGTU_CMU_EXTERNAL_STRATEGY_PATH_CONTROL=0; "
+        "export LINGTU_CMU_AUTO_SESSION=1; "
+        "export LINGTU_CMU_EXPLORATION_AUTO_START=0; "
+        "export LINGTU_CMU_ALLOW_DIRECT_GOAL_FALLBACK=0; "
+        "export LINGTU_CMU_AUTO_TOMOGRAM=${LINGTU_CMU_AUTO_TOMOGRAM:-1}; "
+        "export LINGTU_CMU_TOMOGRAM_TOPICS=${LINGTU_CMU_TOMOGRAM_TOPICS:-/nav/map_cloud,/nav/terrain_map_ext}; "
+        "export LINGTU_CMU_TOMOGRAM_MODE=${LINGTU_CMU_TOMOGRAM_MODE:-official}; "
+        "export LINGTU_CMU_TOMOGRAM_DURATION_SEC=${LINGTU_CMU_TOMOGRAM_DURATION_SEC:-20}; "
+        "export LINGTU_CMU_GATE_TIMEOUT_SEC=${LINGTU_CMU_GATE_TIMEOUT_SEC:-240}; "
+        "export LINGTU_CMU_GATE_MIN_UNIQUE_WAYPOINTS=${LINGTU_CMU_GATE_MIN_UNIQUE_WAYPOINTS:-3}; "
+        "export LINGTU_CMU_GATE_REQUIRED_MAP_TOPICS=${LINGTU_CMU_GATE_REQUIRED_MAP_TOPICS:-/nav/map_cloud,/nav/terrain_map_ext}; "
+        "export LINGTU_CMU_GATE_REQUIRE_PCT=1; "
+        "PYTHONPATH=src:.:/opt/ros/humble/local/lib/python3.10/dist-packages:"
+        "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
+        "sim/scripts/launch_cmu_unity_lingtu_runtime.sh start --gate --rviz'",
+        _eval_cmu_unity_pct_strict,
+    ),
+    GateSpec(
+        "saved_map_relocalize",
+        "Runtime saved-map relocalization with live MuJoCo/Fast-LIO and localizer",
+        (
+            "artifacts/server_sim_closure/saved_map_relocalize_runtime/report.json",
+            "artifacts/server_sim_closure/saved_map_relocalize_runtime*/report.json",
+            "artifacts/saved_map_relocalize_runtime*/report.json",
+        ),
+        "PYTHONPATH=src:. python3 sim/scripts/saved_map_relocalize_runtime_gate.py "
+        "--map-pcd latest "
+        "--scan-time-profile map_metadata "
+        "--live-drive-source frontier "
+        "--mid360-samples-per-frame 15000 "
+        "--localizer-rough-score-thresh 0.35 "
+        "--localizer-refine-score-thresh 0.35 "
+        "--json-out artifacts/server_sim_closure/saved_map_relocalize_runtime/report.json --strict",
         _eval_saved_map_relocalize,
     ),
+    GateSpec(
+        "bbs3d_kidnapped_relocalize",
+        "BBS3D kidnapped-robot global relocalization with live MuJoCo/Fast-LIO and localizer",
+        (
+            "artifacts/server_sim_closure/bbs3d_kidnapped_relocalize/report.json",
+            "artifacts/server_sim_closure/bbs3d_kidnapped_relocalize*/report.json",
+        ),
+        "PYTHONPATH=src:. python3 sim/scripts/saved_map_relocalize_runtime_gate.py "
+        "--map-pcd latest --check-global-relocalize "
+        "--scan-time-profile map_metadata "
+        "--live-drive-source frontier "
+        "--mid360-samples-per-frame 15000 "
+        "--localizer-rough-score-thresh 0.35 "
+        "--localizer-refine-score-thresh 0.35 "
+        "--kidnap-initial-x 3.0 --kidnap-initial-y 2.0 --kidnap-initial-yaw 1.2 "
+        "--max-map-odom-xy-m 10.0 --monitor-after-service-s 30 "
+        "--run-dir artifacts/server_sim_closure/bbs3d_kidnapped_relocalize "
+        "--json-out artifacts/server_sim_closure/bbs3d_kidnapped_relocalize/report.json --strict",
+        _eval_saved_map_relocalize,
+    ),
+    GateSpec(
+        "pct_saved_map_navigation",
+        "Saved-map PCT navigation after relocalization: tomogram -> PCT -> localPlanner/pathFollower -> MuJoCo motion",
+        (
+            "artifacts/server_sim_closure/pct_saved_map_navigation/report.json",
+            "artifacts/server_sim_closure/pct_saved_map_navigation*/report.json",
+            "artifacts/pct_saved_map_navigation*/report.json",
+        ),
+        "bash -lc 'source /opt/ros/humble/setup.bash && "
+        "source install/setup.bash 2>/dev/null || true; "
+        "export MUJOCO_GL=${MUJOCO_GL:-egl}; "
+        "PYTHONPATH=src:.:/opt/ros/humble/local/lib/python3.10/dist-packages:"
+        "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
+        "/usr/bin/python3 sim/scripts/pct_saved_map_navigation_gate.py "
+        "--json-out artifacts/server_sim_closure/pct_saved_map_navigation/report.json --strict'",
+        _eval_pct_saved_map_navigation,
+    ),
 )
+
+ALGORITHM_PRESETS: dict[str, tuple[str, ...]] = {
+    "core_algorithm": (
+        "large_terrain",
+        "dynamic_obstacle_local_planner",
+        "fastlio2_dynamic_inspection",
+        "moving_obstacle_sweep",
+        "large_loop_closure",
+    ),
+    "dimos_benchmark": (
+        "routecheck_preflight",
+        "large_terrain",
+        "native_pct_mujoco",
+        "dynamic_obstacle_local_planner",
+        "fastlio2_dynamic_inspection",
+        "moving_obstacle_sweep",
+        "large_loop_closure",
+        "gazebo_runtime",
+        "saved_map_relocalize",
+        "pct_saved_map_navigation",
+    ),
+    "full_algorithm": tuple(spec.name for spec in GATES),
+}
+
+
+ALGORITHM_VALIDATION_FLOW: tuple[dict[str, Any], ...] = (
+    {
+        "id": "map_asset",
+        "title": "Map/tomogram asset",
+        "gates": ("large_terrain",),
+        "proves": "large same-source map/tomogram artifacts exist for route and PCT checks",
+    },
+    {
+        "id": "static_global_planning",
+        "title": "Static global planning",
+        "gates": ("native_pct_mujoco", "pct_saved_map_navigation"),
+        "proves": "PCT global planning runs on saved static map/tomogram artifacts",
+    },
+    {
+        "id": "local_dynamic_avoidance",
+        "title": "Local dynamic avoidance",
+        "gates": ("dynamic_obstacle_local_planner", "moving_obstacle_sweep"),
+        "proves": "local planner and cmd_vel chain react to moving obstacles without planner fallback",
+    },
+    {
+        "id": "realtime_mapping_localization",
+        "title": "Realtime mapping/localization",
+        "gates": ("fastlio2_dynamic_inspection", "large_loop_closure"),
+        "proves": "raw LiDAR/IMU feed Fast-LIO mapping/localization during navigation",
+    },
+    {
+        "id": "long_range_loop_closure",
+        "title": "Long-range loop closure",
+        "gates": ("large_loop_closure",),
+        "proves": "large same-source route keeps bounded drift while PCT/local path/cmd_vel remain active",
+    },
+    {
+        "id": "saved_map_lifecycle",
+        "title": "Saved-map lifecycle",
+        "gates": ("saved_map_relocalize", "pct_saved_map_navigation"),
+        "proves": "saved map relocalization and same-source saved-map PCT navigation both work",
+    },
+    {
+        "id": "command_safety",
+        "title": "Command safety",
+        "gates": ("routecheck_preflight",),
+        "proves": "route preview and validation do not publish hardware motion commands",
+    },
+    {
+        "id": "ros_integration",
+        "title": "ROS integration smoke",
+        "gates": ("gazebo_runtime",),
+        "proves": "ROS topics, publisher identity, map growth, and navigation loop are coherent",
+    },
+)
+
+
+def _ordered_gate_names(names: set[str]) -> list[str]:
+    ordered = [spec.name for spec in GATES if spec.name in names]
+    ordered_set = set(ordered)
+    ordered.extend(sorted(names - ordered_set))
+    return ordered
+
+
+def _missing_required_commands(
+    gates: dict[str, Any],
+    missing_or_failed: list[str],
+) -> list[dict[str, Any]]:
+    specs = {spec.name: spec for spec in GATES}
+    commands: list[dict[str, Any]] = []
+    for name in _ordered_gate_names(set(missing_or_failed)):
+        spec = specs.get(name)
+        if spec is None:
+            continue
+        gate = gates.get(name) or {}
+        commands.append(
+            {
+                "name": name,
+                "description": spec.description,
+                "status": gate.get("status", "missing"),
+                "path": gate.get("path", ""),
+                "command": spec.command,
+            }
+        )
+    return commands
+
+
+_BLOCKER_CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "slam_localization",
+        (
+            "fast-lio",
+            "fastlio",
+            "slam",
+            "localization",
+            "relocalize",
+            "tracking_health",
+            "z_consistency",
+            "yaw_consistency",
+            "motion_consistency",
+            "z drift",
+            "yaw drift",
+            "odometry diverged",
+        ),
+    ),
+    (
+        "planning_tracking",
+        (
+            "pct",
+            "planner",
+            "global_path",
+            "local_path",
+            "path_length",
+            "cmd_vel_nonzero",
+            "checkpoint",
+            "patrol",
+            "goal",
+            "navigation",
+            "path follower",
+        ),
+    ),
+    (
+        "dynamic_obstacle",
+        (
+            "moving_obstacle",
+            "moving obstacle",
+            "speed/density",
+            "trail_clearance",
+            "collision",
+            "clearance",
+        ),
+    ),
+    (
+        "artifact_contract",
+        (
+            "report missing",
+            "report_age_s",
+            "same-source",
+            "tomogram",
+            "metadata",
+            "video",
+            "file missing",
+            "stale",
+        ),
+    ),
+    (
+        "command_safety",
+        (
+            "cmd_vel_sent_to_hardware",
+            "real_robot_motion",
+            "route preview",
+            "preflight",
+        ),
+    ),
+    (
+        "simulation_integration",
+        (
+            "ros topics",
+            "gazebo",
+            "cmu",
+            "unity",
+            "publisher",
+            "bridge",
+        ),
+    ),
+)
+
+
+def _blocker_categories(blockers: list[str]) -> set[str]:
+    text = "\n".join(str(blocker).lower() for blocker in blockers)
+    categories: set[str] = set()
+    for category, keywords in _BLOCKER_CATEGORY_KEYWORDS:
+        if any(keyword in text for keyword in keywords):
+            categories.add(category)
+    if not categories and blockers:
+        categories.add("unclassified")
+    return categories
+
+
+def _gate_failure_categories(gate: dict[str, Any]) -> set[str]:
+    categories = _blocker_categories(
+        [str(blocker) for blocker in gate.get("blockers") or []]
+    )
+    evidence = gate.get("evidence") if isinstance(gate.get("evidence"), dict) else {}
+    for system in evidence.get("blocking_subsystems") or []:
+        if str(system):
+            categories.add(str(system))
+    minimal_red_defect = (
+        evidence.get("minimal_red_defect")
+        if isinstance(evidence.get("minimal_red_defect"), dict)
+        else {}
+    )
+    subsystem = str(minimal_red_defect.get("blocking_subsystem") or "")
+    if subsystem:
+        categories.add(subsystem)
+    return categories
+
+
+def _validation_flow_summary(
+    gates: dict[str, Any],
+    required_names: set[str],
+) -> list[dict[str, Any]]:
+    flow: list[dict[str, Any]] = []
+    for stage in ALGORITHM_VALIDATION_FLOW:
+        gate_names = tuple(str(name) for name in stage["gates"])
+        required_gates = [name for name in gate_names if name in required_names]
+        passed_gates = [
+            name for name in required_gates if bool((gates.get(name) or {}).get("ok"))
+        ]
+        blocking_gates = [name for name in required_gates if name not in passed_gates]
+        if not required_gates:
+            status = "not_required"
+        elif blocking_gates:
+            status = "failed"
+        else:
+            status = "passed"
+        flow.append(
+            {
+                "id": stage["id"],
+                "title": stage["title"],
+                "status": status,
+                "required_gates": _ordered_gate_names(set(required_gates)),
+                "passed_gates": _ordered_gate_names(set(passed_gates)),
+                "blocking_gates": _ordered_gate_names(set(blocking_gates)),
+                "all_gates": list(gate_names),
+                "proves": stage["proves"],
+            }
+        )
+    return flow
+
+
+def _algorithm_validation_summary(
+    gates: dict[str, Any],
+    required_names: set[str],
+    missing_or_failed: list[str],
+) -> dict[str, Any]:
+    blocking_categories: dict[str, list[str]] = {}
+    gate_categories: dict[str, list[str]] = {}
+    for name in _ordered_gate_names(set(missing_or_failed)):
+        gate = gates.get(name) or {}
+        categories = sorted(_gate_failure_categories(gate) or {"not verified"})
+        gate_categories[name] = categories
+        for category in categories:
+            blocking_categories.setdefault(category, []).append(name)
+
+    claim_allowed = not missing_or_failed
+    stop_condition = (
+        "all required gates passed; simulation-only algorithm-health claim is allowed"
+        if claim_allowed
+        else (
+            "do not claim algorithm health until these required gates pass: "
+            + ", ".join(_ordered_gate_names(set(missing_or_failed)))
+        )
+    )
+    return {
+        "claim": "simulation_algorithm_health",
+        "claim_allowed": claim_allowed,
+        "flow_ok": claim_allowed,
+        "highest_priority_blocker": next(
+            iter(_ordered_gate_names(set(missing_or_failed))),
+            "",
+        ),
+        "required_gate_sequence": _ordered_gate_names(required_names),
+        "validation_flow": _validation_flow_summary(gates, required_names),
+        "claim_boundary": {
+            "global_planning_source": "static_saved_map_tomogram",
+            "realtime_mapping_source": "fastlio2_lidar_imu",
+            "local_dynamic_inputs": ["live_costmap", "moving_obstacles"],
+            "live_costmap_role": "local_planning_and_safety_only",
+            "simulation_only": True,
+            "field_readiness": False,
+        },
+        "blocking_gate_count": len(missing_or_failed),
+        "blocking_categories": blocking_categories,
+        "gate_categories": gate_categories,
+        "stop_condition": stop_condition,
+        "interpretation": (
+            "simulation/replay evidence only; not physical S100P field readiness"
+        ),
+    }
 
 
 def _candidate_matches(patterns: tuple[str, ...]) -> list[Path]:
@@ -946,6 +2736,11 @@ def summarize(
         if not bool((gates.get(name) or {}).get("ok"))
     ]
     verified = {name: bool(item.get("ok")) for name, item in gates.items()}
+    algorithm_validation = _algorithm_validation_summary(
+        gates,
+        required_names,
+        missing_or_failed,
+    )
     return {
         "schema_version": "lingtu.server_sim_closure.v1",
         "ok": not missing_or_failed,
@@ -956,9 +2751,12 @@ def summarize(
         "include_optional": include_optional,
         "max_report_age_s": max_report_age_s,
         "required": sorted(required_names),
+        "required_gate_sequence": _ordered_gate_names(required_names),
         "verified": verified,
         "missing_or_failed": missing_or_failed,
+        "missing_required_commands": _missing_required_commands(gates, missing_or_failed),
         "optional_missing_or_failed": optional_missing_or_failed,
+        "algorithm_validation": algorithm_validation,
         "gates": gates,
         "remaining_gaps": [
             f"{name}: {', '.join((gates.get(name) or {}).get('blockers') or ['not verified'])}"
@@ -971,27 +2769,125 @@ def summarize(
     }
 
 
+def run_missing_required_gates(
+    *,
+    report_overrides: dict[str, Path],
+    required: set[str],
+    max_report_age_s: float | None = None,
+    include_optional: bool = True,
+    gate_timeout_s: float | None = None,
+    stop_on_run_failure: bool = False,
+    runner: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+) -> dict[str, Any]:
+    initial_summary = summarize(
+        report_overrides=report_overrides,
+        required=required,
+        max_report_age_s=max_report_age_s,
+        include_optional=include_optional,
+    )
+    specs = {spec.name: spec for spec in GATES}
+    run_results: list[dict[str, Any]] = []
+    for name in _ordered_gate_names(set(initial_summary["missing_or_failed"])):
+        spec = specs.get(name)
+        if spec is None:
+            continue
+        started = time.time()
+        returncode: int | None = None
+        error = ""
+        status = "failed"
+        try:
+            result = runner(
+                spec.command,
+                cwd=ROOT,
+                shell=True,
+                timeout=None if gate_timeout_s is None else float(gate_timeout_s),
+                check=False,
+            )
+            returncode = int(result.returncode)
+            status = "passed" if returncode == 0 else "failed"
+        except subprocess.TimeoutExpired as exc:
+            status = "timeout"
+            error = f"timeout after {gate_timeout_s:g}s: {exc}"
+        except Exception as exc:  # pragma: no cover - CLI diagnostics path.
+            status = "error"
+            error = f"{type(exc).__name__}: {exc}"
+
+        run_results.append(
+            {
+                "name": name,
+                "status": status,
+                "returncode": returncode,
+                "elapsed_s": round(time.time() - started, 3),
+                "command": spec.command,
+                "error": error,
+            }
+        )
+        if stop_on_run_failure and status != "passed":
+            break
+
+    final_summary = summarize(
+        report_overrides=report_overrides,
+        required=required,
+        max_report_age_s=max_report_age_s,
+        include_optional=include_optional,
+    )
+    final_summary["run_missing"] = True
+    final_summary["initial_missing_or_failed"] = list(initial_summary["missing_or_failed"])
+    final_summary["gate_runs"] = run_results
+    return final_summary
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--large-terrain-report", type=Path, default=None)
     parser.add_argument("--native-pct-mujoco-report", type=Path, default=None)
     parser.add_argument("--dynamic-obstacle-local-planner-report", type=Path, default=None)
     parser.add_argument("--fastlio2-live-report", type=Path, default=None)
+    parser.add_argument("--fastlio2-dynamic-inspection-report", type=Path, default=None)
+    parser.add_argument("--moving-obstacle-sweep-report", type=Path, default=None)
+    parser.add_argument("--large-loop-closure-report", type=Path, default=None)
+    parser.add_argument("--mujoco-tare-exploration-report", type=Path, default=None)
     parser.add_argument("--policy-nav-report", type=Path, default=None)
     parser.add_argument("--gateway-dry-run-report", type=Path, default=None)
     parser.add_argument("--routecheck-preflight-report", type=Path, default=None)
     parser.add_argument("--gazebo-runtime-report", type=Path, default=None)
+    parser.add_argument("--cmu-unity-sim-report", type=Path, default=None)
+    parser.add_argument("--cmu-unity-runtime-report", type=Path, default=None)
+    parser.add_argument("--cmu-unity-pct-strict-report", type=Path, default=None)
     parser.add_argument("--saved-map-relocalize-report", type=Path, default=None)
+    parser.add_argument("--pct-saved-map-navigation-report", type=Path, default=None)
     parser.add_argument(
         "--required",
-        default=",".join(spec.name for spec in GATES),
+        default=None,
         help="Comma-separated gate names required for ok=true",
+    )
+    parser.add_argument(
+        "--preset",
+        choices=sorted(ALGORITHM_PRESETS),
+        default=None,
+        help="Named required-gate preset; core_algorithm is the strict daily algorithm acceptance gate.",
     )
     parser.add_argument(
         "--max-report-age-s",
         type=float,
         default=None,
         help="Optional maximum age in seconds for accepted report artifacts.",
+    )
+    parser.add_argument(
+        "--run-missing",
+        action="store_true",
+        help="Run missing or stale required gates in preset order, then summarize again.",
+    )
+    parser.add_argument(
+        "--gate-timeout-s",
+        type=float,
+        default=None,
+        help="Optional per-gate timeout used with --run-missing.",
+    )
+    parser.add_argument(
+        "--stop-on-run-failure",
+        action="store_true",
+        help="Stop --run-missing after the first gate command that exits nonzero or times out.",
     )
     parser.add_argument(
         "--required-only",
@@ -1003,6 +2899,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _required_from_args(args: argparse.Namespace) -> set[str]:
+    if args.preset:
+        return set(ALGORITHM_PRESETS[args.preset])
+    if args.required:
+        return {item.strip() for item in args.required.split(",") if item.strip()}
+    return {spec.name for spec in GATES}
+
+
 def main() -> int:
     args = _build_parser().parse_args()
     overrides = {
@@ -1010,24 +2914,40 @@ def main() -> int:
         "native_pct_mujoco": args.native_pct_mujoco_report,
         "dynamic_obstacle_local_planner": args.dynamic_obstacle_local_planner_report,
         "fastlio2_live": args.fastlio2_live_report,
+        "fastlio2_dynamic_inspection": args.fastlio2_dynamic_inspection_report,
+        "moving_obstacle_sweep": args.moving_obstacle_sweep_report,
+        "large_loop_closure": args.large_loop_closure_report,
+        "mujoco_tare_exploration": args.mujoco_tare_exploration_report,
         "policy_nav": args.policy_nav_report,
         "gateway_dry_run": args.gateway_dry_run_report,
         "routecheck_preflight": args.routecheck_preflight_report,
         "gazebo_runtime": args.gazebo_runtime_report,
+        "cmu_unity_sim": args.cmu_unity_sim_report,
+        "cmu_unity_runtime": args.cmu_unity_runtime_report,
+        "cmu_unity_pct_strict": args.cmu_unity_pct_strict_report,
         "saved_map_relocalize": args.saved_map_relocalize_report,
+        "pct_saved_map_navigation": args.pct_saved_map_navigation_report,
     }
-    required = {item.strip() for item in args.required.split(",") if item.strip()}
+    required = _required_from_args(args)
     valid_names = {spec.name for spec in GATES}
     unknown = sorted(required - valid_names)
     if unknown:
         raise SystemExit(f"unknown required gate(s): {', '.join(unknown)}")
 
-    summary = summarize(
-        report_overrides={key: value for key, value in overrides.items() if value is not None},
-        required=required,
-        max_report_age_s=args.max_report_age_s,
-        include_optional=not args.required_only,
-    )
+    summary_kwargs = {
+        "report_overrides": {key: value for key, value in overrides.items() if value is not None},
+        "required": required,
+        "max_report_age_s": args.max_report_age_s,
+        "include_optional": not args.required_only,
+    }
+    if args.run_missing:
+        summary = run_missing_required_gates(
+            **summary_kwargs,
+            gate_timeout_s=args.gate_timeout_s,
+            stop_on_run_failure=args.stop_on_run_failure,
+        )
+    else:
+        summary = summarize(**summary_kwargs)
     text = json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True)
     print(text)
     if args.json_out:

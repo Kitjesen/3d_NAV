@@ -1,4 +1,4 @@
-"""Exploration stack: TARE backend only.
+"""Exploration stack: TARE backends.
 
 Since 2026-04-25, wavefront frontier has been removed from this stack
 (it lives on in `nav.frontier_explorer_module` for the standalone
@@ -31,7 +31,7 @@ def exploration(backend: str = "tare", **kw) -> Blueprint:
     """Build an exploration stack Blueprint.
 
     Args:
-        backend: "tare" | "none". Wavefront is no longer selectable here;
+        backend: "tare" | "tare_external" | "none". Wavefront is no longer selectable here;
                  use ``exploration(backend="none")`` + NavigationModule's
                  embedded frontier if you need the old pure-Python BFS.
         **kw:    forwarded to the module constructor.
@@ -52,9 +52,13 @@ def exploration(backend: str = "tare", **kw) -> Blueprint:
             )
         return bp
 
+    if backend == "tare_external":
+        _add_external_tare_bridge(bp, **kw)
+        return bp
+
     raise ValueError(
         f"Unknown exploration backend {backend!r}. "
-        "Options: 'tare' (default), 'none'. "
+        "Options: 'tare' (default), 'tare_external', 'none'. "
         "'wavefront' was removed — see nav.frontier_explorer_module for "
         "standalone use."
     )
@@ -105,12 +109,33 @@ def _add_tare(bp: Blueprint, **kw) -> bool:
         return False
 
 
+def _add_external_tare_bridge(bp: Blueprint, **kw) -> None:
+    """Add the TARE bridge without launching LingTu's native TARE process."""
+    from exploration.exploration_supervisor_module import (
+        ExplorationSupervisorModule,
+    )
+    from exploration.tare_explorer_module import TAREExplorerModule
+
+    kw.setdefault("prefer_path_strategy", False)
+    bp.add(TAREExplorerModule, **_tare_kwargs(kw))
+    bp.add(ExplorationSupervisorModule, **_supervisor_kwargs(kw))
+    logger.info("External TARE exploration bridge enabled (native process off)")
+
+
 def _tare_kwargs(kw: dict) -> dict:
     """Keep only TAREExplorerModule-relevant kwargs."""
     allowed = {
         "way_point_topic", "path_topic", "runtime_topic",
         "finish_topic", "start_topic",
+        "goal_frame_id",
         "way_point_timeout_s", "auto_start",
+        "hold_active_goal_until_terminal",
+        "max_waypoint_distance_m", "waypoint_odometry_timeout_s",
+        "prefer_path_strategy",
+        "path_goal_min_distance_m", "path_goal_spacing_m",
+        "path_start_tolerance_m", "path_max_goal_count",
+        "path_strategy_timeout_s", "path_strategy_fallback_to_waypoint",
+        "navigation_goal_match_tolerance_m",
     }
     return {k: v for k, v in kw.items() if k in allowed}
 

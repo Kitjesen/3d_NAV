@@ -1,29 +1,29 @@
-"""
-Building2_9 全栈导航仿真启动文件 (ROS2 SITL)
+r"""
+Building2_9 full-stack navigation simulation launch file for ROS 2 SITL.
 
-无需硬件 / LiDAR / SLAM. 节点拓扑:
+No physical robot, LiDAR, or SLAM service is required. Node topology:
 
-  sim_robot_node.py      → /nav/odometry, /nav/map_cloud, /nav/terrain_map(+ext), /nav/stop
-  global_planner.py      → /nav/global_path      (ele_planner.so C++ 规划, 与 RViz demo 相同)
-  pct_path_adapter (C++) → /nav/way_point         (航点序列 + /nav/adapter_status)
-  localPlanner     (C++) → /nav/local_path        (局部避障路径)
-  pathFollower     (C++) → /nav/cmd_vel           (速度指令 + /nav/planner_status)
-  sim_robot_node.py      ← /nav/cmd_vel           (积分运动学 → 更新位姿)
+  sim_robot_node.py      -> /nav/odometry, /nav/map_cloud, /nav/terrain_map(+ext), /nav/stop
+  global_planner.py      -> /nav/global_path      (ele_planner.so C++ planner)
+  pct_path_adapter (C++) -> /nav/way_point         (waypoint sequence + /nav/adapter_status)
+  localPlanner (C++)     -> /nav/local_path        (local obstacle-aware path)
+  pathFollower (C++)     -> /nav/cmd_vel           (velocity command + /nav/planner_status)
+  sim_robot_node.py      -> /nav/cmd_vel           (integrates motion and updates pose)
 
-用法:
-  # 基本用法 (Corridor_E: (-5.5,7.3,floor1) → (5.0,7.3,floor1), ele_planner.so C++ 规划)
+Usage:
+  # Default Building2_9 corridor case.
   ros2 launch tests/planning/sim_navigation.launch.py
 
-  # 指定地图和目标
-  ros2 launch tests/planning/sim_navigation.launch.py \\
-    map_path:=/home/sunrise/data/SLAM/navigation/src/global_planning/PCT_planner/rsc/pcd/building2_9.pickle \\
+  # Specify map and goal.
+  ros2 launch tests/planning/sim_navigation.launch.py \
+    map_path:=/home/sunrise/data/SLAM/navigation/src/global_planning/PCT_planner/rsc/pcd/building2_9.pickle \
     goal_x:=5.0 goal_y:=-8.0
 
-  # Corridor_SE 场景 (长对角线)
+  # Alternative diagonal corridor case.
   ros2 launch tests/planning/sim_navigation.launch.py goal_y:=-8.0
 
-注意: 启动前请停止其他导航节点:
-  pkill -f 'pct_planner_astar\\|pct_path_adapter\\|localPlanner\\|pathFollower\\|sim_robot'
+Before launch, stop other navigation nodes:
+  pkill -f 'pct_planner_astar|pct_path_adapter|localPlanner|pathFollower|sim_robot'
 """
 
 import os
@@ -31,13 +31,14 @@ import sys
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 
-# ── building2_9.pickle 默认路径 (安装目录优先, 回退到源码目录) ────────────────
+# Default building2_9.pickle path. Prefer installed assets, then fall back to source tree.
 def _default_pickle():
     try:
         share = get_package_share_directory('pct_planner')
@@ -46,7 +47,7 @@ def _default_pickle():
             return p
     except Exception:
         pass
-    # 回退: 从 launch 文件位置推算源码路径
+    # Fallback: derive the source-tree path from this launch file.
     tests_dir = os.path.dirname(__file__)           # tests/planning/
     src_root  = os.path.join(tests_dir, '..', '..', 'src')
     return os.path.normpath(os.path.join(
@@ -58,37 +59,37 @@ def _default_pickle():
 def generate_launch_description():
     pickle_default = _default_pickle()
 
-    # ── 启动参数声明 ──────────────────────────────────────────────────────────
+    # Launch arguments.
     map_path_arg = DeclareLaunchArgument(
         'map_path',
         default_value=pickle_default,
-        description='番茄图 pickle 路径 (building2_9 或 factory_v4)',
+        description='Tomogram pickle path, for example building2_9 or factory_v4.',
     )
-    # 起终点: 起点(-5.5,7.3) 恰在楼梯间 (Z=0.5→3.0m 全段可通行, trav=21.4)
-    # 终点(2.0,-3.0) 在上层走廊 Z=2.0m (trav=0.0)
-    # Z=1.0m 走廊层: 4123格连通, 起终点均可达; tomogram_ground_h=1.0 保证 start 被 snap 到此层
+    # Default start and goal are on a passable Building2_9 corridor.
+    # Keep goal_z aligned with tomogram_ground_h so planning uses the intended slice.
+    # Keep the start inside valid free space so the global planner can snap safely.
     goal_x_arg = DeclareLaunchArgument('goal_x',   default_value='5.0',
-                                        description='目标 X (m)')
+                                        description='Goal X in meters.')
     goal_y_arg = DeclareLaunchArgument('goal_y',   default_value='7.3',
-                                        description='目标 Y (m)')
+                                        description='Goal Y in meters.')
     goal_z_arg = DeclareLaunchArgument('goal_z',   default_value='1.0',
-                                        description='目标 Z (m)  (1.0=Z=1.0m 走廊层, 与 tomogram_ground_h 一致)')
+                                        description='Goal Z in meters; should match tomogram_ground_h for this map.')
     start_x_arg = DeclareLaunchArgument('start_x', default_value='-5.5',
-                                         description='起点 X (m)  (楼梯间入口)')
+                                         description='Start X in meters.')
     start_y_arg = DeclareLaunchArgument('start_y', default_value='7.3',
-                                         description='起点 Y (m)  (楼梯间入口)')
-    # 地图世界坐标边界 (building2_9 默认值; 工厂场景需覆盖)
-    map_x_min_arg = DeclareLaunchArgument('map_x_min', default_value='-7.5',  description='地图 X 最小值 (m)')
-    map_x_max_arg = DeclareLaunchArgument('map_x_max', default_value='10.5',  description='地图 X 最大值 (m)')
-    map_y_min_arg = DeclareLaunchArgument('map_y_min', default_value='-9.5',  description='地图 Y 最小值 (m)')
-    map_y_max_arg = DeclareLaunchArgument('map_y_max', default_value='9.0',   description='地图 Y 最大值 (m)')
-    # tomogram_ground_h: 机器人 z < 此值时 snap 到最低有效切片
-    # building2_9: 1.0 (floor1 走廊层); factory: 1.5 (slice_h0)
+                                         description='Start Y in meters.')
+    # Map world-coordinate bounds. Override these for factory-scale scenes.
+    map_x_min_arg = DeclareLaunchArgument('map_x_min', default_value='-7.5',  description='Minimum map X in meters.')
+    map_x_max_arg = DeclareLaunchArgument('map_x_max', default_value='10.5',  description='Maximum map X in meters.')
+    map_y_min_arg = DeclareLaunchArgument('map_y_min', default_value='-9.5',  description='Minimum map Y in meters.')
+    map_y_max_arg = DeclareLaunchArgument('map_y_max', default_value='9.0',   description='Maximum map Y in meters.')
+    # tomogram_ground_h: snap robot z below this value to the lowest valid slice.
+    # Building2_9 usually uses 1.0; factory maps may use 1.5.
     tomo_gh_arg = DeclareLaunchArgument('tomogram_ground_h', default_value='1.0',
-                                         description='tomogram_ground_h 参数 (snap 起始高度)')
-    # 可选: 建筑 PCD 可视化 + 场景名称
-    pcd_path_arg   = DeclareLaunchArgument('pcd_path',   default_value='', description='建筑 PCD 路径 (可视化用)')
-    scene_name_arg = DeclareLaunchArgument('scene_name', default_value='Building2_9', description='场景名称')
+                                         description='tomogram_ground_h used for start-height snapping.')
+    # Optional building PCD visualization path and scene name.
+    pcd_path_arg   = DeclareLaunchArgument('pcd_path',   default_value='', description='Building PCD path for visualization.')
+    scene_name_arg = DeclareLaunchArgument('scene_name', default_value='Building2_9', description='Scene name.')
     use_sim_robot_arg = DeclareLaunchArgument(
         'use_sim_robot',
         default_value='true',
@@ -98,6 +99,21 @@ def generate_launch_description():
         'use_terrain_passthrough',
         default_value='false',
         description='Copy /nav/map_cloud to terrain topics for Gazebo navigation gates.',
+    )
+    flatten_global_path_z_arg = DeclareLaunchArgument(
+        'flatten_global_path_z',
+        default_value='false',
+        description='Force /nav/global_path z=0 for Gazebo 2D room validation.',
+    )
+    use_gazebo_line_planner_arg = DeclareLaunchArgument(
+        'use_gazebo_line_planner',
+        default_value='false',
+        description='Use Gazebo odometry and goal_pose to publish a room-frame global path.',
+    )
+    gazebo_line_require_grid_arg = DeclareLaunchArgument(
+        'gazebo_line_require_grid',
+        default_value='false',
+        description='Require /nav/exploration_grid before the Gazebo path publisher emits a path.',
     )
     use_foxglove_arg = DeclareLaunchArgument(
         'use_foxglove',
@@ -120,9 +136,12 @@ def generate_launch_description():
     tomogram_ground_h = LaunchConfiguration('tomogram_ground_h')
     use_sim_robot = LaunchConfiguration('use_sim_robot')
     use_terrain_passthrough = LaunchConfiguration('use_terrain_passthrough')
+    flatten_global_path_z = LaunchConfiguration('flatten_global_path_z')
+    use_gazebo_line_planner = LaunchConfiguration('use_gazebo_line_planner')
+    gazebo_line_require_grid = LaunchConfiguration('gazebo_line_require_grid')
     use_foxglove = LaunchConfiguration('use_foxglove')
 
-    # ── global_planner.py (真实 ele_planner.so C++ 规划器, 与 RViz demo 同一套) ─
+    # global_planner.py: real ele_planner.so C++ planner, same planner family as the RViz demo.
     repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..'))
     # Keep Gazebo gates runnable from a source checkout even when pct_planner
     # has not been installed into the active ROS workspace.
@@ -156,7 +175,7 @@ def generate_launch_description():
     # launch runnable on clean ROS hosts that do not provide /tmp/venv_np1.
     _venv_python = '/tmp/venv_np1/bin/python3'
     _planner_python = _venv_python if os.path.exists(_venv_python) else sys.executable
-    # 保留现有 PYTHONPATH (含 rclpy), 否则 venv python 找不到 ROS2 包
+    # Preserve the existing PYTHONPATH, including rclpy, so ROS 2 packages remain importable.
     _existing_pypath = os.environ.get('PYTHONPATH', '')
 
     global_planner_proc = ExecuteProcess(
@@ -164,34 +183,51 @@ def generate_launch_description():
             _planner_python,
             global_planner_script,
             '--ros-args',
-            # map_file 参数: 指向当前地图 pickle
+            # map_file points to the current tomogram pickle.
             '-p', ['map_file:=', map_path],
-            # snap start_h 到有效切片层 (building2_9: 1.0; factory: 1.5)
+            # Snap start_h to a valid slice; Building2_9 usually uses 1.0, factory maps 1.5.
             '-p', ['tomogram_ground_h:=', tomogram_ground_h],
-            # goal_pose remap: sim_robot_node 发布到 /nav/goal_pose
+            '-p', ['flatten_path_z:=', flatten_global_path_z],
+            # goal_pose remap: sim_robot_node publishes /nav/goal_pose.
             '-r', '/goal_pose:=/nav/goal_pose',
-            # pct_path → /nav/global_path: pct_adapter 内部订阅 /pct_path (已 remap 到此)
+            # pct_path -> /nav/global_path: pct_adapter subscribes to /pct_path after remap.
             '-r', '/pct_path:=/nav/global_path',
         ],
         output='screen',
+        condition=UnlessCondition(use_gazebo_line_planner),
         additional_env={'PYTHONPATH': _existing_pypath},
     )
 
-    # ── pct_path_adapter (C++ 航点适配器) ────────────────────────────────────
-    # 注: yaml 未安装到 share 目录, 直接内联参数
+    gazebo_line_planner_script = os.path.join(
+        os.path.dirname(__file__), 'gazebo_line_global_planner.py'
+    )
+    gazebo_line_planner_proc = ExecuteProcess(
+        cmd=[
+            'python3',
+            gazebo_line_planner_script,
+            '--ros-args',
+            '-p', ['require_occupancy_grid:=', gazebo_line_require_grid],
+        ],
+        output='screen',
+        condition=IfCondition(use_gazebo_line_planner),
+        additional_env={'PYTHONUNBUFFERED': '1'},
+    )
+
+    # pct_path_adapter: C++ waypoint adapter.
+    # YAML is not installed into share here, so keep launch parameters inline.
     pct_adapter_node = Node(
         package='pct_adapters',
         executable='pct_path_adapter',
         name='pct_path_adapter',
         output='screen',
         parameters=[{
-            # 降采样间距 (m): 与 smooth_min_dist=8×0.2=1.6m 对应
+            # Waypoint downsampling interval in meters.
             'waypoint_distance':  1.5,
-            # 到达半径 (m): 0.8m 防止立即跳过还未到达的航点
+            # Arrival radius in meters; prevents skipping waypoints too aggressively.
             'arrival_threshold':  0.8,
-            # 卡顿检测超时 (s): 仿真中适当放宽
+            # Stuck-detection timeout in seconds; relaxed for simulation.
             'stuck_timeout_sec':  60.0,
-            # 前视距离 (m)
+            # Lookahead distance in meters.
             'lookahead_dist':     2.0,
         }],
         remappings=[
@@ -201,7 +237,7 @@ def generate_launch_description():
         ],
     )
 
-    # ── localPlanner (C++ 局部规划器) ─────────────────────────────────────────
+    # localPlanner: C++ local planner.
     local_planner_share = get_package_share_directory('local_planner')
     path_folder = os.path.join(local_planner_share, 'paths')
 
@@ -212,13 +248,13 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'pathFolder':            path_folder,
-            # 机器人几何 (四足标准值)
+            # Robot geometry for the quadruped footprint.
             'vehicleLength':         0.65,
             'vehicleWidth':          0.30,
             'sensorOffsetX':         0.0,
             'sensorOffsetY':         0.0,
             'twoWayDrive':           False,
-            # 地形参数
+            # Terrain parameters.
             'laserVoxelSize':        0.05,
             'terrainVoxelSize':      0.2,
             'useTerrainAnalysis':    True,
@@ -231,7 +267,7 @@ def generate_launch_description():
             'costHeightThre2':       0.1,
             'useCost':               False,
             'slopeWeight':           0.0,
-            # 路径评分
+            # Path scoring.
             'slowPathNumThre':       5,
             'slowGroupNumThre':      1,
             'pointPerPathThre':      2,
@@ -243,31 +279,31 @@ def generate_launch_description():
             'pathScale':             1.0,
             'minPathScale':          0.75,
             'pathScaleStep':         0.25,
-            # 速度
+            # Velocity limits.
             'maxSpeed':              1.0,
             'pathScaleBySpeed':      True,
             'minPathRange':          1.0,
             'pathRangeStep':         0.5,
             'pathRangeBySpeed':      True,
             'pathCropByGoal':        True,
-            # 自主模式
+            # Autonomy mode.
             'autonomyMode':          True,
             'autonomySpeed':         0.8,
             'joyToSpeedDelay':       2.0,
             'joyToCheckObstacleDelay': 5.0,
-            # 手柄轴 (仿真中无手柄, 保留默认值)
+            # Teleop/joystick input is absent in this simulation; keep defaults disabled.
             'joy_axis_fwd':          4,
             'joy_axis_left':         3,
             'joy_axis_autonomy':     2,
             'joy_axis_obstacle':     5,
-            # 目标处理
+            # Goal handling.
             'freezeAng':             90.0,
             'freezeTime':            2.0,
             'omniDirGoalThre':       1.0,
             'goalClearRange':        0.5,
             'goalBehindRange':       0.8,
-            'goalX':                 0.0,
-            'goalY':                 0.0,
+            'goalX':                 ParameterValue(goal_x, value_type=float),
+            'goalY':                 ParameterValue(goal_y, value_type=float),
         }],
         remappings=[
             ('/Odometry',    '/nav/odometry'),
@@ -285,7 +321,7 @@ def generate_launch_description():
         ],
     )
 
-    # ── pathFollower (C++ Pure Pursuit 路径跟踪器) ────────────────────────────
+    # pathFollower: C++ Pure Pursuit path follower.
     path_follower_node = Node(
         package='local_planner',
         executable='pathFollower',
@@ -295,29 +331,29 @@ def generate_launch_description():
             'sensorOffsetX':    0.0,
             'sensorOffsetY':    0.0,
             'pubSkipNum':       1,
-            # 禁用双向行驶, 防止前后振荡 (建筑走廊向前导航不需要倒车)
+            # Disable reverse driving to avoid forward/backward oscillation in corridor navigation.
             'twoWayDrive':      False,
-            # Pure Pursuit 参数
+            # Pure Pursuit parameters.
             'lookAheadDis':     0.5,
             'baseLookAheadDis': 0.3,
             'lookAheadRatio':   0.5,
             'minLookAheadDis':  0.2,
             'maxLookAheadDis':  2.0,
-            # 控制增益
+            # Control gains.
             'yawRateGain':      3.5,
             'stopYawRateGain':  3.5,
             'maxYawRate':       45.0,
             'maxSpeed':         1.0,
             'maxAccel':         0.5,
-            # 切换 / 停止
+            # Switching and stop thresholds.
             'switchTimeThre':   1.0,
-            # 方向差阈值放宽 (0.5 rad ≈ 28.6°): 减少不必要的行驶方向切换
+            # Relax direction-error threshold to reduce unnecessary direction switching.
             'dirDiffThre':      0.5,
             'omniDirGoalThre':  1.0,
             'omniDirDiffThre':  1.5,
             'stopDisThre':      0.2,
             'slowDwnDisThre':   1.0,
-            # 坡度/倾斜保护 (仿真中关闭)
+            # Slope and tilt protection; disabled in this flat simulation.
             'useInclRateToSlow': False,
             'inclRateThre':      120.0,
             'slowRate1':         0.25,
@@ -330,7 +366,7 @@ def generate_launch_description():
             'stopTime':          5.0,
             'noRotAtStop':       False,
             'noRotAtGoal':       True,
-            # 自主模式
+            # Autonomy mode.
             'autonomyMode':      True,
             'autonomySpeed':     0.8,
             'joyToSpeedDelay':   2.0,
@@ -350,36 +386,36 @@ def generate_launch_description():
         ],
     )
 
-    # ── sim_robot_node.py (Python 仿真机器人节点) ─────────────────────────────
-    # 使用 ExecuteProcess 启动独立 Python 脚本 (非 colcon 包内)
+    # sim_robot_node.py: standalone Python simulation robot node.
+    # Use ExecuteProcess because this script is not launched as an installed colcon package.
     sim_script = os.path.join(os.path.dirname(__file__), 'sim_robot_node.py')
 
     sim_robot = ExecuteProcess(
         cmd=['python3', sim_script],
         output='screen',
         condition=IfCondition(use_sim_robot),
-        # 通过环境变量传入 launch 参数 (LaunchConfiguration 支持 Substitution)
+        # Pass launch arguments through environment variables; LaunchConfiguration supports substitution.
         additional_env={
             'SIM_GOAL_X':       goal_x,
             'SIM_GOAL_Y':       goal_y,
             'SIM_GOAL_Z':       goal_z,
             'SIM_START_X':      start_x,
             'SIM_START_Y':      start_y,
-            'SIM_START_Z':      '0.0',  # 机器人物理高度 (地面); global_planner snap 到 tomogram_ground_h
+            'SIM_START_Z':      '0.0',  # Physical robot height; global_planner snaps to tomogram_ground_h.
             'SIM_MAP_X_MIN':    map_x_min,
             'SIM_MAP_X_MAX':    map_x_max,
             'SIM_MAP_Y_MIN':    map_y_min,
             'SIM_MAP_Y_MAX':    map_y_max,
             'SIM_PCD_PATH':     pcd_path,
             'SIM_SCENE_NAME':   scene_name,
-            # 延长预热: 确保 TF map→body 在 global_planner 收到 goal 前已就绪
-            # global_planner 用 TF 查起点; TF 未就绪时起点为 (0,0,0) → 规划失败
+            # Longer warmup ensures map->body TF exists before global_planner receives the goal.
+            # Without TF, global_planner may plan from the fallback origin and fail.
             'SIM_WARMUP_S':     '10',
             'PYTHONUNBUFFERED': '1',
         },
     )
 
-    # ── robot_state_publisher (URDF TF + 车轮旋转) ───────────────────────────
+    # robot_state_publisher: URDF TF and wheel rotation.
     _urdf_path = os.path.join(os.path.dirname(__file__), 'simple_car.urdf')
     try:
         with open(_urdf_path) as _f:
@@ -406,7 +442,7 @@ def generate_launch_description():
         additional_env={'PYTHONUNBUFFERED': '1'},
     )
 
-    # ── foxglove_bridge (备用 Web 可视化: ws://robot_ip:8765) ────────────────
+    # foxglove_bridge: optional web visualization at ws://robot_ip:8765.
     foxglove_node = Node(
         package='foxglove_bridge',
         executable='foxglove_bridge',
@@ -421,8 +457,8 @@ def generate_launch_description():
         }],
     )
 
-    # ── RViz2 (显示屏本地可视化) ───────────────────────────────────────────────
-    # 通过环境变量 USE_RVIZ=1 启用; 需要 DISPLAY 或 WAYLAND_DISPLAY 已设置
+    # RViz2: local visualization on the display server.
+    # Enable with USE_RVIZ=1; requires DISPLAY or WAYLAND_DISPLAY to be configured.
     _use_rviz = os.environ.get('USE_RVIZ', '0') == '1'
     _rviz_cfg = os.path.join(os.path.dirname(__file__), 'sim_nav.rviz')
 
@@ -435,7 +471,7 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}],
     ) if _use_rviz else None
 
-    # ── 启动时清除 TRANSIENT_LOCAL 路径 latch（防止上次 session 残留路径污染新 run）─
+    # Clear transient-local path latch at startup to avoid stale paths from previous runs.
     clear_latch = ExecuteProcess(
         cmd=[
             'ros2', 'topic', 'pub', '--once',
@@ -447,16 +483,17 @@ def generate_launch_description():
     )
 
     nodes = [
-        clear_latch,            # 先清残留 latch
-        sim_robot,              # 提供 odometry + terrain + /robot_description
+        clear_latch,            # Clear stale path latch first.
+        sim_robot,              # Provides odometry, terrain, and /robot_description.
         terrain_passthrough,    # Gazebo-only: map_cloud -> terrain_map topics
-        robot_state_pub_node,   # URDF TF (base_link → wheels)
-        # 全局规划器延迟 2s 启动, 确保 sim_robot_node 先发布 TF
+        robot_state_pub_node,   # URDF TF from base_link to wheels.
+        # Delay global planner startup so sim_robot_node can publish TF first.
         TimerAction(period=2.0, actions=[global_planner_proc]),
-        pct_adapter_node,       # 航点适配
-        local_planner_node,     # 局部规划
-        path_follower_node,     # 速度控制
-        foxglove_node,          # Web 备用可视化
+        gazebo_line_planner_proc,  # Gazebo gate: odom + goal_pose -> global_path
+        pct_adapter_node,       # Waypoint adapter.
+        local_planner_node,     # Local planner.
+        path_follower_node,     # Velocity controller.
+        foxglove_node,          # Optional web visualization fallback.
     ]
     if rviz_node is not None:
         nodes.append(rviz_node)
@@ -465,6 +502,8 @@ def generate_launch_description():
         map_path_arg, goal_x_arg, goal_y_arg, goal_z_arg, start_x_arg, start_y_arg,
         map_x_min_arg, map_x_max_arg, map_y_min_arg, map_y_max_arg,
         tomo_gh_arg, pcd_path_arg, scene_name_arg,
-        use_sim_robot_arg, use_terrain_passthrough_arg, use_foxglove_arg,
+        use_sim_robot_arg, use_terrain_passthrough_arg, flatten_global_path_z_arg,
+        use_gazebo_line_planner_arg, gazebo_line_require_grid_arg,
+        use_foxglove_arg,
         *nodes,
     ])
