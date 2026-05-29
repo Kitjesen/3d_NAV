@@ -15,6 +15,8 @@ import pytest
 from semantic.planner.semantic_planner.person_tracker import PersonTracker
 from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
 from semantic.planner.semantic_planner.visual_servo_module import VisualServoModule
+from core.msgs.geometry import Vector3
+from core.msgs.semantic import Detection3D, SceneGraph
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -270,3 +272,55 @@ def test_detect_follow_intent_negative():
     assert m._detect_follow_intent("跟我说说红椅子在哪") is None
     assert m._detect_follow_intent("") is None
     assert m._detect_follow_intent("导航到厨房") is None
+
+
+# ── Follow re-selection after target lost ─────────────────────────────────────
+
+def _follow_sg():
+    return SceneGraph(objects=[
+        Detection3D(id="p", label="person", confidence=0.9,
+                    position=Vector3(1.0, 0.0, 0.0), bbox_2d=[0, 0, 10, 10]),
+    ])
+
+
+def test_vs_reselects_after_target_lost():
+    """A previously locked target lost past Re-ID timeout re-arms selection."""
+    vs = VisualServoModule()
+    vs._target_label = "person in red"
+    vs._follow_select_method = "clip"      # already locked once
+    vs._follow_select_pending = False
+    vs._person_tracker.needs_vlm_reselect = lambda: True  # simulate lost-too-long
+
+    calls = []
+    vs._try_select_follow_target = lambda objs: calls.append(objs)
+    vs._person_tracker.update = lambda o, f: None
+    vs._person_tracker.get_follow_waypoint = lambda robot_pos: None
+
+    vs._latest_bgr = np.zeros((20, 20, 3), dtype=np.uint8)
+    vs._latest_sg = _follow_sg()
+
+    vs._tick_follow()
+
+    assert vs._follow_select_pending is True   # re-armed
+    assert len(calls) == 1                       # selection retried this frame
+
+
+def test_vs_no_reselect_before_first_lock():
+    """Without an initial lock (_follow_select_method empty), no re-selection path."""
+    vs = VisualServoModule()
+    vs._target_label = "person in red"
+    vs._follow_select_method = ""
+    vs._follow_select_pending = False
+    vs._person_tracker.needs_vlm_reselect = lambda: True
+
+    reset_calls = []
+    vs._person_tracker.reset = lambda: reset_calls.append(True)
+    vs._try_select_follow_target = lambda objs: None
+    vs._person_tracker.update = lambda o, f: None
+    vs._person_tracker.get_follow_waypoint = lambda robot_pos: None
+    vs._latest_bgr = np.zeros((20, 20, 3), dtype=np.uint8)
+    vs._latest_sg = _follow_sg()
+
+    vs._tick_follow()
+
+    assert reset_calls == []  # re-selection branch not taken

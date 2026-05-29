@@ -349,6 +349,24 @@ class VisualServoModule(Module, layer=4):
 
         scene_objects = self._scene_objects_from_sg(sg)
 
+        # Re-selection: a target we locked earlier has been lost past the Re-ID
+        # timeout → re-arm description-based selection so the same person can be
+        # recovered when they reappear (e.g. after occlusion / turning a corner),
+        # instead of staying lost forever. Guarded by _follow_select_method so it
+        # only fires after an initial lock, and never while a VLM select is in flight.
+        if (
+            self._follow_select_method
+            and not self._follow_select_pending
+            and not self._follow_select_running
+            and self._person_tracker.needs_vlm_reselect()
+        ):
+            logger.info("VisualServo: follow target lost — re-selecting '%s'",
+                        self._target_label)
+            self._person_tracker.reset()
+            self._person_tracker._description = self._target_label
+            self._follow_select_pending = True
+            self._follow_select_method = ""
+
         # Lock onto the described person before plain tracking (once per follow).
         if self._follow_select_pending and not self._follow_select_running:
             self._try_select_follow_target(scene_objects)
