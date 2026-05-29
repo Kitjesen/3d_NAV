@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -39,12 +40,14 @@ from core.msgs.nav import Odometry
 from core.msgs.semantic import GoalResult as MsgGoalResult
 from core.msgs.semantic import SceneGraph
 from core.registry import register
+from core.runtime_interface import map_frame_id
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
 # Minimum seconds between consecutive LERa triggers (prevents storm on repeated STUCK).
 _LERA_COOLDOWN = 15.0
+SEMANTIC_PLANNER_MAP_FRAME_ID = map_frame_id()
 _AGENT_SKILL_BLOCKLIST = {
     "navigate_to",       # keep motion through the planner-owned handler
     "navigate_to_object",
@@ -267,7 +270,16 @@ class SemanticPlannerModule(Module, layer=4):
             pass  # never let chat failures affect planning
 
     def _on_instruction(self, text: str) -> None:
-        """New instruction → decompose → resolve."""
+        """New instruction → decompose → resolve (or hand off person-following)."""
+        # Person-following intent → VisualServo follow mode (bypass goal resolve).
+        follow_target = self._detect_follow_intent(text)
+        if follow_target is not None:
+            self.servo_target.publish(f"follow:{follow_target}")
+            self.planner_status.publish("FOLLOW")
+            self._chat("assistant", f"开始跟随：{follow_target}", phase="follow")
+            logger.info("Semantic planner: follow intent → '%s'", follow_target)
+            return
+
         self._current_instruction = text
         with self._lera_lock:
             self._failure_count = 0
@@ -290,6 +302,28 @@ class SemanticPlannerModule(Module, layer=4):
             self._try_resolve(text, self._latest_sg)
         else:
             self._chat("assistant", "⚠ 还没有场景图，无法定位目标", phase="no_sg")
+
+    # Follow-verb patterns: explicit multi-char verbs only, to avoid matching a
+    # bare 跟 in non-follow phrases like "跟我说" (tell me).
+    _FOLLOW_PATTERN = re.compile(r"(跟随|跟着|跟住|尾随|follow)\s*(.*)", re.IGNORECASE)
+
+    def _detect_follow_intent(self, text: str) -> str | None:
+        """Return the person description if `text` is a follow request, else None.
+
+        Examples::
+
+            "跟着那个穿红衣服的人" → "那个穿红衣服的人"
+            "follow the person in red" → "the person in red"
+            "去找红色椅子"            → None (normal goal resolve handles it)
+        """
+        raw = (text or "").strip()
+        if not raw:
+            return None
+        m = self._FOLLOW_PATTERN.search(raw)
+        if not m:
+            return None
+        target = m.group(2).strip(" \t。.!！?？,，:：")
+        return target or "person"
 
     def _on_scene_graph(self, sg: SceneGraph) -> None:
         """Scene graph update → cache + re-resolve if active instruction."""
@@ -517,7 +551,10 @@ class SemanticPlannerModule(Module, layer=4):
                             ),
                             orientation=Quaternion(0, 0, 0, 1),
                         ),
-                        frame_id=getattr(result, "frame_id", "map") or "map",
+                        frame_id=(
+                            getattr(result, "frame_id", SEMANTIC_PLANNER_MAP_FRAME_ID)
+                            or SEMANTIC_PLANNER_MAP_FRAME_ID
+                        ),
                         ts=time.time(),
                     )
                     self._current_goal_pose = pose
@@ -617,10 +654,14 @@ class SemanticPlannerModule(Module, layer=4):
                 return False
             pose = PoseStamped(
                 pose=Pose(
-                    position=Vector3(x=float(best["x"]), y=float(best["y"]), z=0.0),
+                    position=Vector3(
+                        x=float(best["x"]),
+                        y=float(best["y"]),
+                        z=float(best.get("z", 0.0)),
+                    ),
                     orientation=Quaternion(0, 0, 0, 1),
                 ),
-                frame_id="map",
+                frame_id=SEMANTIC_PLANNER_MAP_FRAME_ID,
                 ts=time.time(),
             )
             self._current_goal_pose = pose
@@ -651,7 +692,7 @@ class SemanticPlannerModule(Module, layer=4):
                         position=Vector3(float(pos[0]), float(pos[1]), 0.0),
                         orientation=Quaternion(0, 0, 0, 1),
                     ),
-                    frame_id="map",
+                    frame_id=SEMANTIC_PLANNER_MAP_FRAME_ID,
                     ts=time.time(),
                 )
                 self._current_goal_pose = pose  # track for LERa retry
@@ -768,7 +809,7 @@ class SemanticPlannerModule(Module, layer=4):
                 position=Vector3(x=x, y=y, z=0.0),
                 orientation=Quaternion(0.0, 0.0, float(q_z), float(q_w)),
             ),
-            frame_id="map",
+            frame_id=SEMANTIC_PLANNER_MAP_FRAME_ID,
         )
         self.goal_pose.publish(pose)
         return f"Navigating to ({x:.1f}, {y:.1f}, yaw={yaw:.2f})"
@@ -803,7 +844,11 @@ class SemanticPlannerModule(Module, layer=4):
                 f"degraded={bool(result.get('degraded', False))})."
             )
         best = result["best"]
-        return f"Found: ({best['x']:.1f}, {best['y']:.1f}) score={best['score']:.2f} labels={best.get('labels', '')}"
+        return (
+            f"Found: ({best['x']:.1f}, {best['y']:.1f}, "
+            f"{best.get('z', 0.0):.1f}) score={best['score']:.2f} "
+            f"labels={best.get('labels', '')}"
+        )
 
     def _tool_tag_location(self, name: str) -> str:
         x, y = float(self._robot_pos[0]), float(self._robot_pos[1])

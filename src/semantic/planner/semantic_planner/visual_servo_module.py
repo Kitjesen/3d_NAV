@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -35,6 +36,7 @@ from core.msgs.nav import Odometry
 from core.msgs.semantic import SceneGraph
 from core.msgs.sensor import CameraIntrinsics, Image
 from core.registry import register
+from core.runtime_interface import map_frame_id
 from core.stream import In, Out
 
 from .bbox_navigator import STATE_ARRIVED, STATE_LOST, STATE_TRACKING, BBoxNavConfig, BBoxNavigator
@@ -45,6 +47,7 @@ logger = logging.getLogger(__name__)
 MODE_IDLE = "idle"
 MODE_FIND = "find"       # bbox tracking → approach object
 MODE_FOLLOW = "follow"   # person following
+VISUAL_SERVO_MAP_FRAME_ID = map_frame_id()
 
 
 @register("visual_servo", "default", description="Visual servoing: bbox tracking + person following")
@@ -111,7 +114,57 @@ class VisualServoModule(Module, layer=4):
         self._servo_active = False  # True when publishing cmd_vel (close range)
         self._last_status_time = 0.0
 
+        # Person-following target selection (description-based "person in red")
+        self._vision_client = None                  # LLM client w/ vision (VLM select)
+        self._latest_bgr: np.ndarray | None = None  # BGR frame for CLIP/VLM selection
+        self._follow_select_pending = False         # need to (re)select target
+        self._follow_select_running = False         # VLM selection in flight
+        self._follow_select_method = ""             # clip | vlm | degraded
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    def on_system_modules(self, modules: dict) -> None:
+        """Wire sibling encoder/LLM for description-based person selection.
+
+        - EncoderModule with an image-capable backend (clip) → inject CLIP for
+          select_by_clip + Re-ID. mobileclip is text-only, so it is skipped and
+          selection falls back to the VLM.
+        - LLMModule._client with vision → VLM "look at the crops, pick the person".
+        Falls back to PerceptionModule's own CLIP encoder when no standalone one.
+        """
+        encoder_backend = None
+        enc_mod = modules.get("EncoderModule")
+        backend = getattr(enc_mod, "_backend", None) if enc_mod is not None else None
+        if backend is not None and hasattr(backend, "encode_image"):
+            encoder_backend = backend
+        if encoder_backend is None:
+            perc = modules.get("PerceptionModule")
+            cand = getattr(perc, "_clip_encoder", None) if perc is not None else None
+            if cand is not None and hasattr(cand, "encode_image"):
+                encoder_backend = cand
+        if encoder_backend is not None:
+            self._person_tracker.set_clip_encoder(encoder_backend)
+            logger.info("VisualServo: CLIP encoder attached for person selection")
+        else:
+            logger.info("VisualServo: no image-capable CLIP encoder; "
+                        "person selection relies on VLM")
+
+        llm_mod = modules.get("LLMModule")
+        client = getattr(llm_mod, "_client", None) if llm_mod is not None else None
+        if client is not None and self._client_supports_vision(client):
+            self._vision_client = client
+            logger.info("VisualServo: VLM vision client attached (%s)",
+                        type(client).__name__)
+        else:
+            self._vision_client = None
+
+    @staticmethod
+    def _client_supports_vision(client) -> bool:
+        """Text-only backends (Moonshot/Kimi/Qwen) can't see crops → no VLM select."""
+        if client is None or not hasattr(client, "chat"):
+            return False
+        name = type(client).__name__.lower()
+        return not ("moonshot" in name or "kimi" in name or "qwen" in name)
 
     def setup(self) -> None:
         # VLM / re-ID work is heavy — drop stale frames so we don't block
@@ -173,11 +226,16 @@ class VisualServoModule(Module, layer=4):
         elif mode_str == "follow":
             self._mode = MODE_FOLLOW
             self._target_label = label
-            # Set description so PersonTracker knows who to find
+            # Reset tracker and arm description-based selection: the next frame
+            # with person detections locks onto the person matching `label` via
+            # CLIP (if image-capable) or VLM (look at crops), instead of blindly
+            # following the most salient person.
+            self._person_tracker.reset()
             self._person_tracker._description = label
-            self._person_tracker._target_selected = False
-            self._person_tracker._person = None
-            logger.info("VisualServo: follow mode — target='%s'", label)
+            self._follow_select_pending = True
+            self._follow_select_running = False
+            self._follow_select_method = ""
+            logger.info("VisualServo: follow mode — target='%s' (selecting)", label)
         else:
             logger.warning("VisualServo: unknown mode '%s'", mode_str)
 
@@ -186,6 +244,8 @@ class VisualServoModule(Module, layer=4):
     def _on_color(self, img: Image) -> None:
         """Main processing loop — triggered on each color frame."""
         self._latest_rgb = img.to_rgb().data if hasattr(img, "to_rgb") else img.data
+        # BGR frame for CLIP/VLM person selection (CLIPEncoder + cv2 expect BGR).
+        self._latest_bgr = img.to_bgr().data if hasattr(img, "to_bgr") else img.data
 
         if self._mode == MODE_IDLE:
             return
@@ -282,12 +342,34 @@ class VisualServoModule(Module, layer=4):
     # ── Follow mode (person tracking) ────────────────────────────────────────
 
     def _tick_follow(self) -> None:
-        """One frame of follow-mode: PersonTracker → follow waypoint → goal_pose."""
+        """One frame of follow-mode: select target (once) → track → follow waypoint."""
         sg = self._latest_sg
         if sg is None:
             return
 
-        # Build scene_objects list for PersonTracker.update()
+        scene_objects = self._scene_objects_from_sg(sg)
+
+        # Lock onto the described person before plain tracking (once per follow).
+        if self._follow_select_pending and not self._follow_select_running:
+            self._try_select_follow_target(scene_objects)
+
+        # Track (BGR frame for CLIP/OSNet Re-ID) and emit follow waypoint.
+        self._person_tracker.update(scene_objects, self._latest_bgr)
+
+        wp = self._person_tracker.get_follow_waypoint(
+            robot_pos=list(self._robot_pose[:2])
+        )
+        if wp is not None:
+            # Person following always goes through planning stack
+            self._release_servo()
+            self._publish_goal_from_3d(np.array([
+                float(wp["x"]), float(wp["y"]), float(wp.get("z", 0.0))
+            ]))
+
+        self._publish_status()
+
+    def _scene_objects_from_sg(self, sg: SceneGraph) -> list[dict]:
+        """Flatten SceneGraph detections into PersonTracker's dict format."""
         scene_objects = []
         for obj in sg.objects:
             bbox = getattr(obj, "bbox_2d", None)
@@ -304,20 +386,91 @@ class VisualServoModule(Module, layer=4):
                 "bbox": list(bbox) if bbox is not None else [],
                 "confidence": float(getattr(obj, "confidence", 0.5)),
             })
+        return scene_objects
 
-        self._person_tracker.update(scene_objects, self._latest_rgb)
+    # ── Follow target selection (description-based) ───────────────────────────
 
-        wp = self._person_tracker.get_follow_waypoint(
-            robot_pos=list(self._robot_pose[:2])
-        )
-        if wp is not None:
-            # Person following always goes through planning stack
-            self._release_servo()
-            self._publish_goal_from_3d(np.array([
-                float(wp["x"]), float(wp["y"]), float(wp.get("z", 0.0))
-            ]))
+    _PERSON_LABELS = ("person", "people", "human", "pedestrian")
 
-        self._publish_status()
+    def _try_select_follow_target(self, scene_objects: list[dict]) -> None:
+        """Lock onto the person matching the follow description.
+
+        CLIP select (sync, needs image-capable encoder) → VLM select (async,
+        look at crops) → degraded (fall through to most-salient tracking).
+        """
+        persons = [
+            o for o in scene_objects
+            if o.get("label", "").lower() in self._PERSON_LABELS
+        ]
+        if not persons or self._latest_bgr is None:
+            return
+
+        crops, valid = [], []
+        for p in persons:
+            crop = PersonTracker._crop_person(self._latest_bgr, p)
+            if crop is not None and crop.size > 0:
+                crops.append(crop)
+                valid.append(p)
+        if not crops:
+            return
+
+        desc = self._target_label
+
+        # 1) CLIP selection (sync) — only effective with an image-capable encoder
+        idx = self._person_tracker.select_by_clip(desc, crops, valid)
+        if idx >= 0:
+            self._follow_select_pending = False
+            self._follow_select_method = "clip"
+            logger.info("VisualServo: locked follow target via CLIP (#%d)", idx + 1)
+            return
+
+        # 2) VLM selection (async) — look at crops, pick the person
+        if self._vision_client is not None:
+            self._follow_select_running = True
+            threading.Thread(
+                target=self._run_vlm_select_sync,
+                args=(desc, crops, valid),
+                name="vs_vlm_select",
+                daemon=True,
+            ).start()
+            return
+
+        # 3) Degraded: no image CLIP + no VLM → follow most-salient person.
+        # Clear pending so we don't spin; PersonTracker.update tracks the
+        # highest-confidence person (legacy behaviour).
+        self._follow_select_pending = False
+        self._follow_select_method = "degraded"
+        logger.warning(
+            "VisualServo: no CLIP image encoder and no vision LLM — following "
+            "most-salient person (description '%s' not applied)", desc)
+
+    def _run_vlm_select_sync(self, desc: str, crops: list, persons: list) -> None:
+        """Background thread: run async VLM person selection (look at crops)."""
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                idx = loop.run_until_complete(
+                    self._person_tracker.select_target_with_vlm(
+                        desc, crops, persons, self._vlm_chat,
+                    )
+                )
+            finally:
+                loop.close()
+            self._follow_select_method = "vlm" if idx >= 0 else "degraded"
+            logger.info("VisualServo: VLM follow selection → idx=%d", idx)
+        except Exception:
+            logger.exception("VisualServo: VLM follow selection failed")
+            self._follow_select_method = "degraded"
+        finally:
+            self._follow_select_running = False
+            self._follow_select_pending = False
+
+    async def _vlm_chat(self, messages: list) -> str:
+        """Async VLM call for person selection (OpenAI multimodal messages)."""
+        client = self._vision_client
+        if client is None:
+            return ""
+        return await client.chat(messages, temperature=0.3)
 
     # ── Servo engage/release ─────────────────────────────────────────────────
 
@@ -361,7 +514,7 @@ class VisualServoModule(Module, layer=4):
                 position=Vector3(x=float(pos_3d[0]), y=float(pos_3d[1]), z=float(pos_3d[2])),
                 orientation=Quaternion.from_euler(0, 0, yaw),
             ),
-            frame_id="map",
+            frame_id=VISUAL_SERVO_MAP_FRAME_ID,
         ))
 
     def _publish_status(self) -> None:
@@ -371,11 +524,16 @@ class VisualServoModule(Module, layer=4):
             return
         self._last_status_time = now
 
+        if self._follow_select_running or self._follow_select_pending:
+            select_state = "selecting"
+        else:
+            select_state = self._follow_select_method
         status = {
             "mode": self._mode,
             "target": self._target_label,
             "bbox_state": self._bbox_nav.state,
             "servo_active": self._servo_active,
+            "select": select_state,
             "distance": 0.0,
         }
         t3d = self._bbox_nav.target_3d

@@ -183,6 +183,77 @@ class PersonTracker:
             self._reid_extractor = None
             return False
 
+    _CLIP_SELECT_MIN_SIM = 0.2  # below this, CLIP is not confident enough to lock
+
+    def _clip_prescore(
+        self, description: str, person_crops: list[np.ndarray]
+    ) -> list[float]:
+        """Cosine similarity of each crop against the description via CLIP.
+
+        Single source of truth for both `select_by_clip` and the CLIP hint
+        attached to the VLM prompt. Crops are expected **BGR** (CLIPEncoder /
+        cv2 convention). Returns a list aligned with ``person_crops`` (0.0 where
+        a crop fails to encode), or an empty list when no CLIP encoder is
+        attached or the model can't encode images (e.g. mobileclip).
+        """
+        if self._clip_encoder is None:
+            return []
+        try:
+            text_feat = self._clip_encoder.encode_text([description])
+        except Exception as exc:
+            logger.debug("CLIP text encode failed: %s", exc)
+            return []
+        if text_feat is None or len(text_feat) == 0:
+            return []
+
+        scores: list[float] = []
+        for crop in person_crops:
+            try:
+                img_feat = self._clip_encoder.encode_image(crop)
+                if img_feat is not None and img_feat.size > 0:
+                    sim = float(np.dot(text_feat[0], img_feat) / (
+                        np.linalg.norm(text_feat[0]) * np.linalg.norm(img_feat) + 1e-9
+                    ))
+                    scores.append(sim)
+                else:
+                    scores.append(0.0)
+            except Exception:
+                scores.append(0.0)
+        return scores
+
+    @staticmethod
+    def _build_vlm_select_messages(
+        text_prompt: str, person_crops: list[np.ndarray]
+    ) -> list[dict]:
+        """OpenAI multimodal messages: instruction text + one image per person.
+
+        Crops are expected **BGR** (cv2 convention; ``cv2.imencode`` assumes BGR).
+        Falls back to text-only content when image encoding is unavailable, so a
+        non-vision LLM still receives the numbered prompt + CLIP hints.
+        """
+        content: list[dict] = [{"type": "text", "text": text_prompt}]
+        try:
+            from .vlm_scene_agent import encode_image_b64
+        except Exception:
+            encode_image_b64 = None  # type: ignore[assignment]
+
+        if encode_image_b64 is not None:
+            for i, crop in enumerate(person_crops):
+                try:
+                    b64 = encode_image_b64(crop)
+                except Exception:
+                    b64 = None
+                if b64:
+                    content.append({"type": "text", "text": f"Person {i + 1}:"})
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64}",
+                            "detail": "low",
+                        },
+                    })
+        return [{"role": "user", "content": content}]
+
     async def select_target_with_vlm(
         self,
         description: str,
@@ -191,13 +262,19 @@ class PersonTracker:
         llm_chat_fn: Callable,
     ) -> int:
         """
-        用 VLM 从候选人中选定目标 (一次性调用)。
+        用 VLM 从候选人中选定目标 (一次性调用, 多模态看图)。
+
+        每个 person 的裁剪图会被编码成 base64 随 prompt 一起发给 VLM，让模型
+        真正"看图选人"，而不是只靠文字盲猜。CLIP 分数 (若可用) 作为辅助提示 +
+        VLM 失败时的降级依据。真机 mobileclip 无图像编码时，CLIP 提示为空，
+        选人完全依赖 VLM 看图。
 
         Args:
             description: 用户描述, 如 "穿红衣服背包的人"
-            person_crops: 每个 person 的裁剪图像列表
+            person_crops: 每个 person 的裁剪图像列表 (BGR, 与 CLIP/cv2 一致)
             person_objects: 对应的场景图对象列表
-            llm_chat_fn: async LLM 调用函数 (prompt) -> str
+            llm_chat_fn: async VLM 调用函数, 接受 OpenAI 多模态 messages
+                         (list[dict], 含 text + image_url) 返回 str
 
         Returns:
             选中的 person 索引 (0-based), -1 表示失败
@@ -208,52 +285,30 @@ class PersonTracker:
         self._description = description
         n = len(person_crops)
 
-        # 构建 VLM prompt
-        prompt = (
-            f"画面中有 {n} 个人，编号 1 到 {n}。\n"
+        # CLIP 预打分: 既作为 VLM prompt 的辅助提示, 也是 VLM 失败时的降级依据。
+        clip_scores = self._clip_prescore(description, person_crops)
+
+        text_prompt = (
+            f"画面中有 {n} 个人，编号 1 到 {n}（每个编号后附其裁剪图）。\n"
             f"用户想跟随的是: {description}\n"
             f"请只回答一个数字（1-{n}），表示最匹配的人的编号。\n"
             f"如果都不匹配，回答 0。"
         )
-
-        # 如果有 CLIP，用 CLIP 做初步筛选辅助 VLM
-        clip_scores = []
-        if self._clip_encoder is not None:
-            try:
-                text_feat = self._clip_encoder.encode_text([description])
-                if text_feat is not None and len(text_feat) > 0:
-                    for crop in person_crops:
-                        try:
-                            img_feat = self._clip_encoder.encode_image(crop)
-                            if img_feat is not None and img_feat.size > 0:
-                                sim = float(np.dot(text_feat[0], img_feat) / (
-                                    np.linalg.norm(text_feat[0]) * np.linalg.norm(img_feat) + 1e-9
-                                ))
-                                clip_scores.append(sim)
-                            else:
-                                clip_scores.append(0.0)
-                        except Exception:
-                            clip_scores.append(0.0)
-            except Exception as e:
-                logger.debug("CLIP scoring failed: %s", e)
-
         if clip_scores:
-            prompt += f"\nCLIP 相似度参考: {[f'{s:.2f}' for s in clip_scores]}"
+            text_prompt += f"\nCLIP 相似度参考: {[f'{s:.2f}' for s in clip_scores]}"
 
-        # 调用 VLM
+        messages = self._build_vlm_select_messages(text_prompt, person_crops)
+
+        # 调用 VLM (多模态)
         try:
-            response = await llm_chat_fn(prompt)
-            # 解析数字
+            response = await llm_chat_fn(messages)
             import re
             numbers = re.findall(r'\d+', str(response))
             if numbers:
                 idx = int(numbers[0])
                 if 1 <= idx <= n:
                     selected = idx - 1  # 0-based
-                    logger.info(
-                        "VLM selected person #%d for '%s'", idx, description
-                    )
-                    # 锁定目标: 存储外观特征
+                    logger.info("VLM selected person #%d for '%s'", idx, description)
                     self._lock_target(person_objects[selected], person_crops[selected])
                     return selected
                 elif idx == 0:
@@ -265,7 +320,7 @@ class PersonTracker:
         # VLM 失败时，用 CLIP 分数选 (降级)
         if clip_scores:
             best_idx = int(np.argmax(clip_scores))
-            if clip_scores[best_idx] > 0.2:
+            if clip_scores[best_idx] > self._CLIP_SELECT_MIN_SIM:
                 logger.info(
                     "VLM failed, using CLIP fallback: person #%d (sim=%.2f)",
                     best_idx + 1, clip_scores[best_idx],
@@ -284,6 +339,9 @@ class PersonTracker:
         """
         纯 CLIP 选人 (无 VLM 时的降级方案, 同步调用)。
 
+        仅在注入的编码器支持图像编码时有效 (clip backend)。mobileclip 只做
+        文本编码 → `_clip_prescore` 返回空 → 此处返回 -1, 调用方应转 VLM 选人。
+
         Returns:
             选中的 person 索引 (0-based), -1 表示失败
         """
@@ -291,35 +349,18 @@ class PersonTracker:
             return -1
 
         self._description = description
-        try:
-            text_feat = self._clip_encoder.encode_text([description])
-            if text_feat is None or len(text_feat) == 0:
-                return -1
+        scores = self._clip_prescore(description, person_crops)
+        if not scores:
+            return -1
 
-            best_idx = -1
-            best_sim = 0.2  # 最低阈值
-            for i, crop in enumerate(person_crops):
-                try:
-                    img_feat = self._clip_encoder.encode_image(crop)
-                    if img_feat is not None and img_feat.size > 0:
-                        sim = float(np.dot(text_feat[0], img_feat) / (
-                            np.linalg.norm(text_feat[0]) * np.linalg.norm(img_feat) + 1e-9
-                        ))
-                        if sim > best_sim:
-                            best_sim = sim
-                            best_idx = i
-                except Exception:
-                    continue
-
-            if best_idx >= 0:
-                logger.info(
-                    "CLIP selected person #%d for '%s' (sim=%.2f)",
-                    best_idx + 1, description, best_sim,
-                )
-                self._lock_target(person_objects[best_idx], person_crops[best_idx])
-                return best_idx
-        except Exception as e:
-            logger.error("CLIP selection failed: %s", e)
+        best_idx = int(np.argmax(scores))
+        if scores[best_idx] > self._CLIP_SELECT_MIN_SIM:
+            logger.info(
+                "CLIP selected person #%d for '%s' (sim=%.2f)",
+                best_idx + 1, description, scores[best_idx],
+            )
+            self._lock_target(person_objects[best_idx], person_crops[best_idx])
+            return best_idx
         return -1
 
     def _lock_target(self, obj: dict, crop: np.ndarray | None = None) -> None:
