@@ -655,9 +655,9 @@ class BPUDetector(DetectorBase):
         if proto_key is None:
             if not getattr(self, "_proto_missing_logged", False):
                 logger.error(
-                    "Masks will be None; instance segmentation disabled.",
-                    "model outputs (tried '%s' and override '%s'). "
-                    "Masks will be None; instance segmentation disabled.",
+                    "Proto tensor not found in model outputs (tried '%s' and "
+                    "override '%s'). Masks will be None; instance segmentation "
+                    "disabled.",
                     self._proto_name,
                     getattr(self, "_proto_tensor_name_override", None),
                 )
