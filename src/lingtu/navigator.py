@@ -9,6 +9,18 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+def _default_map_dir() -> str:
+    """Resolve map dir: $NAV_MAP_DIR → existing ~/data/nova/maps → ~/data/lingtu/maps."""
+    import os
+    env = os.environ.get("NAV_MAP_DIR")
+    if env:
+        return env
+    nova = os.path.expanduser("~/data/nova/maps")
+    if os.path.isdir(nova):
+        return nova
+    return os.path.expanduser("~/data/lingtu/maps")
+
+
 class Navigator:
     """Autonomous navigation — plan and track paths.
 
@@ -93,7 +105,7 @@ class Navigator:
     def use_map(self, name: str) -> None:
         """Switch to a named map."""
         import os
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
+        map_dir = _default_map_dir()
         tomogram = os.path.join(map_dir, name, "tomogram.pickle")
         if os.path.exists(tomogram) and self._nav_module:
             self._nav_module._planner_svc._backend._load_tomogram(tomogram)

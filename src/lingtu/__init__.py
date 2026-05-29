@@ -22,11 +22,13 @@ Usage::
     detector = Detector(camera)
     objects = detector.detect()
 
-    # Full robot (all-in-one)
-    robot = Robot()
-    robot.go("体育馆")
-    robot.follow("person in red")
+    # Full robot (all-in-one, builds a real blueprint system)
+    robot = Robot("sim").start()    # sim/nav/explore/map/dev
+    robot.go("体育馆")               # semantic navigation
+    robot.follow("person in red")   # follow a described person
+    robot.stop_follow()
     robot.save_map("building_a")
+    robot.shutdown()
 """
 
 from .camera import Camera
