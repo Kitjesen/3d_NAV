@@ -54,6 +54,28 @@ _BACKEND_RECONFIGURE_TARGETS = {
 }
 
 
+def _navigation_state(nav: Any) -> str:
+    if nav is None:
+        return ""
+    health: dict[str, Any] = {}
+    if hasattr(nav, "health"):
+        try:
+            raw_health = nav.health() or {}
+            if isinstance(raw_health, dict):
+                health = raw_health
+        except Exception:
+            return "UNKNOWN"
+    state = health.get("state")
+    nested = health.get("navigation")
+    if state is None and isinstance(nested, dict):
+        state = nested.get("state")
+    if state is None:
+        state = getattr(nav, "_state", "")
+    if hasattr(state, "value"):
+        state = state.value
+    return str(state or "").upper()
+
+
 # ---------------------------------------------------------------------------
 # JSON-RPC 2.0 helpers
 # ---------------------------------------------------------------------------
@@ -440,12 +462,7 @@ class MCPServerModule(Module, layer=6):
     ) -> dict[str, Any]:
         if category in _MOTION_BACKEND_CATEGORIES:
             nav = self._all_modules.get("NavigationModule")
-            state = ""
-            if nav is not None and hasattr(nav, "health"):
-                try:
-                    state = str((nav.health() or {}).get("state", "")).upper()
-                except Exception:
-                    state = "UNKNOWN"
+            state = _navigation_state(nav)
             if state != "IDLE":
                 return {
                     "ok": False,

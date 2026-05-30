@@ -249,6 +249,22 @@ def test_gateway_runtime_backend_switch_dispatches_when_navigation_idle():
     assert result["config"] == {"threshold": 0.4}
 
 
+def test_gateway_motion_backend_switch_reads_nested_navigation_state():
+    from gateway.gateway_module import GatewayModule
+
+    class IdleNavigation:
+        def health(self):
+            return {"navigation": {"state": "IDLE"}}
+
+    gateway = GatewayModule()
+    gateway.on_system_modules({"NavigationModule": IdleNavigation()})
+
+    result = gateway.reconfigure_backend("local_planner", "nav_core")
+
+    assert result["ok"] is False
+    assert result["reason"] == "backend_reconfigure_unsupported"
+
+
 def test_mcp_backend_switch_tool_uses_gateway_guard():
     from gateway.mcp_server import MCPServerModule
 
@@ -289,6 +305,22 @@ def test_mcp_backend_switch_tool_guards_motion_without_gateway_module():
     assert payload["ok"] is False
     assert payload["reason"] == "motion_backend_switch_requires_idle"
     assert payload["navigation_state"] == "EXECUTING"
+
+
+def test_mcp_backend_switch_reads_nested_navigation_state_without_gateway_module():
+    from gateway.mcp_server import MCPServerModule
+
+    class IdleNavigation:
+        def health(self):
+            return {"navigation": {"state": "IDLE"}}
+
+    mcp = MCPServerModule()
+    mcp.on_system_modules({"MCPServerModule": mcp, "NavigationModule": IdleNavigation()})
+
+    payload = json.loads(mcp.switch_backend("slam", "fastlio2"))
+
+    assert payload["ok"] is False
+    assert payload["reason"] == "backend_reconfigure_unsupported"
 
 
 def test_localization_status_covers_product_states():
@@ -998,6 +1030,40 @@ def test_gateway_quarantines_non_finite_odometry_before_publication():
     assert gateway._odom == previous
     assert [event.get("type") for event in events] == []
     assert gateway._last_invalid_odometry["reason"] == "non_finite_odometry"
+
+
+def test_drift_watchdog_uses_quarantined_non_finite_odometry():
+    from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
+    from core.msgs.nav import Odometry
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "y": 2.0, "z": 0.0, "vx": 0.0}
+
+    gateway._on_odometry(Odometry(
+        pose=Pose(
+            position=Vector3(float("nan"), 0.0, 0.0),
+            orientation=Quaternion(),
+        ),
+        twist=Twist(linear=Vector3(0.0, 0.0, 0.0)),
+    ))
+
+    diverged, _x, _y, _z, _v, invalid = gateway._drift_current_odom_divergence()
+    assert diverged is True
+    assert invalid is True
+
+    gateway._on_odometry(Odometry(
+        pose=Pose(
+            position=Vector3(0.0, 0.0, 0.0),
+            orientation=Quaternion(),
+        ),
+        twist=Twist(linear=Vector3(0.0, 0.0, 0.0)),
+    ))
+
+    diverged, _x, _y, _z, _v, invalid = gateway._drift_current_odom_divergence()
+    assert diverged is False
+    assert invalid is False
 
 
 def test_navigation_status_reports_current_runtime_boundary(monkeypatch):

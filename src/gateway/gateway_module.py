@@ -132,6 +132,28 @@ _BACKEND_RECONFIGURE_TARGETS = {
 }
 
 
+def _navigation_state(nav: Any) -> str:
+    if nav is None:
+        return ""
+    health: dict[str, Any] = {}
+    if hasattr(nav, "health"):
+        try:
+            raw_health = nav.health() or {}
+            if isinstance(raw_health, dict):
+                health = raw_health
+        except Exception:
+            return "UNKNOWN"
+    state = health.get("state")
+    nested = health.get("navigation")
+    if state is None and isinstance(nested, dict):
+        state = nested.get("state")
+    if state is None:
+        state = getattr(nav, "_state", "")
+    if hasattr(state, "value"):
+        state = state.value
+    return str(state or "").upper()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -635,6 +657,22 @@ class GatewayModule(Module, layer=6):
         v_bad = v > self._drift_watchdog_v_limit
         return invalid or xy_bad or v_bad, x, y, z, v, invalid
 
+    def _drift_current_odom_divergence(
+        self,
+    ) -> tuple[bool, float, float, float, float, bool]:
+        with self._state_lock:
+            invalid_odom = (
+                dict(self._last_invalid_odometry)
+                if self._last_invalid_odometry
+                else None
+            )
+            odom = dict(self._odom) if self._odom else {}
+        if invalid_odom:
+            return True, float("inf"), 0.0, 0.0, float("inf"), True
+        if not odom:
+            return False, 0.0, 0.0, 0.0, 0.0, False
+        return self._drift_odom_diverged(odom)
+
     def _drift_watchdog_loop(
         self, stop_event: threading.Event | None = None
     ) -> None:
@@ -660,11 +698,7 @@ class GatewayModule(Module, layer=6):
         stop_event = stop_event or self._stop_event
         while not stop_event.wait(interval):
             try:
-                with self._state_lock:
-                    odom = dict(self._odom) if self._odom else {}
-                if not odom:
-                    continue
-                diverged, x, y, z, v, invalid = self._drift_odom_diverged(odom)
+                diverged, x, y, z, v, invalid = self._drift_current_odom_divergence()
                 if not diverged:
                     continue
                 # Divergence detected
@@ -1008,12 +1042,7 @@ class GatewayModule(Module, layer=6):
     ) -> dict[str, Any]:
         if category in _MOTION_BACKEND_CATEGORIES:
             nav = self._all_modules.get("NavigationModule")
-            state = ""
-            if nav is not None and hasattr(nav, "health"):
-                try:
-                    state = str((nav.health() or {}).get("state", "")).upper()
-                except Exception:
-                    state = "UNKNOWN"
+            state = _navigation_state(nav)
             if state != "IDLE":
                 return {
                     "ok": False,
@@ -1246,17 +1275,20 @@ class GatewayModule(Module, layer=6):
             if not math.isfinite(float(d.get(name, 0.0)))
         ]
         if invalid_fields:
-            self._last_invalid_odometry = {
+            invalid_odometry = {
                 "reason": "non_finite_odometry",
                 "fields": invalid_fields,
                 "ts": time.time(),
             }
+            with self._state_lock:
+                self._last_invalid_odometry = invalid_odometry
             logger.warning(
                 "GatewayModule: quarantined non-finite odometry fields=%s",
                 invalid_fields,
             )
             return
         with self._state_lock:
+            self._last_invalid_odometry = None
             self._odom = d
             # Track for Hz calculation (sliding window of 20)
             self._odom_timestamps.append(time.time())

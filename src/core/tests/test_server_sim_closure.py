@@ -56,6 +56,38 @@ def test_dimos_summary_required_gate_sequence_preserves_core_order(tmp_path: Pat
     assert tuple(summary["required_gate_sequence"]) == DIMOS_BENCHMARK_REQUIRED_GATES
 
 
+def test_dimos_summary_requires_fresh_reports_for_every_required_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from core.algorithm_gates import DIMOS_BENCHMARK_REQUIRED_GATES
+
+    monkeypatch.setattr(server_sim_closure, "ROOT", tmp_path)
+    stale_gateway_report = _write_json(
+        tmp_path / "artifacts/server_sim_closure/gateway_runtime_acceptance/report.json",
+        _complete_gateway_runtime_acceptance_report(),
+    )
+    old_mtime = server_sim_closure.time.time() - (
+        server_sim_closure.DEFAULT_REQUIRED_MAX_REPORT_AGE_S + 60.0
+    )
+    os.utime(stale_gateway_report, (old_mtime, old_mtime))
+
+    summary = server_sim_closure.summarize(
+        report_overrides={},
+        required=set(DIMOS_BENCHMARK_REQUIRED_GATES),
+        include_optional=False,
+    )
+
+    gateway_gate = summary["gates"]["gateway_runtime_acceptance"]
+    assert gateway_gate["ok"] is False
+    assert gateway_gate["status"] == "failed"
+    assert gateway_gate["is_fresh"] is False
+    assert gateway_gate["max_report_age_s"] == (
+        server_sim_closure.DEFAULT_REQUIRED_MAX_REPORT_AGE_S
+    )
+    assert any("report_age_s" in blocker for blocker in gateway_gate["blockers"])
+
+
 def test_structured_planner_result_marks_unavailable_backend_as_skip(monkeypatch, tmp_path: Path):
     import importlib.util
 

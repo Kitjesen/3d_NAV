@@ -24,13 +24,7 @@ MID360_PATTERN_REL = "sim/assets/livox/mid360.npy"
 MID360_PATTERN_SHA256 = "448821576a658673e8f7929992c8c0d687eb052657d7b584d038729a83da1bfb"
 LIVE_NAV_MAP_TOPIC = "/nav/map_cloud"
 DEFAULT_REQUIRED_MAX_REPORT_AGE_S = 24.0 * 60.0 * 60.0
-DEFAULT_FRESHNESS_REQUIRED_GATES = frozenset({
-    "large_terrain",
-    "native_pct_mujoco",
-    "pct_saved_map_navigation",
-    "moving_obstacle_sweep",
-    "large_loop_closure",
-})
+DEFAULT_FRESHNESS_REQUIRED_GATES = frozenset(DIMOS_BENCHMARK_REQUIRED_GATES)
 
 
 @dataclass(frozen=True)
