@@ -2,6 +2,18 @@
 
 Takes terrain map + waypoint + odometry, produces obstacle-free local path.
 
+NAV COMPUTE CONTRACT (docs/architecture/NAVIGATION_COMPUTE_CONTRACT.md):
+  This module owns the L2 LOCAL PLANNING layer.
+    - MAIN INPUT  : terrain_map (+ boundary + added_obstacles) — local geometry.
+    - MAIN OUTPUT : local_path (+ control_hint).
+    - ALGORITHM   : CMU / nav_core point-cloud voxel scoring (NOT costmap
+                    rolling optimisation — this is not a DWA/TEB planner).
+  `fused_cost`/`costmap` is a GLOBAL-gating signal and is intentionally NOT a
+  primary scoring input here. The `esdf` In port is a RESERVED extension point:
+  nav_core's LocalPlannerCore has no set_esdf binding yet, so _on_esdf only
+  caches the field — it does NOT influence scoring. See contract §5 before
+  claiming ESDF affects local planning.
+
 Backends:
   "nanobind" — C++ LocalPlannerCore via nanobind (full CMU scoring, zero ROS2) [PREFERRED]
   "cmu"      — C++ local_planner (NativeModule subprocess, needs ROS2)

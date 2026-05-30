@@ -134,7 +134,7 @@ class TestPCTBackend:
         monkeypatch.setattr(
             backend,
             "_select_traversable_height",
-            lambda _pos, fallback_z: float(fallback_z),
+            lambda _pos, fallback_z, **_kw: float(fallback_z),
         )
 
         path = backend.plan(
@@ -164,7 +164,7 @@ class TestPCTBackend:
         monkeypatch.setattr(
             backend,
             "_select_traversable_height",
-            lambda _pos, fallback_z: float(fallback_z),
+            lambda _pos, fallback_z, **_kw: float(fallback_z),
         )
 
         path = backend.plan(

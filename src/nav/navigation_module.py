@@ -1,5 +1,17 @@
 """NavigationModule — unified path planning + tracking + mission FSM.
 
+NAV COMPUTE CONTRACT (docs/architecture/NAVIGATION_COMPUTE_CONTRACT.md):
+  This module owns the L5 GLOBAL PLANNING layer (tomogram/saved_map -> global_path
+  + waypoint) and the L2 SAFETY GATING use of `costmap`.
+
+  `costmap` (= TraversabilityCostModule.fused_cost) is consumed ONLY for safety
+  gating, never to produce trajectories:
+    1. GlobalPlannerService.update_map() overlays live risk onto PCT/A* safe-goal
+       and path-safety checks.
+    2. Throttled replan trigger (PCT defaults OFF — it owns terrain cost via the
+       offline tomogram; A* dev/sim defaults ON).
+  Local trajectory generation is NOT done here — that is LocalPlannerModule (L2).
+
 Internal services (not Modules — no ports, just algorithm logic):
   - GlobalPlannerService  (nav/global_planner_service.py) — plan() + downsample
   - WaypointTracker       (nav/waypoint_tracker.py)       — arrival + stuck detection
