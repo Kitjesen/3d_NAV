@@ -20,35 +20,78 @@ Visualization Manager:
       Plane Cell Count: 30
       Plane: XY
 
-    - Class: rviz_default_plugins/PointCloud2
-      Name: BuildingCloud
+    - Class: rviz_default_plugins/Map
+      Name: ExplorationOccupancyGrid
       Enabled: true
       Topic:
-        Value: /nav/building_cloud
-        Depth: 5
-        QoS Profile: default
-        Durability Policy: Volatile
-        Reliability Policy: Reliable
-      Alpha: 1
+        Value: /nav/exploration_grid
+        Depth: 1
+      Alpha: 0.65
+      Color Scheme: map
+      Draw Behind: false
+      Use Timestamp: false
+
+    - Class: rviz_default_plugins/PointCloud2
+      Name: LiveOdomCloud
+      Enabled: true
+      Topic: /nav/map_cloud
+      Alpha: 0.25
       Autocompute Intensity Bounds: true
-      Color Transformer: AxisColor
-      Axis: Z
-      Min Color: 0; 0; 255
-      Max Color: 255; 0; 0
-      Size (Pixels): 2
-      Size (m): 0.05
+      Color Transformer: FlatColor
+      Color: 0; 255; 120
+      Queue Size: 100
+      Size (Pixels): 1
+      Size (m): 0.015
       Style: Points
       Position Transformer: XYZ
+      Unreliable: true
+      Use Fixed Frame: true
+      Value: false
+
+    - Class: rviz_default_plugins/PointCloud2
+      Name: CumulativeMapCloud
+      Enabled: false
+      Topic: /nav/cumulative_map_cloud
+      Alpha: 0.75
+      Autocompute Intensity Bounds: true
+      Color Transformer: FlatColor
+      Color: 255; 220; 80
+      Queue Size: 20
+      Size (Pixels): 1
+      Size (m): 0.02
+      Style: Points
+      Position Transformer: XYZ
+      Unreliable: true
+      Use Fixed Frame: true
+      Value: false
+
+    - Class: rviz_default_plugins/PointCloud2
+      Name: RegisteredCloud
+      Enabled: false
+      Topic: /nav/registered_cloud
+      Alpha: 0.35
+      Autocompute Intensity Bounds: true
+      Color Transformer: FlatColor
+      Color: 0; 220; 255
+      Queue Size: 100
+      Size (Pixels): 1
+      Size (m): 0.015
+      Style: Points
+      Position Transformer: XYZ
+      Unreliable: true
+      Use Fixed Frame: true
+      Value: false
 
     - Class: rviz_default_plugins/Path
       Name: GlobalPath
-      Enabled: true
+      Enabled: false
       Topic:
         Value: /nav/global_path
         Depth: 5
-      Color: 255; 200; 0
+      Color: 80; 170; 255
       Line Style: Lines
-      Line Width: 0.08
+      Line Width: 0.025
+      Value: false
 
     - Class: rviz_default_plugins/Path
       Name: LocalPath
@@ -56,37 +99,39 @@ Visualization Manager:
       Topic:
         Value: /nav/local_path
         Depth: 5
-      Color: 0; 220; 80
+      Color: 0; 220; 120
       Line Style: Lines
-      Line Width: 0.05
+      Line Width: 0.025
 
     - Class: rviz_default_plugins/Odometry
       Name: RobotOdometry
-      Enabled: true
+      Enabled: false
       Topic:
         Value: /nav/odometry
         Depth: 5
       Shape: Arrow
       Color: 0; 100; 255
-      Scale: 0.5
+      Scale: 0.25
+      Value: false
 
     - Class: rviz_default_plugins/RobotModel
       Name: RobotModel
-      Enabled: true
+      Enabled: false
       Description Topic:
         Value: /robot_description
         Durability Policy: Transient Local
+      Value: false
 
     - Class: rviz_default_plugins/Pose
       Name: GoalPose
       Enabled: true
       Topic:
         Value: /nav/goal_pose
-        Depth: 5
+        Depth: 1
       Color: 255; 60; 60
-      Shaft Length: 1.0
-      Head Length: 0.4
-      Head Radius: 0.2
+      Shaft Length: 0.35
+      Head Length: 0.15
+      Head Radius: 0.08
 
     - Class: rviz_default_plugins/PointStamped
       Name: ClickedPoint
@@ -106,13 +151,14 @@ Visualization Manager:
 
     - Class: rviz_default_plugins/TF
       Name: TF
-      Enabled: false
+      Enabled: true
 
   Enabled: true
-  Fixed Frame: map
   Global Options:
     Background Color: 25; 25; 35
+    Fixed Frame: odom
     Frame Rate: 30
+  Name: root
 
   Tools:
     - Class: rviz_default_plugins/Interact
@@ -146,7 +192,7 @@ Visualization Manager:
         Z: 1
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05
-      Target Frame: body
+      Target Frame: odom
 
 Window Geometry:
   Displays:
@@ -156,6 +202,6 @@ Window Geometry:
   QMainWindow State: ""
   Views:
     collapsed: false
-  Width: 1400
-  X: 50
+  Width: 1050
+  X: 850
   Y: 50

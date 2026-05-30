@@ -1423,9 +1423,22 @@ class GatewayModule(Module, layer=6):
                 if self._exploring:
                     return "exploring", None
                 return "mapping", None
+            if self._exploring and self._session_uses_external_slam_none():
+                return "exploring", None
             return "idle", None
         except Exception:
+            if self._exploring and self._session_uses_external_slam_none():
+                return "exploring", None
             return "idle", None
+
+    def _session_uses_external_slam_none(self) -> bool:
+        """True when an active session intentionally uses external sim odometry."""
+        profile = str(self._session_slam_profile or "").strip().lower()
+        return (
+            profile == "none"
+            and self._session_mode in ("mapping", "navigating", "exploring")
+            and self._explorer_available()
+        )
 
     def _session_active_map_name(self) -> str | None:
         """Read active map symlink target."""
@@ -1732,6 +1745,8 @@ class GatewayModule(Module, layer=6):
                 profile = "localizer"
             elif services.get("slam") in ("running", "active"):
                 profile = "slam"
+            elif self._session_uses_external_slam_none():
+                profile = "none"
             else:
                 profile = "stopped"
             self._cached_slam_profile = profile
@@ -2501,40 +2516,26 @@ class GatewayModule(Module, layer=6):
         }
         return info
 
-    # -- SLAM Hz measurement (subprocess-based, cached) -----------------------
+    # -- SLAM Hz measurement --------------------------------------------------
 
     def _get_slam_hz_cached(self) -> float:
-        """Measure SLAM topic Hz via background thread, cached for 4s."""
+        """Estimate SLAM Hz from odometry already flowing through Gateway.
+
+        This avoids spawning ``ros2 topic hz`` from the service process. Those
+        diagnostic subprocesses are expensive on S100P and can become orphaned,
+        stealing CPU from the SLAM/localizer stack.
+        """
         now = time.time()
-        if not hasattr(self, "_slam_hz_value"):
-            self._slam_hz_value = 0.0
-            self._slam_hz_last_update = 0.0
-            self._slam_hz_lock = threading.Lock()
-
-        if now - self._slam_hz_last_update > 4.0:
-            with self._slam_hz_lock:
-                if now - self._slam_hz_last_update > 4.0:
-                    self._slam_hz_last_update = now
-                    threading.Thread(target=self._measure_slam_hz, daemon=True).start()
-        return round(self._slam_hz_value, 1)
-
-    def _measure_slam_hz(self) -> None:
-        """Spawn ros2 topic hz, parse rate, update cache. Runs in background thread."""
-        import re
-        import subprocess
-        try:
-            r = subprocess.run(
-                ["bash", "-c",
-                 "source /opt/ros/humble/setup.bash && "
-                 "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
-                 "timeout 3 ros2 topic hz /nav/odometry 2>&1 | tail -5"],
-                capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=5)
-            m = re.search(r"average rate: ([\d.]+)", r.stdout)
-            if m:
-                self._slam_hz_value = float(m.group(1))
-        except Exception:
-            pass
+        with self._state_lock:
+            timestamps = list(self._odom_timestamps)
+        if len(timestamps) < 2:
+            return 0.0
+        if now - timestamps[-1] > 2.0:
+            return 0.0
+        span = timestamps[-1] - timestamps[0]
+        if span <= 0.0:
+            return 0.0
+        return round((len(timestamps) - 1) / span, 1)
 
     # -- Map 3D viewer HTML generation ----------------------------------------
 

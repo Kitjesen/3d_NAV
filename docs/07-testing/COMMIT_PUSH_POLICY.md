@@ -44,6 +44,9 @@ A push is acceptable only when all commit-gate rules are satisfied and:
 - L1 and L2 gates pass, either through installed hooks or manually.
 - Web changes pass `npm run build` from `web/`.
 - Gateway/API changes pass the Gateway contract tests listed below.
+- Simulation-backed navigation, planning, localization, tracking, exploration,
+  or Gateway command-safety claims include a strict `server_sim_closure.py`
+  summary for the affected gates.
 - Hardware-facing behavior is not claimed as verified unless an S100P L3 script or field test actually ran.
 
 Recommended Gateway/App/Web push check:
@@ -65,6 +68,23 @@ Recommended frontend check when `web/` changes:
 cd web
 npm run build
 ```
+
+Recommended server simulation closure check when navigation behavior is part of
+the claim:
+
+```bash
+bash docs/07-testing/l25_fresh_closure.sh
+```
+
+Closure summaries include `report_age_s` per gate. The wrapper enforces
+`--max-report-age-s`, defaulting to 21600 seconds, so older passing artifacts do
+not silently support new simulation-backed claims.
+
+For setup-only validation, `scripts/deploy/setup_server_ros_pct.sh` writes the
+setup-safe subset summary to `artifacts/server_sim_closure_summary_setup.json`.
+When Gateway is running, `/api/v1/diagnostics/routecheck/latest` also exposes
+the latest routecheck `report_age_s`, no-motion flags, and `published` counters
+for operator review.
 
 ## Bypass Rule
 

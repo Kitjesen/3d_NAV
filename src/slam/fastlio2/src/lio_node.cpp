@@ -155,6 +155,20 @@ public:
         m_builder_config.imu_init_num = config["imu_init_num"].as<int>();
         m_builder_config.near_search_num = config["near_search_num"].as<int>();
         m_builder_config.ieskf_max_iter = config["ieskf_max_iter"].as<int>();
+        if (config["degeneracy_max_update_dof"])
+            m_builder_config.degeneracy_max_update_dof = config["degeneracy_max_update_dof"].as<int>();
+        if (config["degeneracy_max_condition"])
+            m_builder_config.degeneracy_max_condition = config["degeneracy_max_condition"].as<double>();
+        if (config["max_update_translation_m"])
+            m_builder_config.max_update_translation_m = config["max_update_translation_m"].as<double>();
+        if (config["max_update_rotation_rad"])
+            m_builder_config.max_update_rotation_rad = config["max_update_rotation_rad"].as<double>();
+        if (config["reject_nonconverged_update"])
+            m_builder_config.reject_nonconverged_update =
+                config["reject_nonconverged_update"].as<bool>();
+        if (config["reject_degenerate_nonconverged_update"])
+            m_builder_config.reject_degenerate_nonconverged_update =
+                config["reject_degenerate_nonconverged_update"].as<bool>();
         m_builder_config.gravity_align = config["gravity_align"].as<bool>();
         m_builder_config.esti_il = config["esti_il"].as<bool>();
         std::vector<double> t_il_vec = config["t_il"].as<std::vector<double>>();
@@ -203,6 +217,12 @@ public:
             m_builder_config.zupt_sigma_v   = config["zupt_sigma_v"].as<double>();
         if (config["zupt_sigma_pos"])
             m_builder_config.zupt_sigma_pos = config["zupt_sigma_pos"].as<double>();
+        if (config["vertical_velocity_constraint_enabled"])
+            m_builder_config.vertical_velocity_constraint_enabled =
+                config["vertical_velocity_constraint_enabled"].as<bool>();
+        if (config["vertical_velocity_sigma_v"])
+            m_builder_config.vertical_velocity_sigma_v =
+                config["vertical_velocity_sigma_v"].as<double>();
     }
 
     void imuCB(const sensor_msgs::msg::Imu::SharedPtr msg)

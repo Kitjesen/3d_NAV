@@ -146,14 +146,14 @@ def _install_fake_ros(monkeypatch, executor: FakeExecutor) -> None:
     monkeypatch.setattr(ros2_context, "get_shared_executor", lambda: executor)
 
 
-def _pointcloud_msg():
+def _pointcloud_msg(frame_id: str = "body"):
     points = np.array([[1.0, 2.0, 3.0, 0.0]], dtype=np.float32)
     return types.SimpleNamespace(
         width=1,
         height=1,
         point_step=16,
         data=points.tobytes(),
-        header=types.SimpleNamespace(frame_id="body"),
+        header=types.SimpleNamespace(frame_id=frame_id),
     )
 
 
@@ -174,6 +174,8 @@ def test_ros2_sim_driver_uses_shared_executor(monkeypatch):
     assert qos_by_topic["/nav/odometry"].kwargs["reliability"] is ReliabilityPolicy.RELIABLE
     assert qos_by_topic["/nav/registered_cloud"].kwargs["reliability"] is ReliabilityPolicy.BEST_EFFORT
     assert qos_by_topic["/nav/registered_cloud"].kwargs["depth"] == 1
+    assert qos_by_topic["/nav/map_cloud"].kwargs["reliability"] is ReliabilityPolicy.BEST_EFFORT
+    assert qos_by_topic["/nav/map_cloud"].kwargs["depth"] == 1
     assert qos_by_topic["/nav/goal_pose"].kwargs["reliability"] is ReliabilityPolicy.RELIABLE
     assert module._pub_cmd_vel.qos.kwargs["reliability"] is ReliabilityPolicy.RELIABLE
 
@@ -232,13 +234,13 @@ def test_ros2_sim_driver_cloud_callback_does_not_block_shared_executor(monkeypat
     module.map_cloud._add_callback(slow_consumer)
 
     t0 = time.perf_counter()
-    module._on_ros2_cloud(_pointcloud_msg())
+    module._on_ros2_map_cloud(_pointcloud_msg(frame_id="odom"))
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
     assert elapsed_ms < 50.0
     assert callback_entered.wait(timeout=1.0)
 
-    module._on_ros2_cloud(_pointcloud_msg())
+    module._on_ros2_map_cloud(_pointcloud_msg(frame_id="odom"))
     assert module._cloud_worker_drops == 1
 
     release_callback.set()
@@ -246,6 +248,33 @@ def test_ros2_sim_driver_cloud_callback_does_not_block_shared_executor(monkeypat
     if module._cloud_worker_thread is not None:
         module._cloud_worker_thread.join(timeout=1.0)
     assert module.health()["ros2"]["cloud_worker_drops"] == 1
+    module.stop()
+
+
+def test_ros2_sim_driver_separates_registered_cloud_from_map_cloud(monkeypatch):
+    executor = FakeExecutor()
+    _install_fake_ros(monkeypatch, executor)
+
+    module = ROS2SimDriverModule()
+    module.setup()
+    module.start()
+
+    lidar_clouds = []
+    map_clouds = []
+    module.lidar_cloud.subscribe(lidar_clouds.append)
+    module.map_cloud.subscribe(map_clouds.append)
+
+    module._on_ros2_registered_cloud(_pointcloud_msg())
+    if module._cloud_worker_thread is not None:
+        module._cloud_worker_thread.join(timeout=1.0)
+    assert len(lidar_clouds) == 1
+    assert map_clouds == []
+
+    module._on_ros2_map_cloud(_pointcloud_msg(frame_id="odom"))
+    if module._cloud_worker_thread is not None:
+        module._cloud_worker_thread.join(timeout=1.0)
+    assert len(map_clouds) == 1
+
     module.stop()
 
 
@@ -277,5 +306,31 @@ def test_ros2_sim_driver_stop_clear_reenables_cmd_vel(monkeypatch):
     module._on_cmd_vel(Twist(linear=Vector3(x=0.3), angular=Vector3(z=-0.1)))
     assert publisher.published[-1].twist.linear.x == 0.3
     assert publisher.published[-1].twist.angular.z == -0.1
+
+    module.stop()
+
+
+def test_ros2_sim_driver_non_latching_stop_allows_next_cmd_vel(monkeypatch):
+    executor = FakeExecutor()
+    _install_fake_ros(monkeypatch, executor)
+
+    module = ROS2SimDriverModule(latch_stop_signal=False)
+    module.setup()
+
+    publisher = module._pub_cmd_vel
+    assert publisher is not None
+
+    module._on_cmd_vel(Twist(linear=Vector3(x=0.4), angular=Vector3(z=0.2)))
+    assert publisher.published[-1].twist.linear.x == 0.4
+    assert publisher.published[-1].twist.angular.z == 0.2
+
+    module._on_stop(2)
+    assert module._stopped is False
+    assert publisher.published[-1].twist.linear.x == 0.0
+    assert publisher.published[-1].twist.angular.z == 0.0
+
+    module._on_cmd_vel(Twist(linear=Vector3(x=0.7), angular=Vector3(z=0.3)))
+    assert publisher.published[-1].twist.linear.x == 0.7
+    assert publisher.published[-1].twist.angular.z == 0.3
 
     module.stop()

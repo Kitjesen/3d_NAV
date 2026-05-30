@@ -290,3 +290,54 @@ def test_readiness_snapshot_flags_active_command_source_as_not_non_motion_safe()
     assert payload["non_motion_safe"] is False
     assert payload["runtime"]["navigation"]["active_cmd_source"] == "teleop"
     assert payload["runtime"]["summary"]["mission_state"] == "EXECUTING"
+
+
+def test_readiness_snapshot_surfaces_calibration_warnings(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+    from gateway.services import readiness as readiness_service
+    from gateway.services.readiness import build_readiness_snapshot
+
+    class Report:
+        ok = True
+        errors: list[str] = []
+        warnings = ["Camera rotation is identity"]
+        info = ["camera intrinsics ok"]
+
+        def summary(self):
+            return "Calibration: 1 warning(s)"
+
+    monkeypatch.setattr(
+        "core.utils.calibration_check.run_calibration_check",
+        lambda **_kwargs: Report(),
+    )
+    readiness_service._CALIBRATION_CACHE = None
+
+    gateway = GatewayModule()
+    gateway._all_modules = {"NavigationModule": _HealthyModule()}
+    gateway._session_mode = "navigating"
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._mission = {"state": "IDLE"}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.03,
+            "localizer_health": "RECOVERED",
+            "odom_age_ms": 100.0,
+        }
+        gateway._icp_quality = 0.03
+
+    payload, status_code = build_readiness_snapshot(gateway, now=130.0)
+
+    assert status_code == 200
+    assert payload["ready"] is True
+    assert payload["advisories"] == ["Camera rotation is identity"]
+    assert payload["runtime"]["calibration"] == {
+        "ok": True,
+        "errors": [],
+        "warnings": ["Camera rotation is identity"],
+        "info_count": 1,
+        "summary": "Calibration: 1 warning(s)",
+    }
+    assert "calibration:error" not in payload["reasons"]

@@ -38,6 +38,10 @@ _PROFILE_META = {
     "explore": ("◎", "Explore unknown area",                         T.cyan),
     "map":     ("⊕", "Build a new map",                              T.yellow),
     "sim":     ("◈", "MuJoCo simulation",                            T.blue),
+    "sim_gazebo": ("▣", "Gazebo/GZ ROS-native simulation",            T.blue),
+    "sim_mujoco_live": ("M", "MuJoCo MID-360 + Fast-LIO live simulation", T.blue),
+    "sim_industrial": ("#", "Gazebo industrial-yard delivery simulation", T.blue),
+    "sim_cmu_tare": ("C", "CMU Unity + external TARE simulation",      T.blue),
     "dev":     ("◇", "Test perception & planning without a robot",   T.navy),
     "stub":    ("○", "Framework testing only",                       T.dim),
 }
@@ -50,6 +54,10 @@ _PROFILE_WIZARD: dict[str, tuple[bool, bool, bool]] = {
     "explore": (True,  True,  False),  # exploring — no joystick needed
     "map":     (False, True,  False),  # mapping — no semantics, no joystick
     "sim":     (True,  True,  True),   # full stack in sim
+    "sim_gazebo": (True, True, True),  # ROS-native Gazebo simulation
+    "sim_mujoco_live": (False, True, False),  # external MuJoCo/Fast-LIO live gate
+    "sim_industrial": (True, True, False),  # ROS-native delivery simulation
+    "sim_cmu_tare": (False, True, False),  # external CMU Unity/TARE graph
     "dev":     (True,  True,  False),  # no robot → no teleop
     "stub":    (False, True,  False),  # bare framework
 }

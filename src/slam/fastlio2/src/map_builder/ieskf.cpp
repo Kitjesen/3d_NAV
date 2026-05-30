@@ -1,5 +1,7 @@
 #include "ieskf.h"
 
+#include <cmath>
+
 double State::gravity = 9.81;
 
 M3D Jr(const V3D &inp)
@@ -78,8 +80,14 @@ void IESKF::predict(const Input &inp, double dt, const M12D &Q)
 
 void IESKF::clampCovariance()
 {
+    m_P = (0.5 * (m_P + m_P.transpose())).eval();
     for (int i = 0; i < 21; ++i)
-        m_P(i, i) = std::min(m_P(i, i), P_MAX[i]);
+    {
+        if (!std::isfinite(m_P(i, i)) || m_P(i, i) < P_MIN[i])
+            m_P(i, i) = P_MIN[i];
+        else if (m_P(i, i) > P_MAX[i])
+            m_P(i, i) = P_MAX[i];
+    }
 }
 
 void IESKF::injectZUPT(double sigma_v, double sigma_pos)
@@ -103,6 +111,25 @@ void IESKF::injectZUPT(double sigma_v, double sigma_pos)
         for (int i = 3; i < 6; ++i)
             m_P(i, i) = std::min(m_P(i, i), sigma_pos * sigma_pos);
     }
+    clampCovariance();
+}
+
+void IESKF::injectVerticalVelocityConstraint(double sigma_v)
+{
+    if (!(sigma_v > 0.0) || !std::isfinite(sigma_v))
+        return;
+
+    Eigen::Matrix<double, 1, 21> H = Eigen::Matrix<double, 1, 21>::Zero();
+    H(0, 14) = 1.0;  // v_z in the world frame
+    const double R = sigma_v * sigma_v;
+    const double S = (H * m_P * H.transpose())(0, 0) + R;
+    if (!(S > 0.0) || !std::isfinite(S))
+        return;
+
+    Eigen::Matrix<double, 21, 1> K = m_P * H.transpose() / S;
+    const double innov = -m_x.v.z();
+    m_x += K * innov;
+    m_P = (M21D::Identity() - K * H) * m_P;
     clampCovariance();
 }
 
@@ -188,7 +215,13 @@ void IESKF::update()
             // back to pure IMU prediction. In all other cases (including 3-5 DOF
             // degenerate, which previously skipped), we keep LiDAR constraints on
             // the observable subspace via OC delta projection below.
-            if (degen_count >= 6 || shared_data.degeneracy.condition_number > 1e12)
+            const bool too_many_degenerate_dofs =
+                m_degeneracy_max_update_dof >= 0 && degen_count > m_degeneracy_max_update_dof;
+            const bool too_ill_conditioned =
+                m_degeneracy_max_condition > 0.0
+                && shared_data.degeneracy.condition_number > m_degeneracy_max_condition;
+            if (degen_count >= 6 || shared_data.degeneracy.condition_number > 1e12
+                || too_many_degenerate_dofs || too_ill_conditioned)
             {
                 pathological = true;
                 break;
@@ -251,10 +284,23 @@ void IESKF::update()
     // Loop exited via m_stop_func only if iter_num < m_max_iter; equality means
     // we ran the max iterations without convergence — flag for diagnostics.
     m_degeneracy.converged = (shared_data.iter_num < m_max_iter);
+    const V21D update_delta = m_x - predict_x;
+    const bool update_translation_too_large =
+        m_max_update_translation_m > 0.0
+        && update_delta.segment<3>(3).norm() > m_max_update_translation_m;
+    const bool update_rotation_too_large =
+        m_max_update_rotation_rad > 0.0
+        && update_delta.segment<3>(0).norm() > m_max_update_rotation_rad;
 
     // Pathological degeneracy: revert to IMU prediction entirely (eigenbasis
     // is numerically unreliable so OC projection cannot be trusted either).
-    if (pathological)
+    if (pathological
+        || update_translation_too_large
+        || update_rotation_too_large
+        || (m_reject_nonconverged_update && !m_degeneracy.converged)
+        || (m_reject_degenerate_nonconverged_update
+            && has_degeneracy
+            && !m_degeneracy.converged))
     {
         m_x = predict_x;
         clampCovariance();
@@ -265,7 +311,27 @@ void IESKF::update()
     M21D L = M21D::Identity();
     L.block<3, 3>(0, 0) = Jr(delta.segment<3>(0));
     L.block<3, 3>(6, 6) = Jr(delta.segment<3>(6));
-    m_P = L * H.ldlt().solve(L.transpose());  // P = L * H^{-1} * L^T
+    auto H_ldlt = H.ldlt();
+    if (H_ldlt.info() != Eigen::Success || !H_ldlt.isPositive())
+    {
+        m_x = predict_x;
+        m_P = P_prior;
+        clampCovariance();
+        m_degeneracy.pos_cov_trace = m_P.diagonal().segment<3>(3).sum();
+        return;
+    }
+    M21D P_candidate = L * H_ldlt.solve(L.transpose());  // P = L * H^{-1} * L^T
+    P_candidate = (0.5 * (P_candidate + P_candidate.transpose())).eval();
+    if (!P_candidate.allFinite()
+        || (P_candidate.diagonal().array() <= 0.0).any())
+    {
+        m_x = predict_x;
+        m_P = P_prior;
+        clampCovariance();
+        m_degeneracy.pos_cov_trace = m_P.diagonal().segment<3>(3).sum();
+        return;
+    }
+    m_P = P_candidate;
 
     // ── Observability-Constrained covariance update ─────────────────────
     // Posterior P for degenerate DOFs is optimistic (information-form solve
@@ -287,6 +353,15 @@ void IESKF::update()
             }
         }
         m_P.block<6, 6>(0, 0) = saved_evecs * P_post_eig * saved_evecs.transpose();
+    }
+    m_P = (0.5 * (m_P + m_P.transpose())).eval();
+    if (!m_P.allFinite() || (m_P.diagonal().array() <= 0.0).any())
+    {
+        m_x = predict_x;
+        m_P = P_prior;
+        clampCovariance();
+        m_degeneracy.pos_cov_trace = m_P.diagonal().segment<3>(3).sum();
+        return;
     }
 
     clampCovariance();

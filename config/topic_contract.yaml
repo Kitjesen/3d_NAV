@@ -1,123 +1,495 @@
-# ═══════════════════════════════════════════════════════════════
-# 3d_NAV Topic Interface Contract
+# LingTu Topic Interface Contract
 #
-# 定义所有模块之间通信的标准话题名称。
-# 具体算法通过 launch profile 将自身话题 remap 到这些标准名称。
-# 高层模块 (grpc_gateway, StatusAggregator 等) 只依赖这些标准名称。
+# This file mirrors the canonical Python runtime contract in
+# src/core/runtime_interface.py. Keep simulator adapters and real robot
+# adapters aligned to that module; this YAML is the human-readable operations
+# contract used by docs, diagnostics, and static validation.
 #
-# 规则:
-#   - 所有标准话题以 /nav/ 为前缀
-#   - 添加新算法时, 只需创建对应的 launch profile 并 remap 到这些标准话题
-#   - 不要修改此文件中的话题名, 除非进行全量迁移
-# ═══════════════════════════════════════════════════════════════
+# Rules:
+#   - High-level LingTu modules consume the canonical /nav/* topics.
+#   - Endpoint adapters are responsible for remapping simulator or hardware
+#     native topics into this contract.
+#   - Do not change existing topic names without a full migration.
+#   - Keep comments in English to avoid encoding drift across Windows/Linux.
 
-# ── 传感器层 ──
 sensor:
-  lidar_scan: /nav/lidar_scan           # livox_ros_driver2/CustomMsg 或 sensor_msgs/PointCloud2
-  imu: /nav/imu                         # sensor_msgs/Imu
+  # Raw SLAM input topics used when a runtime validates Fast-LIO from sensors.
+  raw_lidar_points: /points_raw          # sensor_msgs/PointCloud2 or Livox CustomMsg
+  raw_imu: /imu_raw                      # sensor_msgs/Imu
 
-# ── SLAM 层 ──
+  # Canonical post-adapter sensor topics for LingTu modules.
+  lidar_scan: /nav/lidar_scan            # sensor_msgs/PointCloud2 or Livox CustomMsg
+  imu: /nav/imu                          # sensor_msgs/Imu
+
 slam:
-  odometry: /nav/odometry               # nav_msgs/Odometry — 唯一发布者: Fast-LIO2 (含位置+姿态)
-  registered_cloud: /nav/registered_cloud  # sensor_msgs/PointCloud2 (机体坐标系)
-  map_cloud: /nav/map_cloud             # sensor_msgs/PointCloud2 (世界坐标系)
-  saved_map_cloud: /nav/saved_map_cloud # sensor_msgs/PointCloud2 (static localization map)
-  save_map_service: /nav/save_map       # interface/srv/SaveMaps
-  dog_odometry: /nav/dog_odometry       # nav_msgs/Odometry — han_dog_bridge IMU 姿态反馈 (仅姿态+角速度，无位置)
+  odometry: /nav/odometry                # nav_msgs/Odometry; canonical localization pose
+  registered_cloud: /nav/registered_cloud # sensor_msgs/PointCloud2; robot/body frame
+  map_cloud: /nav/map_cloud              # sensor_msgs/PointCloud2; map/world frame
+  cumulative_map_cloud: /nav/cumulative_map_cloud # simulation/debug accumulated cloud
+  saved_map_cloud: /nav/saved_map_cloud  # sensor_msgs/PointCloud2; static localization map
+  save_map_service: /nav/save_map        # map-save service
+  dog_odometry: /nav/dog_odometry        # robot proprioception feedback, not global pose
 
-# ── 定位层 ──
 localization:
-  quality: /nav/localization_quality      # std_msgs/Float32 (ICP 匹配质量)
-  health: /nav/localization_health        # std_msgs/String (LOCKED/LOST/RECOVERED health)
-  relocalize_service: /nav/relocalize     # interface/srv/Relocalize
-  global_relocalize_service: /nav/global_relocalize # std_srvs/Trigger
-  relocalize_check_service: /nav/relocalize_check  # interface/srv/IsValid (检查重定位是否完成)
+  quality: /nav/localization_quality
+  health: /nav/localization_health       # LOCKED/LOST/RECOVERED or JSON equivalent
+  state_estimation_at_scan: /nav/state_estimation_at_scan
+  relocalize_service: /nav/relocalize
+  global_relocalize_service: /nav/global_relocalize
+  relocalize_check_service: /nav/relocalize_check
 
-# ── 全局规划层 ──
+exploration:
+  start: /exploration/start
+  stop: /exploration/stop
+  way_point: /exploration/way_point      # strategy waypoint from TARE/exploration
+  exploration_grid: /nav/exploration_grid # nav_msgs/OccupancyGrid
+  status: /exploration/status
+
 planning:
-  global_path: /nav/global_path         # nav_msgs/Path (全局路径)
-  planner_status: /nav/planner_status   # std_msgs/String 纯字符串: "IDLE"/"PLANNING"/"SUCCESS"/"FAILED"/"WARN_STUCK"/"STUCK" (global_planner + pathFollower 发布; WARN_STUCK=半超时预警, STUCK=全超时确认卡死)
-  adapter_status: /nav/adapter_status   # std_msgs/String JSON: {"event":...,"index":N,"total":N} (pct_path_adapter 发布; event: path_received/waypoint_reached/goal_reached/replanning/stuck_final/failed)
-  mission_status: /nav/mission_status   # std_msgs/String JSON: {"state","goal","progress","replan_count","elapsed_sec","estop","failure_reason"} (mission_arc 发布; state: IDLE/PLANNING/EXECUTING/RECOVERING/REPLANNING/COMPLETE/FAILED)
+  global_path: /nav/global_path          # nav_msgs/Path
+  far_reach_goal: /nav/far_reach_goal
+  planner_status: /nav/planner_status
+  adapter_status: /nav/adapter_status
+  mission_status: /nav/mission_status
 
-# ── 自主导航层 ──
 autonomy:
-  terrain_map: /nav/terrain_map         # sensor_msgs/PointCloud2 (基础地形图)
-  terrain_map_ext: /nav/terrain_map_ext # sensor_msgs/PointCloud2 (扩展地形图)
-  local_path: /nav/local_path           # nav_msgs/Path (局部路径)
-  cmd_vel: /nav/cmd_vel                 # geometry_msgs/TwistStamped (速度指令)
-  stop: /nav/stop                       # std_msgs/Int8 (急停)
-  slow_down: /nav/slow_down             # std_msgs/Int8 (减速)
-  way_point: /nav/way_point             # geometry_msgs/PointStamped (目标航点)
-  speed: /nav/speed                     # std_msgs/Float32 (速度倍率)
-  # 可选控制话题 (无发布者时节点静默等待，不影响正常导航)
-  map_clearing: /nav/map_clearing       # std_msgs/Float32 (terrain_analysis 地形清除半径)
-  cloud_clearing: /nav/cloud_clearing   # std_msgs/Float32 (terrain_analysis_ext 点云清除半径)
-  navigation_boundary: /nav/navigation_boundary  # geometry_msgs/PolygonStamped (导航边界多边形)
-  added_obstacles: /nav/added_obstacles # sensor_msgs/PointCloud2 (动态附加障碍物)
-  check_obstacle: /nav/check_obstacle   # std_msgs/Bool (障碍物检测开关)
-  nav_state: /nav/nav_state   # std_msgs/String JSON: {"planner_status","loc_quality","stuck"} (预留，待实现)
+  terrain_map: /nav/terrain_map          # sensor_msgs/PointCloud2
+  terrain_map_ext: /nav/terrain_map_ext  # sensor_msgs/PointCloud2
+  local_path: /nav/local_path            # nav_msgs/Path
+  cmd_vel: /nav/cmd_vel                  # geometry_msgs/TwistStamped or Twist adapter
+  stop: /nav/stop
+  slow_down: /nav/slow_down
+  way_point: /nav/way_point              # current execution waypoint/progress marker
+  speed: /nav/speed
 
-# ── 高层控制 ──
+  # Optional control topics. Nodes must tolerate these being absent.
+  map_clearing: /nav/map_clearing
+  cloud_clearing: /nav/cloud_clearing
+  navigation_boundary: /nav/navigation_boundary
+  added_obstacles: /nav/added_obstacles
+  check_obstacle: /nav/check_obstacle
+  nav_state: /nav/nav_state
+
 control:
-  goal_pose: /nav/goal_pose             # geometry_msgs/PoseStamped (导航目标)
-  patrol_goals: /nav/patrol_goals       # std_msgs/String JSON: {waypoints, loop, route_name} (巡检路线 → mission_arc)
-  cancel: /nav/cancel                   # std_msgs/Empty (取消当前任务)
+  goal_pose: /nav/goal_pose              # geometry_msgs/PoseStamped
+  goal_point: /nav/goal_point            # geometry_msgs/PointStamped
+  patrol_goals: /nav/patrol_goals        # JSON route command
+  cancel: /nav/cancel
 
-# ── 语义导航层 (VLN) ──
-# 所有语义话题在 /nav/semantic/ 命名空间下, 与几何导航零冲突。
-# 语义模块未启动时这些话题不存在, 现有系统完全不受影响。
 semantic:
-  detections_3d: /nav/semantic/detections_3d    # vision_msgs/Detection3DArray (3D 检测结果)
-  scene_graph: /nav/semantic/scene_graph        # std_msgs/String (JSON 场景图)
-  query_service: /nav/semantic/query            # 自定义 srv: string → ObjectMatch[]
-  instruction: /nav/semantic/instruction        # std_msgs/String (自然语言指令)
-  resolved_goal: /nav/goal_pose                 # geometry_msgs/PoseStamped (解析后的目标，直连 PCT Planner)
-  status: /nav/semantic/status                  # std_msgs/String (JSON: 阶段/目标/置信度)
-  costmap: /nav/costmap                          # nav_msgs/OccupancyGrid (optional, planner→perception SCG 内部接口)
-  voice_response: /nav/voice/response          # std_msgs/String JSON: {response: "好的", timestamp, instruction}
+  detections_3d: /nav/semantic/detections_3d
+  scene_graph: /nav/semantic/scene_graph
+  query_service: /nav/semantic/query
+  instruction: /nav/semantic/instruction
+  cancel: /nav/semantic/cancel
+  resolved_goal: /nav/goal_pose
+  status: /nav/semantic/status
+  costmap: /nav/costmap
+  scg_plan_request: /nav/scg/plan_request
+  scg_plan_result: /nav/scg/plan_result
+  voice_response: /nav/voice/response
 
-# ── 三维重建层 ──
-# reconstruction_node 未启动时这些话题不存在，现有系统不受影响。
 reconstruction:
-  semantic_cloud: /nav/reconstruction/semantic_cloud  # sensor_msgs/PointCloud2 (XYZRGB 彩色语义点云, 1Hz)
-  stats: /nav/reconstruction/stats                    # std_msgs/String JSON: {total_points, labeled_points, objects, voxels}
-  save_ply_service: /nav/reconstruction/save_ply      # std_srvs/Trigger → 保存 PLY 到 maps/reconstruction/
+  semantic_cloud: /nav/reconstruction/semantic_cloud
+  stats: /nav/reconstruction/stats
+  save_ply_service: /nav/reconstruction/save_ply
 
-# ── 三环认知架构 (nav_rings) ──
-# Ring 1 反射弧 / Ring 2 认知环 / Ring 3 对话环
 rings:
-  safety_state: /nav/safety_state          # std_msgs/String (JSON: level, links, issues)
-  execution_eval: /nav/execution_eval      # std_msgs/String (JSON: assessment, cross_track_error, progress_rate)
-  dialogue_state: /nav/dialogue_state      # std_msgs/String (JSON: understood, doing, progress_pct, safety, eta_sec)
+  safety_state: /nav/safety_state
+  execution_eval: /nav/execution_eval
+  dialogue_state: /nav/dialogue_state
 
-# ── 运营服务 (nav_services) ──
-# 命令/响应模式: 客户端发 command, 节点回 response
 services:
-  # 地图管理
-  map_command: /nav/map/command            # std_msgs/String JSON: {action: list|save|delete|rename|set_active, name, ...}
-  map_response: /nav/map/response          # std_msgs/String JSON: {action, success, maps, message}
-  poi_command: /nav/poi/command            # std_msgs/String JSON: {action: set|delete|list|navigate, name, x, y, z}
-  poi_response: /nav/poi/response          # std_msgs/String JSON: {action, success, pois, message}
+  map_command: /nav/map/command
+  map_response: /nav/map/response
+  poi_command: /nav/poi/command
+  poi_response: /nav/poi/response
+  patrol_command: /nav/patrol/command
+  patrol_response: /nav/patrol/response
+  geofence_command: /nav/geofence/command
+  geofence_response: /nav/geofence/response
+  schedule_command: /nav/schedule/command
+  schedule_response: /nav/schedule/response
+  history_query: /nav/history/query
+  history_response: /nav/history/response
 
-  # 巡检路线
-  patrol_command: /nav/patrol/command      # std_msgs/String JSON: {action: save|load|list|delete|start|stop, name, waypoints, loop}
-  patrol_response: /nav/patrol/response    # std_msgs/String JSON: {action, success, routes, message}
+visualization:
+  detections: /nav/detections          # visualization_msgs/MarkerArray
+  robot_marker: /nav/robot_marker      # visualization_msgs/Marker
+  building_cloud: /nav/building_cloud  # sensor_msgs/PointCloud2 demo/reference cloud
 
-  # 电子围栏
-  geofence_command: /nav/geofence/command  # std_msgs/String JSON: {action: add|remove|list|clear|enable|disable, name, polygon}
-  geofence_response: /nav/geofence/response  # std_msgs/String JSON: {action, success, fences, message}
+required_nav_topics:
+  # P0 runtime topics that must appear in product-relevant mapping,
+  # exploration, and navigation gates. Other /nav/* topics remain reserved or
+  # optional extension points.
+  - /nav/odometry
+  - /nav/registered_cloud
+  - /nav/map_cloud
+  - /nav/exploration_grid
+  - /nav/global_path
+  - /nav/local_path
+  - /nav/cmd_vel
+  - /nav/goal_pose
 
-  # 定时任务
-  schedule_command: /nav/schedule/command   # std_msgs/String JSON: {action: add|remove|list|enable|disable, name, patrol_route, hour, minute, weekdays}
-  schedule_response: /nav/schedule/response  # std_msgs/String JSON: {action, success, schedules, message}
+artifacts:
+  map_pcd: map.pcd
+  tomogram: tomogram.pickle
+  occupancy_grid: occupancy.npz
+  metadata: metadata.json
 
-  # 任务历史
-  history_query: /nav/history/query        # std_msgs/String JSON: {action: list|detail, count, id}
-  history_response: /nav/history/response  # std_msgs/String JSON: {action, missions, detail}
+artifact_formats:
+  map_pcd:
+    path: map.pcd
+    artifact_type: pcd_xyz_or_xyzi
+    frame_role: map
+    required_fields: [x, y, z]
+    required_metadata: [source_profile, data_source, slam_source, frame_id, point_count, sha256]
+  tomogram:
+    path: tomogram.pickle
+    artifact_type: pct_tomogram
+    frame_role: map
+    required_fields: [tomogram, resolution, origin]
+    required_metadata: [source_map_sha256, source_profile, data_source, frame_id, shape]
+  occupancy_grid:
+    path: occupancy.npz
+    artifact_type: numpy_occupancy_grid
+    frame_role: map
+    required_fields: [grid, resolution, origin]
+    required_metadata: [source_map_sha256, source_profile, data_source, frame_id]
+  metadata:
+    path: metadata.json
+    artifact_type: json
+    frame_role: map
+    required_fields: [source_profile, data_source, slam_source, localization_source, mapping_source, frame_id, created_at, artifacts]
+    required_metadata: []
 
-# ── TF 坐标系 ──
 tf:
   map_frame: map
   odom_frame: odom
   body_frame: body
+  model_base_frame: base_link
+  lidar_frame: lidar_link
+  real_lidar_frame: livox_frame
+  camera_frame: camera_link
+  simulator_world_frame: world
+  axis_convention: x_forward_y_left_z_up
+  body_aliases:
+    - base_link
+  lidar_aliases:
+    - livox_frame
+  links:
+    map_to_odom:
+      parent: map
+      child: odom
+      required: true
+    odom_to_body:
+      parent: odom
+      child: body
+      required: true
+    body_to_lidar:
+      parent: body
+      child: lidar_link
+      required: true
+
+extrinsics:
+  # All entries are body -> LiDAR static transforms in metres/radians.
+  # Source adapters must normalize their native sensor data through one of
+  # these profiles before publishing LingTu canonical clouds.
+  body_to_lidar_profiles:
+    real_mid360:
+      parent: body
+      child: livox_frame
+      x: -0.011
+      y: -0.02329
+      z: 0.04412
+      roll: 0.0
+      pitch: 0.0
+      yaw: 0.0
+    gazebo_proxy:
+      parent: body
+      child: lidar_link
+      x: 0.28
+      y: 0.0
+      z: 0.20
+      roll: 0.0
+      pitch: 0.0
+      yaw: 0.0
+    mujoco_thunder_v3:
+      parent: body
+      child: lidar_link
+      x: 0.0
+      y: 0.0
+      z: 0.28
+      roll: 0.0
+      pitch: 0.0
+      yaw: 0.0
+
+data_formats:
+  raw_livox_custom:
+    topic: /points_raw
+    ros_type: livox_ros_driver2/msg/CustomMsg
+    frame_role: lidar_or_body_raw_fastlio_input
+    required_fields: [offset_time, x, y, z, reflectivity, tag, line]
+  raw_timed_pointcloud2:
+    topic: /points_raw
+    ros_type: sensor_msgs/msg/PointCloud2
+    frame_role: lidar_or_body_raw_fastlio_input
+    required_fields: [x, y, z, intensity, time, ring]
+  registered_cloud:
+    topic: /nav/registered_cloud
+    ros_type: sensor_msgs/msg/PointCloud2
+    frame_role: body
+    required_fields: [x, y, z]
+  map_cloud:
+    topic: /nav/map_cloud
+    ros_type: sensor_msgs/msg/PointCloud2
+    frame_role: map_or_odom
+    required_fields: [x, y, z]
+  odometry:
+    topic: /nav/odometry
+    ros_type: nav_msgs/msg/Odometry
+    frame_role: odom_to_body
+  state_estimation_at_scan:
+    topic: /nav/state_estimation_at_scan
+    ros_type: nav_msgs/msg/Odometry
+    frame_role: odom_to_body
+  cmd_vel:
+    topic: /nav/cmd_vel
+    ros_type: geometry_msgs/msg/TwistStamped
+    frame_role: body
+
+topic_formats:
+  /points_raw: [raw_livox_custom, raw_timed_pointcloud2]
+  /imu_raw: [sensor_msgs/msg/Imu]
+  /nav/lidar_scan: [raw_livox_custom, raw_timed_pointcloud2]
+  /nav/imu: [sensor_msgs/msg/Imu]
+  /nav/odometry: [odometry]
+  /nav/state_estimation_at_scan: [state_estimation_at_scan]
+  /nav/registered_cloud: [registered_cloud]
+  /nav/map_cloud: [map_cloud]
+  /nav/cumulative_map_cloud: [map_cloud]
+  /nav/saved_map_cloud: [map_cloud]
+  /nav/exploration_grid: [nav_msgs/msg/OccupancyGrid]
+  /nav/save_map: [service]
+  /nav/localization_health: [std_msgs/msg/String]
+  /nav/global_path: [nav_msgs/msg/Path]
+  /nav/local_path: [nav_msgs/msg/Path]
+  /nav/terrain_map: [map_cloud]
+  /nav/terrain_map_ext: [map_cloud]
+  /nav/cmd_vel: [cmd_vel]
+  /nav/stop: [std_msgs/msg/Bool]
+  /nav/slow_down: [std_msgs/msg/Float32]
+  /nav/speed: [std_msgs/msg/Float32]
+  /nav/map_clearing: [std_msgs/msg/Bool]
+  /nav/cloud_clearing: [std_msgs/msg/Bool]
+  /nav/added_obstacles: [sensor_msgs/msg/PointCloud2]
+  /nav/check_obstacle: [std_msgs/msg/Bool]
+  /nav/planner_status: [std_msgs/msg/String]
+  /nav/navigation_boundary: [geometry_msgs/msg/PolygonStamped]
+  /nav/goal_pose: [geometry_msgs/msg/PoseStamped]
+  /nav/goal_point: [geometry_msgs/msg/PointStamped]
+  /exploration/way_point: [geometry_msgs/msg/PointStamped]
+  /nav/way_point: [geometry_msgs/msg/PointStamped]
+  /livox/lidar: [raw_livox_custom]
+  /livox/imu: [sensor_msgs/msg/Imu]
+  /imu/data: [sensor_msgs/msg/Imu]
+  /lidar/scan: [raw_livox_custom]
+  /model/thunder/odometry: [odometry]
+  /lingtu/gazebo/raw/lidar_points: [sensor_msgs/msg/PointCloud2]
+  /lingtu/gazebo/raw/lidar_scan: [sensor_msgs/msg/LaserScan]
+  /lingtu/gazebo/cmd_vel: [geometry_msgs/msg/Twist]
+  /state_estimation: [odometry]
+  /state_estimation_at_scan: [state_estimation_at_scan]
+  /registered_scan: [map_cloud]
+  /terrain_map: [map_cloud]
+  /terrain_map_ext: [map_cloud]
+  /way_point: [geometry_msgs/msg/PointStamped]
+  /cmd_vel: [geometry_msgs/msg/Twist]
+  /Odometry: [odometry]
+  /cloud_registered: [registered_cloud]
+  /cloud_map: [map_cloud]
+  /map_clearing: [std_msgs/msg/Bool]
+  /cloud_clearing: [std_msgs/msg/Bool]
+  /path: [nav_msgs/msg/Path]
+  /speed: [std_msgs/msg/Float32]
+  /stop: [std_msgs/msg/Bool]
+  /slow_down: [std_msgs/msg/Float32]
+  /navigation_boundary: [geometry_msgs/msg/PolygonStamped]
+  /added_obstacles: [sensor_msgs/msg/PointCloud2]
+  /check_obstacle: [std_msgs/msg/Bool]
+  /planner_status: [std_msgs/msg/String]
+
+algorithm_interfaces:
+  fastlio_mapping:
+    inputs: [/nav/lidar_scan, /nav/imu]
+    outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    owner: slam
+  fastlio_raw_validation:
+    inputs: [/points_raw, /imu_raw]
+    outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    owner: slam_sim_validation
+  exploration_strategy:
+    inputs: [/nav/odometry, /nav/map_cloud, /nav/exploration_grid]
+    outputs: [/exploration/way_point]
+    owner: tare_or_frontier
+  wavefront_frontier_exploration:
+    inputs: [/nav/odometry, /nav/exploration_grid]
+    outputs: [/nav/goal_pose]
+    owner: lingtu_frontier
+  tare_exploration:
+    inputs: [/nav/odometry, /nav/map_cloud, /nav/terrain_map_ext]
+    outputs: [/exploration/way_point]
+    owner: tare_external_or_lingtu_tare_adapter
+  global_planning:
+    inputs: [/nav/odometry, /nav/map_cloud, /exploration/way_point, /nav/goal_pose]
+    outputs: [/nav/global_path]
+    owner: lingtu_navigation
+  astar_global_planning:
+    inputs: [/nav/odometry, /nav/exploration_grid, /nav/goal_pose]
+    outputs: [/nav/global_path]
+    owner: lingtu_navigation
+  pct_global_planning:
+    inputs: [/nav/odometry, artifact:tomogram, /nav/goal_pose]
+    outputs: [/nav/global_path]
+    owner: lingtu_pct
+  local_planning_and_following:
+    inputs: [/nav/odometry, /nav/registered_cloud, /nav/global_path]
+    outputs: [/nav/local_path, /nav/cmd_vel]
+    owner: lingtu_autonomy
+
+adapter_aliases:
+  # Native/third-party names are adapter-only. LingTu modules must consume the
+  # canonical targets, not these source names.
+  livox_driver:
+    - {source: /livox/lidar, target: /nav/lidar_scan, msg_format: raw_livox_custom, scope: adapter_only}
+    - {source: /livox/imu, target: /nav/imu, msg_format: sensor_msgs/msg/Imu, scope: adapter_only}
+  fastlio2:
+    - {source: /cloud_registered, target: /nav/registered_cloud, msg_format: registered_cloud, scope: adapter_only}
+    - {source: /cloud_map, target: /nav/map_cloud, msg_format: map_cloud, scope: adapter_only}
+    - {source: /Odometry, target: /nav/odometry, msg_format: odometry, scope: adapter_only}
+    - {source: /imu/data, target: /nav/imu, msg_format: sensor_msgs/msg/Imu, scope: adapter_only}
+    - {source: /lidar/scan, target: /nav/lidar_scan, msg_format: raw_livox_custom, scope: adapter_only}
+    - {source: save_map, target: /nav/save_map, msg_format: service, scope: adapter_only}
+  pgo:
+    - {source: /cloud_registered, target: /nav/registered_cloud, msg_format: registered_cloud, scope: adapter_only}
+    - {source: /Odometry, target: /nav/odometry, msg_format: odometry, scope: adapter_only}
+  localizer:
+    - {source: /cloud_registered, target: /nav/registered_cloud, msg_format: registered_cloud, scope: adapter_only}
+    - {source: /Odometry, target: /nav/odometry, msg_format: odometry, scope: adapter_only}
+    - {source: map_cloud, target: /nav/saved_map_cloud, msg_format: map_cloud, scope: adapter_only}
+  pointlio:
+    - {source: cloud_registered_body, target: /nav/registered_cloud, msg_format: registered_cloud, scope: adapter_only}
+    - {source: cloud_registered, target: /nav/map_cloud, msg_format: map_cloud, scope: adapter_only}
+    - {source: aft_mapped_to_init, target: /nav/odometry, msg_format: odometry, scope: adapter_only}
+    - {source: livox/imu, target: /nav/imu, msg_format: sensor_msgs/msg/Imu, scope: adapter_only}
+    - {source: livox/lidar, target: /nav/lidar_scan, msg_format: raw_livox_custom, scope: adapter_only}
+    - {source: save_map, target: /nav/save_map, msg_format: service, scope: adapter_only}
+  tare:
+    - {source: /registered_scan, target: /nav/map_cloud, msg_format: map_cloud, scope: adapter_only}
+    - {source: /terrain_map, target: /nav/terrain_map, msg_format: map_cloud, scope: adapter_only}
+    - {source: /terrain_map_ext, target: /nav/terrain_map_ext, msg_format: map_cloud, scope: adapter_only}
+    - {source: /state_estimation, target: /nav/odometry, msg_format: odometry, scope: adapter_only}
+    - {source: /state_estimation_at_scan, target: /nav/odometry, msg_format: odometry, scope: adapter_only}
+    - {source: /way_point, target: /exploration/way_point, msg_format: geometry_msgs/msg/PointStamped, scope: adapter_only}
+  terrain_analysis:
+    - {source: /Odometry, target: /nav/odometry, msg_format: odometry, scope: adapter_only}
+    - {source: /cloud_map, target: /nav/map_cloud, msg_format: map_cloud, scope: adapter_only}
+    - {source: /map_clearing, target: /nav/map_clearing, msg_format: std_msgs/msg/Bool, scope: adapter_only}
+    - {source: /terrain_map, target: /nav/terrain_map, msg_format: map_cloud, scope: adapter_only}
+  terrain_analysis_ext:
+    - {source: /Odometry, target: /nav/odometry, msg_format: odometry, scope: adapter_only}
+    - {source: /cloud_map, target: /nav/map_cloud, msg_format: map_cloud, scope: adapter_only}
+    - {source: /cloud_clearing, target: /nav/cloud_clearing, msg_format: std_msgs/msg/Bool, scope: adapter_only}
+    - {source: /terrain_map, target: /nav/terrain_map, msg_format: map_cloud, scope: adapter_only}
+    - {source: /terrain_map_ext, target: /nav/terrain_map_ext, msg_format: map_cloud, scope: adapter_only}
+  local_planner:
+    - {source: /Odometry, target: /nav/odometry, msg_format: odometry, scope: adapter_only}
+    - {source: /cloud_map, target: /nav/map_cloud, msg_format: map_cloud, scope: adapter_only}
+    - {source: /terrain_map, target: /nav/terrain_map, msg_format: map_cloud, scope: adapter_only}
+    - {source: /terrain_map_ext, target: /nav/terrain_map_ext, msg_format: map_cloud, scope: adapter_only}
+    - {source: /way_point, target: /nav/way_point, msg_format: geometry_msgs/msg/PointStamped, scope: adapter_only}
+    - {source: /speed, target: /nav/speed, msg_format: std_msgs/msg/Float32, scope: adapter_only}
+    - {source: /path, target: /nav/local_path, msg_format: nav_msgs/msg/Path, scope: adapter_only}
+    - {source: /stop, target: /nav/stop, msg_format: std_msgs/msg/Bool, scope: adapter_only}
+    - {source: /slow_down, target: /nav/slow_down, msg_format: std_msgs/msg/Float32, scope: adapter_only}
+    - {source: /navigation_boundary, target: /nav/navigation_boundary, msg_format: geometry_msgs/msg/PolygonStamped, scope: adapter_only}
+    - {source: /added_obstacles, target: /nav/added_obstacles, msg_format: sensor_msgs/msg/PointCloud2, scope: adapter_only}
+    - {source: /check_obstacle, target: /nav/check_obstacle, msg_format: std_msgs/msg/Bool, scope: adapter_only}
+  path_follower:
+    - {source: /Odometry, target: /nav/odometry, msg_format: odometry, scope: adapter_only}
+    - {source: /path, target: /nav/local_path, msg_format: nav_msgs/msg/Path, scope: adapter_only}
+    - {source: /cmd_vel, target: /nav/cmd_vel, msg_format: cmd_vel, scope: adapter_only}
+    - {source: /planner_status, target: /nav/planner_status, msg_format: std_msgs/msg/String, scope: adapter_only}
+
+adapter_relays:
+  # Simulation bridge relays are explicit and must never be enabled on a
+  # hardware ROS domain unless guarded by a hardware-safe command mux.
+  cmu_unity:
+    - {source: /state_estimation, target: /nav/odometry, msg_format: odometry, scope: adapter_only}
+    - {source: /state_estimation_at_scan, target: /nav/state_estimation_at_scan, msg_format: state_estimation_at_scan, scope: adapter_only}
+    - {source: /registered_scan, target: /nav/map_cloud, msg_format: map_cloud, scope: adapter_only}
+    - {source: /terrain_map, target: /nav/terrain_map, msg_format: map_cloud, scope: adapter_only}
+    - {source: /terrain_map_ext, target: /nav/terrain_map_ext, msg_format: map_cloud, scope: adapter_only}
+    - {source: /nav/cmd_vel, target: /cmd_vel, msg_format: geometry_msgs/msg/TwistStamped, scope: adapter_only}
+
+data_sources:
+  # Different runtimes differ only by the source adapter at this boundary.
+  # LingTu modules above the adapter consume the same canonical topics.
+  in_process_stub:
+    provider: in_process
+    normalized_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    source_outputs: []
+    algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    algorithm_context_outputs: []
+    lidar_extrinsic_profile:
+  real_s100p:
+    provider: hardware
+    normalized_outputs: [/nav/lidar_scan, /nav/imu]
+    source_outputs: [/nav/lidar_scan, /nav/imu]
+    algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    algorithm_context_outputs: []
+    lidar_extrinsic_profile: real_mid360
+  mujoco_module_graph:
+    provider: mujoco
+    normalized_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    source_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    algorithm_context_outputs: []
+    lidar_extrinsic_profile: mujoco_thunder_v3
+  mujoco_fastlio2_live:
+    provider: mujoco
+    normalized_outputs: [/points_raw, /imu_raw]
+    source_outputs: [/points_raw, /imu_raw]
+    algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    algorithm_context_outputs: []
+    lidar_extrinsic_profile: mujoco_thunder_v3
+  gazebo_industrial:
+    provider: gazebo
+    normalized_outputs: [/nav/odometry, /nav/state_estimation_at_scan, /nav/registered_cloud, /nav/map_cloud, /nav/exploration_grid]
+    source_outputs: [/model/thunder/odometry, /lingtu/gazebo/raw/lidar_points, /lingtu/gazebo/raw/lidar_scan]
+    algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    algorithm_context_outputs: [/nav/state_estimation_at_scan, /nav/exploration_grid]
+    lidar_extrinsic_profile: gazebo_proxy
+  cmu_unity_external:
+    provider: cmu_unity
+    normalized_outputs: [/nav/odometry, /nav/state_estimation_at_scan, /nav/registered_cloud, /nav/map_cloud, /nav/terrain_map_ext, /exploration/way_point]
+    source_outputs: [/state_estimation, /state_estimation_at_scan, /registered_scan, /terrain_map, /terrain_map_ext, /way_point]
+    algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    algorithm_context_outputs: [/nav/state_estimation_at_scan, /nav/terrain_map_ext, /exploration/way_point]
+    lidar_extrinsic_profile:
+
+profile_data_sources:
+  stub: {data_source: in_process_stub, mode: framework_test}
+  dev: {data_source: in_process_stub, mode: semantic_pipeline_test}
+  sim_nav: {data_source: in_process_stub, mode: pure_python_navigation_sim}
+  sim: {data_source: mujoco_module_graph, mode: module_graph_simulation}
+  sim_mujoco_live: {data_source: mujoco_fastlio2_live, mode: mujoco_raw_mid360_fastlio_live}
+  sim_gazebo: {data_source: gazebo_industrial, mode: gazebo_ros_native_simulation}
+  sim_industrial: {data_source: gazebo_industrial, mode: gazebo_industrial_delivery_demo}
+  sim_cmu_tare: {data_source: cmu_unity_external, mode: external_cmu_unity_tare_adapter}
+  map: {data_source: real_s100p, mode: real_robot_mapping}
+  nav: {data_source: real_s100p, mode: real_robot_saved_map_navigation}
+  explore: {data_source: real_s100p, mode: real_robot_live_exploration}
+  tare_explore: {data_source: real_s100p, mode: real_robot_tare_exploration}
+  super_lio: {data_source: real_s100p, mode: real_robot_super_lio_mapping}
+  super_lio_relocation: {data_source: real_s100p, mode: real_robot_super_lio_relocalization}

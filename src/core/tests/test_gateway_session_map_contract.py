@@ -699,8 +699,11 @@ def test_maps_route_accepts_legacy_and_canonical_actions():
     canonical_payload = asyncio.run(
         post_maps(MapRequest(action="build_tomogram", name="demo"))
     )
+    occupancy_payload = asyncio.run(
+        post_maps(MapRequest(action="build_occupancy", name="demo"))
+    )
 
-    for payload in (use_payload, build_payload, canonical_payload):
+    for payload in (use_payload, build_payload, canonical_payload, occupancy_payload):
         model = MapLifecycleResponse.model_validate(payload)
         assert model.schema_version == 1
         assert model.ok is True
@@ -710,6 +713,7 @@ def test_maps_route_accepts_legacy_and_canonical_actions():
         {"action": "set_active", "name": "demo"},
         {"action": "build_tomogram", "name": "demo"},
         {"action": "build_tomogram", "name": "demo"},
+        {"action": "build_occupancy", "name": "demo"},
     ]
 
 
@@ -1277,6 +1281,103 @@ def test_tare_explorer_session_start_end_uses_exploration_backend(monkeypatch):
     ) in fake_service_manager.calls
 
 
+def test_tare_external_session_start_with_none_skips_robot_slam_services(monkeypatch):
+    import core.service_manager as service_manager
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import SessionTransitionResponse
+
+    class FakeServiceManager:
+        def __init__(self):
+            self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+        def stop(self, *services: str) -> None:
+            self.calls.append(("stop", services))
+
+        def ensure(self, *services: str) -> None:
+            self.calls.append(("ensure", services))
+
+        def wait_ready(self, *services: str, timeout: float = 15.0) -> bool:
+            self.calls.append(("wait_ready", services))
+            return True
+
+    class TAREExplorerModule:
+        def __init__(self):
+            self.started = False
+
+        def start_tare_exploration(self):
+            self.started = True
+            return {"status": "started"}
+
+        def stop_tare_exploration(self):
+            self.started = False
+            return {"status": "stopped"}
+
+        def get_tare_status(self):
+            return {"started": self.started}
+
+    fake_service_manager = FakeServiceManager()
+    monkeypatch.setattr(
+        service_manager, "get_service_manager", lambda: fake_service_manager
+    )
+
+    gateway = GatewayModule()
+    gateway.setup()
+    tare = TAREExplorerModule()
+    gateway.on_system_modules({"TAREExplorerModule": tare})
+    _seed_ready_navigation(gateway)
+
+    payload = asyncio.run(
+        _endpoint(gateway, "/api/v1/session/start")(
+            {"mode": "exploring", "slam_profile": "none"}
+        )
+    )
+    transition = SessionTransitionResponse.model_validate(payload)
+
+    assert transition.ok is True
+    assert transition.session is not None
+    assert transition.session.mode == "exploring"
+    assert transition.session.slam_profile == "none"
+    assert tare.started is True
+    assert fake_service_manager.calls == [("stop", ())]
+
+
+def test_tare_external_session_get_preserves_exploring_with_none_slam(monkeypatch):
+    import core.service_manager as service_manager
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import SessionResponse
+
+    class FakeServiceManager:
+        def status(self, *services: str) -> dict[str, str]:
+            return {name: "stopped" for name in services}
+
+    class TAREExplorerModule:
+        def get_tare_status(self):
+            return {"started": True}
+
+    monkeypatch.setattr(
+        service_manager, "get_service_manager", lambda: FakeServiceManager()
+    )
+
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway.on_system_modules({"TAREExplorerModule": TAREExplorerModule()})
+    gateway._session_mode = "exploring"
+    gateway._session_slam_profile = "none"
+    gateway._cached_slam_profile = "none"
+    gateway._slam_profile_ts = 0.0
+    gateway._exploring = True
+    with gateway._state_lock:
+        gateway._localization_status = {"backend": "none"}
+
+    payload = asyncio.run(_endpoint(gateway, "/api/v1/session")())
+    session = SessionResponse.model_validate(payload)
+
+    assert session.mode == "exploring"
+    assert session.slam_profile == "none"
+    assert gateway._session_mode == "exploring"
+    assert gateway._cached_slam_profile == "none"
+
+
 def test_slam_status_uses_logical_service_states(monkeypatch):
     import core.service_manager as service_manager
     from gateway.gateway_module import GatewayModule
@@ -1574,7 +1675,42 @@ def test_localizer_relocalize_keeps_ros_service_path(monkeypatch, tmp_path):
     assert payload["ts"] > 0
     assert payload["message"] == "Relocalized to demo"
     assert calls
-    assert any("/nav/relocalize" in " ".join(args) for args, _kwargs in calls)
+    commands = [" ".join(args) for args, _kwargs in calls]
+    relocalize_command = next(cmd for cmd in commands if "/nav/relocalize" in cmd)
+    assert str(map_dir / "demo" / "map.pcd") in relocalize_command
+    assert "data/inovxio/data/maps" not in relocalize_command
+
+
+def test_localizer_relocalize_rejects_unsafe_map_name(monkeypatch, tmp_path):
+    import subprocess
+
+    from gateway.gateway_module import GatewayModule
+
+    def fail_run(*_args, **_kwargs):
+        raise AssertionError("unsafe map names must not call ROS")
+
+    monkeypatch.setenv("NAV_MAP_DIR", str(tmp_path / "maps"))
+    monkeypatch.setattr(subprocess, "run", fail_run)
+
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway._localization_status = {
+        "backend": "localizer",
+        "saved_map_relocalization_supported": True,
+    }
+
+    response = asyncio.run(
+        _endpoint(gateway, "/api/v1/slam/relocalize")(
+            {"map_name": "../outside", "x": 1.0, "y": 2.0, "yaw": 0.3}
+        )
+    )
+    payload = _payload(response)
+
+    assert response.status_code == 400
+    assert payload["schema_version"] == 1
+    assert payload["ok"] is False
+    assert payload["success"] is False
+    assert "unsafe characters" in payload["message"]
 
 
 def test_temporal_memory_response_accepts_observation_rows():

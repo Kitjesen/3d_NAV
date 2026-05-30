@@ -25,11 +25,12 @@ from core.native_install import DDS_ENV, exe, share
 
 _IS_AARCH64 = platform.machine() in ("aarch64", "arm64")
 from core.native_module import NativeModule, NativeModuleConfig
+from core.runtime_interface import FRAMES, TOPICS, adapter_remappings
 from core.utils.livox_config import ensure_mid360_config_file
 
 
 def livox_driver(cfg: RobotConfig | None = None) -> NativeModule:
-    """Livox MID-360 ROS2 driver — /lidar/scan (CustomMsg) + /imu/data."""
+    """Livox MID-360 ROS2 driver: /lidar/scan (CustomMsg) + /imu/data."""
     cfg = cfg or get_config()
     # Enterprise rule: single source of truth.
     # Generate a fresh driver JSON from config/robot_config.yaml (cfg.lidar) to
@@ -46,10 +47,7 @@ def livox_driver(cfg: RobotConfig | None = None) -> NativeModule:
             "output_data_type": 0,
             "user_config_path": config_path,
         },
-        remappings={
-            "/livox/lidar": "/nav/lidar_scan",
-            "/livox/imu":   "/nav/imu",
-        },
+        remappings=adapter_remappings("livox_driver"),
         env=DDS_ENV,
         auto_restart=True,
         max_restarts=3,
@@ -57,7 +55,7 @@ def livox_driver(cfg: RobotConfig | None = None) -> NativeModule:
 
 
 def slam_fastlio2(cfg: RobotConfig | None = None) -> NativeModule:
-    """Fast-LIO2 — LiDAR-inertial odometry + mapping."""
+    """Fast-LIO2: LiDAR-inertial odometry + mapping."""
     cfg = cfg or get_config()
     # Auto-select optimized config on S100P (aarch64 ARM CPU)
     default_yaml = "lio_s100p.yaml" if _IS_AARCH64 else "lio.yaml"
@@ -70,13 +68,8 @@ def slam_fastlio2(cfg: RobotConfig | None = None) -> NativeModule:
         name="slam_fastlio2",
         parameters={"config_path": config_path},
         remappings={
-            "/cloud_registered": "/nav/registered_cloud",
-            "/cloud_map":        "/nav/map_cloud",
-            "/Odometry":         "/nav/odometry",
+            **adapter_remappings("fastlio2"),
             "/path":             "/lio_path",
-            "/imu/data":         "/nav/imu",
-            "/lidar/scan":       "/nav/lidar_scan",
-            "save_map":          "/nav/save_map",
             "/slam/degeneracy":  "/slam/degeneracy",
             "/slam/degeneracy_detail": "/slam/degeneracy_detail",
         },
@@ -87,7 +80,7 @@ def slam_fastlio2(cfg: RobotConfig | None = None) -> NativeModule:
 
 
 def slam_pgo(cfg: RobotConfig | None = None) -> NativeModule:
-    """PGO node — Pose Graph Optimization for map saving.
+    """PGO node: Pose Graph Optimization for map saving.
 
     Must run alongside Fast-LIO2; provides /pgo/save_maps service.
     """
@@ -100,10 +93,7 @@ def slam_pgo(cfg: RobotConfig | None = None) -> NativeModule:
         executable=exe(cfg, "pgo", "pgo_node"),
         name="pgo",
         parameters={"config_path": config_path},
-        remappings={
-            "/cloud_registered": "/nav/registered_cloud",
-            "/Odometry":         "/nav/odometry",
-        },
+        remappings=adapter_remappings("pgo"),
         env=DDS_ENV,
         auto_restart=True,
         max_restarts=3,
@@ -111,7 +101,7 @@ def slam_pgo(cfg: RobotConfig | None = None) -> NativeModule:
 
 
 def slam_localizer(cfg: RobotConfig | None = None) -> NativeModule:
-    """ICP Localizer — localization against a pre-built PCD map.
+    """ICP Localizer: localization against a pre-built PCD map.
 
     Requires Fast-LIO2 for real-time LiDAR odometry.
     """
@@ -135,11 +125,7 @@ def slam_localizer(cfg: RobotConfig | None = None) -> NativeModule:
             "config_path":     config_path,
             "static_map_path": map_path,
         },
-        remappings={
-            "/cloud_registered": "/nav/registered_cloud",
-            "/Odometry":         "/nav/odometry",
-            "map_cloud":         "/nav/map_cloud",
-        },
+        remappings=adapter_remappings("localizer"),
         env=DDS_ENV,
         auto_restart=True,
         max_restarts=3,
@@ -147,7 +133,7 @@ def slam_localizer(cfg: RobotConfig | None = None) -> NativeModule:
 
 
 def slam_hba(cfg: RobotConfig | None = None) -> NativeModule:
-    """HBA — Hierarchical Bundle Adjustment for map refinement.
+    """HBA: Hierarchical Bundle Adjustment for map refinement.
 
     Post-processing step: loads PGO patches + poses, runs multi-iteration BA,
     produces refined poses.  Not a real-time module — start on demand after
@@ -169,7 +155,7 @@ def slam_hba(cfg: RobotConfig | None = None) -> NativeModule:
 
 
 def slam_genz_icp(cfg: RobotConfig | None = None) -> NativeModule:
-    """GenZ-ICP — degeneracy-robust LiDAR odometry (RA-L 2025).
+    """GenZ-ICP: degeneracy-robust LiDAR odometry (RA-L 2025).
 
     Adaptive P2Plane + P2Point weighting for corridor/tunnel robustness.
     Standalone LiDAR-only odometry (no IMU fusion).
@@ -192,16 +178,16 @@ def slam_genz_icp(cfg: RobotConfig | None = None) -> NativeModule:
         name="slam_genz_icp",
         parameters={
             "config_file": config_path,
-            "odom_frame": "odom",
-            "base_frame": "body",
+            "odom_frame": FRAMES.odom,
+            "base_frame": FRAMES.body,
             "publish_odom_tf": "false",  # Fast-LIO2 handles TF
             "deskew": "true",
             "visualize": "false",
         },
         remappings={
-            "/pointcloud_topic": "/nav/lidar_scan",
-            "/genz/odometry":    "/nav/genz_odometry",
-            "/genz/local_map":   "/nav/genz_map",
+            "/pointcloud_topic": TOPICS.lidar_scan,
+            "/genz/odometry":    "/slam/genz_odometry",
+            "/genz/local_map":   "/slam/genz_map",
         },
         env=DDS_ENV,
         auto_restart=True,
@@ -210,7 +196,7 @@ def slam_genz_icp(cfg: RobotConfig | None = None) -> NativeModule:
 
 
 def slam_pointlio(cfg: RobotConfig | None = None) -> NativeModule:
-    """Point-LIO SLAM — alternative to Fast-LIO2."""
+    """Point-LIO SLAM: alternative to Fast-LIO2."""
     cfg = cfg or get_config()
     config_path = cfg.raw.get("slam", {}).get(
         "pointlio_config",
@@ -220,14 +206,9 @@ def slam_pointlio(cfg: RobotConfig | None = None) -> NativeModule:
         executable=exe(cfg, "pointlio", "pointlio_node"),
         name="slam_pointlio",
         parameters={"config_path": config_path},
-        remappings={
-            "/cloud_registered": "/nav/registered_cloud",
-            "/cloud_map":        "/nav/map_cloud",
-            "/Odometry":         "/nav/odometry",
-            "/imu/data":         "/nav/imu",
-            "/lidar/scan":       "/nav/lidar_scan",
-        },
+        remappings=adapter_remappings("pointlio"),
         env=DDS_ENV,
         auto_restart=True,
         max_restarts=3,
     ))
+

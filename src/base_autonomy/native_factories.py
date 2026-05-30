@@ -22,6 +22,7 @@ from typing import Optional
 from core.config import RobotConfig, get_config
 from core.native_install import DDS_ENV, exe, share
 from core.native_module import NativeModule, NativeModuleConfig
+from core.runtime_interface import adapter_remappings
 
 
 def terrain_analysis(cfg: RobotConfig | None = None) -> NativeModule:
@@ -57,12 +58,7 @@ def terrain_analysis(cfg: RobotConfig | None = None) -> NativeModule:
             "disRatioZ":           ta.get("dis_ratio_z",               0.2),
             "checkCollision":      ta.get("check_collision",           True),
         },
-        remappings={
-            "/Odometry":     "/nav/odometry",
-            "/cloud_map":    "/nav/map_cloud",
-            "/map_clearing": "/nav/map_clearing",
-            "/terrain_map":  "/nav/terrain_map",
-        },
+        remappings=adapter_remappings("terrain_analysis"),
         env=DDS_ENV,
     ))
 
@@ -89,13 +85,7 @@ def terrain_analysis_ext(cfg: RobotConfig | None = None) -> NativeModule:
             "ceilingFilteringThre": ta.get("ceiling_filtering_thre",    2.0),
             "checkTerrainConn":     ta.get("check_collision",           True),
         },
-        remappings={
-            "/Odometry":        "/nav/odometry",
-            "/cloud_map":       "/nav/map_cloud",
-            "/cloud_clearing":  "/nav/cloud_clearing",
-            "/terrain_map":     "/nav/terrain_map",
-            "/terrain_map_ext": "/nav/terrain_map_ext",
-        },
+        remappings=adapter_remappings("terrain_analysis_ext"),
         env=DDS_ENV,
     ))
 
@@ -146,20 +136,7 @@ def local_planner(cfg: RobotConfig | None = None) -> NativeModule:
             "joyToSpeedDelay":           aut.get("joy_to_speed_delay",          2.0),
             "joyToCheckObstacleDelay":   aut.get("joy_to_check_obstacle_delay", 5.0),
         },
-        remappings={
-            "/Odometry":            "/nav/odometry",
-            "/cloud_map":           "/nav/map_cloud",
-            "/terrain_map":         "/nav/terrain_map",
-            "/terrain_map_ext":     "/nav/terrain_map_ext",
-            "/way_point":           "/nav/way_point",
-            "/speed":               "/nav/speed",
-            "/path":                "/nav/local_path",
-            "/stop":                "/nav/stop",
-            "/slow_down":           "/nav/slow_down",
-            "/navigation_boundary": "/nav/navigation_boundary",
-            "/added_obstacles":     "/nav/added_obstacles",
-            "/check_obstacle":      "/nav/check_obstacle",
-        },
+        remappings=adapter_remappings("local_planner"),
         env=DDS_ENV,
     ))
 
@@ -198,11 +175,6 @@ def path_follower(cfg: RobotConfig | None = None) -> NativeModule:
             "autonomyMode":       True,
             "joyToSpeedDelay":    aut.get("joy_to_speed_delay",   2.0),
         },
-        remappings={
-            "/Odometry":       "/nav/odometry",
-            "/path":           "/nav/local_path",
-            "/cmd_vel":        "/nav/cmd_vel",
-            "/planner_status": "/nav/planner_status",
-        },
+        remappings=adapter_remappings("path_follower"),
         env=DDS_ENV,
     ))

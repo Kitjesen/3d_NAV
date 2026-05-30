@@ -195,7 +195,7 @@ def test_camera_bridge_reconnect_removes_old_node_from_shared_executor(monkeypat
     monkeypatch.setattr(ros2_context, "ensure_rclpy", lambda: None)
     monkeypatch.setattr(ros2_context, "get_shared_executor", lambda: executor)
 
-    from drivers.thunder.camera_bridge_module import CameraBridgeModule
+    from drivers.real.thunder.camera_bridge_module import CameraBridgeModule
 
     module = CameraBridgeModule()
     assert module._create_ros2_node() is True
@@ -216,7 +216,7 @@ def test_camera_bridge_reconnect_removes_old_node_from_shared_executor(monkeypat
 
 
 def test_camera_bridge_service_recovery_is_opt_in(monkeypatch):
-    from drivers.thunder.camera_bridge_module import CameraBridgeModule
+    from drivers.real.thunder.camera_bridge_module import CameraBridgeModule
 
     monkeypatch.delenv("LINGTU_CAMERA_ALLOW_SERVICE_RECOVERY", raising=False)
     module = CameraBridgeModule(max_reconnects=3)
@@ -234,8 +234,8 @@ def test_camera_bridge_service_recovery_is_opt_in(monkeypatch):
 def test_camera_bridge_recovery_uses_robot_camera_service(monkeypatch):
     import subprocess
 
-    import drivers.thunder.camera_bridge_module as camera_bridge
-    from drivers.thunder.camera_bridge_module import CameraBridgeModule
+    import drivers.real.thunder.camera_bridge_module as camera_bridge
+    from drivers.real.thunder.camera_bridge_module import CameraBridgeModule
 
     calls = []
 

@@ -22,6 +22,16 @@ _planner_root = os.path.join(current_dir, "..")
 sys.path.insert(0, _planner_root)
 sys.path.append(os.path.join(current_dir, "../lib"))
 
+try:
+    from pathlib import Path as FsPath
+
+    from global_planning.PCT_planner_runnable.runtime import prepare_pct_runtime
+
+    _repo_root = FsPath(current_dir).resolve().parents[5]
+    prepare_pct_runtime(_repo_root)
+except Exception as exc:
+    print(f"[global_planner] PCT runtime preparation skipped: {exc}", flush=True)
+
 from config import Config
 from utils import traj2ros
 from planner_wrapper import TomogramPlanner
@@ -51,6 +61,7 @@ class GlobalPlanner(Node):
                 ('tomogram_ground_h', cfg.wrapper.tomogram_ground_h),
                 ('publish_map_pointcloud', cfg.node.publish_map_pointcloud),
                 ('publish_tomogram', cfg.node.publish_tomogram),
+                ('flatten_path_z', False),
                 ('use_quintic', cfg.planner.use_quintic),
                 ('max_heading_rate', cfg.planner.max_heading_rate),
                 ('obstacle_thr', cfg.planner.obstacle_thr),
@@ -66,6 +77,7 @@ class GlobalPlanner(Node):
         self.tomogram_ground_h = self.get_parameter('tomogram_ground_h').value
         self.publish_map_pointcloud = self.get_parameter('publish_map_pointcloud').value
         self.publish_tomogram = self.get_parameter('publish_tomogram').value
+        self.flatten_path_z = bool(self.get_parameter('flatten_path_z').value)
         self.use_quintic = self.get_parameter('use_quintic').value
         self.max_heading_rate = self.get_parameter('max_heading_rate').value
         self.obstacle_thr = self.get_parameter('obstacle_thr').value
@@ -342,7 +354,12 @@ class GlobalPlanner(Node):
                 duration_ms = (time.time() - start_tick) * 1000
                 
                 if traj_3d is not None and len(traj_3d) > 0:
-                    path_msg = traj2ros(traj_3d)
+                    traj_for_ros = traj_3d
+                    if self.flatten_path_z:
+                        traj_for_ros = np.asarray(traj_3d, dtype=float).copy()
+                        if traj_for_ros.ndim == 2 and traj_for_ros.shape[1] >= 3:
+                            traj_for_ros[:, 2] = 0.0
+                    path_msg = traj2ros(traj_for_ros)
                     path_msg.header.stamp = self.get_clock().now().to_msg()
                     path_msg.header.frame_id = self.map_frame
                     

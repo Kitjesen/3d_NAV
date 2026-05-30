@@ -13,6 +13,7 @@ NOVA Dog 导航仿真 Bridge — 真实 ONNX 步态 + ROS2 全链路
   MUJOCO_GL=egl python3 nova_nav_bridge.py --headless # 无头模式
 """
 import argparse
+import sys
 import time
 import threading
 from pathlib import Path
@@ -24,6 +25,12 @@ import mujoco
 # ── 路径 ─────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
 SIM_DIR = SCRIPT_DIR.parent
+SRC_DIR = SIM_DIR.parent / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from core.runtime_interface import FRAMES, TOPICS
+
 ROBOT_XML = SIM_DIR / "robot" / "robot.xml"
 POLICY_ONNX = SIM_DIR / "robot" / "policy.onnx"
 
@@ -397,14 +404,14 @@ class NavBridge:
 
         # Publishers
         qos_reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
-        self.odom_pub = self.node.create_publisher(Odometry, '/nav/odometry', qos_reliable)
-        self.cloud_pub = self.node.create_publisher(PointCloud2, '/nav/map_cloud', qos_reliable)
-        self.cloud_body_pub = self.node.create_publisher(PointCloud2, '/nav/registered_cloud', qos_reliable)
+        self.odom_pub = self.node.create_publisher(Odometry, TOPICS.odometry, qos_reliable)
+        self.cloud_pub = self.node.create_publisher(PointCloud2, TOPICS.map_cloud, qos_reliable)
+        self.cloud_body_pub = self.node.create_publisher(PointCloud2, TOPICS.registered_cloud, qos_reliable)
         self.tf_broadcaster = TransformBroadcaster(self.node)
 
         # Subscriber
         self.node.create_subscription(
-            TwistStamped, '/nav/cmd_vel', self._cmd_vel_cb, qos_reliable)
+            TwistStamped, TOPICS.cmd_vel, self._cmd_vel_cb, qos_reliable)
 
         self._PointCloud2 = PointCloud2
         self._PointField = PointField
@@ -455,8 +462,8 @@ class NavBridge:
         # Odometry
         odom = self._Odometry()
         odom.header.stamp = now
-        odom.header.frame_id = 'odom'
-        odom.child_frame_id = 'body'
+        odom.header.frame_id = FRAMES.odom
+        odom.child_frame_id = FRAMES.body
         odom.pose.pose.position.x = float(pos[0])
         odom.pose.pose.position.y = float(pos[1])
         odom.pose.pose.position.z = float(pos[2])
@@ -476,8 +483,8 @@ class NavBridge:
         # TF: odom → body
         tf = self._TransformStamped()
         tf.header.stamp = now
-        tf.header.frame_id = 'odom'
-        tf.child_frame_id = 'body'
+        tf.header.frame_id = FRAMES.odom
+        tf.child_frame_id = FRAMES.body
         tf.transform.translation.x = float(pos[0])
         tf.transform.translation.y = float(pos[1])
         tf.transform.translation.z = float(pos[2])
@@ -498,7 +505,7 @@ class NavBridge:
         # World frame cloud → /nav/map_cloud
         msg = self._PointCloud2()
         msg.header.stamp = now
-        msg.header.frame_id = 'odom'
+        msg.header.frame_id = FRAMES.odom
         msg.height = 1
         msg.width = len(pts_xyzi)
         msg.is_dense = False
@@ -522,7 +529,7 @@ class NavBridge:
                                     pts_xyzi[:, 3:4]])
         msg2 = self._PointCloud2()
         msg2.header.stamp = now
-        msg2.header.frame_id = 'body'
+        msg2.header.frame_id = FRAMES.body
         msg2.height = 1
         msg2.width = len(pts_body_xyzi)
         msg2.is_dense = False

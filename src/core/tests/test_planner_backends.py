@@ -112,6 +112,69 @@ class TestPCTBackend:
         b = self._backend(tomogram_path="not_a_real_file.pickle")
         assert len(b._load_error) > 0
 
+    def test_near_zero_route_bypasses_native_pct_plan(self, monkeypatch):
+        from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+
+        class FakeNativePlanner:
+            def __init__(self):
+                self.plan_calls = 0
+
+            def pos2idx(self, _pos):
+                return np.array([10.0, 20.0])
+
+            def plan(self, *_args):
+                self.plan_calls += 1
+                raise AssertionError("native PCT plan must not be called")
+
+        planner = FakeNativePlanner()
+        backend = _PCTBackend.__new__(_PCTBackend)
+        backend._planner = planner
+        backend._resolution = 0.2
+        backend._load_error = ""
+        monkeypatch.setattr(
+            backend,
+            "_select_traversable_height",
+            lambda _pos, fallback_z, **_kw: float(fallback_z),
+        )
+
+        path = backend.plan(
+            np.array([1.0, 2.0, 0.3]),
+            np.array([1.35, 2.0, 0.4]),
+        )
+
+        assert planner.plan_calls == 0
+        assert path == [(1.0, 2.0, 0.3), (1.35, 2.0, 0.4)]
+
+    def test_near_xy_route_bypasses_native_pct_plan(self, monkeypatch):
+        from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+
+        class FakeNativePlanner:
+            def __init__(self):
+                self.plan_calls = 0
+
+            def plan(self, *_args):
+                self.plan_calls += 1
+                raise AssertionError("native PCT plan must not be called")
+
+        planner = FakeNativePlanner()
+        backend = _PCTBackend.__new__(_PCTBackend)
+        backend._planner = planner
+        backend._resolution = 0.2
+        backend._load_error = ""
+        monkeypatch.setattr(
+            backend,
+            "_select_traversable_height",
+            lambda _pos, fallback_z, **_kw: float(fallback_z),
+        )
+
+        path = backend.plan(
+            np.array([1.0, 2.0, 0.3]),
+            np.array([1.1, 2.0, 0.4]),
+        )
+
+        assert planner.plan_calls == 0
+        assert path == [(1.0, 2.0, 0.3), (1.1, 2.0, 0.4)]
+
 
 # ---------------------------------------------------------------------------
 # _AStarBackend tests
@@ -212,6 +275,17 @@ class TestAStarBackend:
             col = max(0, min(col, w - 1))
             row = max(0, min(row, h - 1))
             assert trav[row, col] < 49.9, f"Path goes through obstacle at ({col},{row})"
+
+    def test_diagonal_move_does_not_cut_blocked_corner(self):
+        """Diagonal steps must not pass between blocked orthogonal cells."""
+        trav = _make_open_grid(3, 3)
+        trav[0, 1] = 100.0
+        trav[1, 0] = 100.0
+        b = self._backend(trav, resolution=1.0, center=(1.5, 1.5))
+
+        path = b.plan(np.array([0.0, 0.0, 0.0]), np.array([1.0, 1.0, 0.0]))
+
+        assert path == []
 
     def test_euclidean_heuristic_not_manhattan(self):
         """Heuristic must be Euclidean (admissible) — indirect check via path length.

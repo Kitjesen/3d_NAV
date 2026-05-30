@@ -158,6 +158,8 @@ class MapManagerModule(Module, layer=6):
                 resp = self._map_set_active(cmd.get("name", ""))
             elif action == "build_tomogram":
                 resp = self._build_tomogram(cmd.get("name", ""))
+            elif action in ("build_occupancy", "build_occupancy_snapshot"):
+                resp = self._build_occupancy_snapshot(cmd.get("name", ""))
             elif action == "poi_set":
                 resp = self._poi_set(cmd)
             elif action == "poi_delete":
@@ -319,6 +321,24 @@ class MapManagerModule(Module, layer=6):
 
         # Step 2 — Auto-build tomogram (required for global planner)
         tomo_result = self._build_tomogram(name)
+        tomo_ok = bool(tomo_result.get("success", False))
+        if not tomo_ok and resolved_slam_profile != "super_lio":
+            return {
+                "action": "save",
+                "success": False,
+                "message": (
+                    "Tomogram build failed; map was saved but is not ready "
+                    f"for navigation: {tomo_result.get('message', 'unknown error')}"
+                ),
+                "map_dir": str(map_dir),
+                "pcd": str(pcd_path),
+                "slam_profile": resolved_slam_profile,
+                "source": capability_fields["map_save_source"],
+                "tomogram": tomo_result.get("tomogram"),
+                "tomogram_ok": False,
+                "tomogram_message": tomo_result.get("message", ""),
+                **capability_fields,
+            }
 
         # Step 3 — Build static 2D occupancy snapshot (optional, non-blocking)
         occ_result = self._build_occupancy_snapshot(name)
@@ -331,7 +351,7 @@ class MapManagerModule(Module, layer=6):
             "slam_profile": resolved_slam_profile,
             "source": capability_fields["map_save_source"],
             "tomogram": tomo_result.get("tomogram"),
-            "tomogram_ok": tomo_result.get("success", False),
+            "tomogram_ok": tomo_ok,
             "occupancy": occ_result.get("occupancy"),
             "occupancy_ok": occ_result.get("success", False),
             **capability_fields,

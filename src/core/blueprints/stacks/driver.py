@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def _ensure_drivers_registered():
     for mod in (
-        "drivers.thunder.han_dog_module",
+        "drivers.real.thunder.han_dog_module",
         "core.blueprints.stub",
         "drivers.sim.mujoco_driver_module",
         "drivers.sim.ros2_sim_driver",
@@ -38,6 +38,8 @@ def driver(robot: str = "thunder", **config) -> Blueprint:
     driver_config = dict(config)
     driver_config.setdefault("dog_host", cfg.driver.dog_host)
     driver_config.setdefault("dog_port", cfg.driver.dog_port)
+    driver_config.setdefault("auto_enable", cfg.driver.auto_enable)
+    driver_config.setdefault("auto_standup", cfg.driver.auto_standup)
     bp.add(DriverCls, **driver_config)
 
     # Camera bridge moved to perception() stack — only loaded when needed

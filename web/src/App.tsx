@@ -5,6 +5,7 @@ import { Topbar } from './components/Topbar'
 import { CameraFeed } from './components/CameraFeed'
 import { ChatPanel } from './components/ChatPanel'
 import { LocalizationCard } from './components/LocalizationCard'
+import { ReadinessCard } from './components/ReadinessCard'
 import { StatusBar } from './components/StatusBar'
 import { MapView } from './components/MapView'
 import { SlamPanel } from './components/SlamPanel'
@@ -72,9 +73,18 @@ function Dashboard() {
             </FloatingWidget>
 
             <FloatingWidget
+              id="readiness"
+              defaultPos={{ x: 1492, y: 396 }}
+              defaultSize={{ w: 400, h: 534 }}
+              minSize={{ w: 300, h: 300 }}
+            >
+              <ReadinessCard sseState={sseState} />
+            </FloatingWidget>
+
+            <FloatingWidget
               id="chat"
               defaultPos={{ x: 1016, y: 396 }}
-              defaultSize={{ w: 876, h: 534 }}
+              defaultSize={{ w: 460, h: 534 }}
               minSize={{ w: 340, h: 260 }}
             >
               <ChatPanel sseState={sseState} />

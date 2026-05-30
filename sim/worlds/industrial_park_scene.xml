@@ -1,0 +1,145 @@
+<!--
+  LingTu industrial park scene for product-grade MuJoCo live validation.
+
+  This scene is intentionally single-level. It is larger than
+  industrial_demo_scene.xml, contains several industrial zones and long routes,
+  and avoids the multi-floor basement geometry that makes factory_scene.xml a
+  localization stress case instead of a reliable product acceptance scene.
+-->
+<mujoco model="lingtu_industrial_park">
+  <compiler angle="radian" autolimits="true"/>
+  <option gravity="0 0 -9.81" timestep="0.002" integrator="RK4"/>
+
+  <visual>
+    <headlight diffuse="0.65 0.65 0.62" ambient="0.35 0.35 0.35" specular="0.0 0.0 0.0"/>
+    <rgba haze="0.12 0.15 0.18 1"/>
+    <global azimuth="-42" elevation="-24" fovy="55"/>
+  </visual>
+
+  <asset>
+    <material name="floor_mat" rgba=".58 .60 .58 1" shininess="0.02" specular="0.04"/>
+    <material name="road_mat" rgba=".32 .34 .34 1" shininess="0.02" specular="0.03"/>
+    <material name="wall_mat" rgba=".74 .72 .68 1" shininess="0.02" specular="0.05"/>
+    <material name="machine_mat" rgba=".25 .38 .46 1" shininess="0.06" specular="0.08"/>
+    <material name="shelf_mat" rgba=".46 .34 .22 1" shininess="0.03" specular="0.05"/>
+    <material name="barrel_mat" rgba=".72 .58 .12 1" shininess="0.04" specular="0.08"/>
+    <material name="container_blue" rgba=".18 .36 .58 1" shininess="0.03" specular="0.05"/>
+    <material name="container_orange" rgba=".64 .34 .14 1" shininess="0.03" specular="0.05"/>
+    <material name="column_mat" rgba=".42 .44 .46 1" shininess="0.03" specular="0.05"/>
+    <material name="robot_mat" rgba=".18 .38 .76 1"/>
+    <material name="start_mat" rgba=".15 .78 .28 0.85"/>
+    <material name="goal_mat" rgba=".90 .12 .12 0.90"/>
+  </asset>
+
+  <worldbody>
+    <geom name="ground_main" type="box" pos="30 20 -0.05" size="30 20 0.05"
+          material="floor_mat" conaffinity="1" condim="3"/>
+    <geom name="road_spine" type="box" pos="30 7 -0.035" size="28 2.0 0.025"
+          material="road_mat" conaffinity="1" contype="0"/>
+    <geom name="road_cross" type="box" pos="31 22 -0.033" size="2.2 15.5 0.025"
+          material="road_mat" conaffinity="1" contype="0"/>
+
+    <!-- Perimeter wall around the industrial park. -->
+    <geom name="wall_south" type="box" pos="30 0.10 1.80" size="30 0.10 1.80" material="wall_mat" conaffinity="1"/>
+    <geom name="wall_north" type="box" pos="30 39.90 1.80" size="30 0.10 1.80" material="wall_mat" conaffinity="1"/>
+    <geom name="wall_west" type="box" pos="0.10 20 1.80" size="0.10 20 1.80" material="wall_mat" conaffinity="1"/>
+    <geom name="wall_east" type="box" pos="59.90 20 1.80" size="0.10 20 1.80" material="wall_mat" conaffinity="1"/>
+
+    <!-- Overhead roof deck, beams, and pipe runs give the level MID-360 useful
+         vertical constraints without making the scene multi-floor. The broad
+         deck is intentional: MID-360 sees far more above the horizon than
+         below it on a flat floor, so sparse overhead geometry allows Z drift. -->
+    <geom name="roof_deck_main" type="box" pos="30 20 3.20" size="30 20 0.04"
+          rgba=".50 .53 .55 1" conaffinity="1" condim="3"/>
+    <geom name="roof_strip_west" type="box" pos="13 24 3.40" size="12 15 0.04"
+          rgba=".52 .55 .57 1" conaffinity="1" condim="3"/>
+    <geom name="roof_strip_east" type="box" pos="46 24 3.40" size="10 15 0.04"
+          rgba=".52 .55 .57 1" conaffinity="1" condim="3"/>
+    <geom name="beam_south_a" type="box" pos="12 8 2.60" size="7.0 0.08 0.08"
+          material="column_mat" conaffinity="1" condim="3"/>
+    <geom name="beam_south_b" type="box" pos="42 8 2.60" size="7.0 0.08 0.08"
+          material="column_mat" conaffinity="1" condim="3"/>
+    <geom name="beam_north_a" type="box" pos="14 30 2.75" size="7.5 0.08 0.08"
+          material="column_mat" conaffinity="1" condim="3"/>
+    <geom name="beam_north_b" type="box" pos="45 30 2.75" size="7.5 0.08 0.08"
+          material="column_mat" conaffinity="1" condim="3"/>
+    <geom name="pipe_run_west" type="cylinder" pos="14 21 2.82" size="0.07 13.0"
+          euler="1.5708 0 0" material="column_mat" conaffinity="1" condim="3"/>
+    <geom name="pipe_run_center" type="cylinder" pos="31 22 2.88" size="0.06 15.0"
+          euler="1.5708 0 0" material="column_mat" conaffinity="1" condim="3"/>
+    <geom name="pipe_run_east" type="cylinder" pos="47 22 2.82" size="0.07 13.0"
+          euler="1.5708 0 0" material="column_mat" conaffinity="1" condim="3"/>
+
+    <!-- Yard partitions with wide gates. -->
+    <geom name="partition_west_low" type="box" pos="18 4.5 1.45" size="0.10 4.5 1.45" material="wall_mat" conaffinity="1"/>
+    <geom name="partition_west_high" type="box" pos="18 27.0 1.45" size="0.10 13.0 1.45" material="wall_mat" conaffinity="1"/>
+    <geom name="partition_east_low" type="box" pos="38 6.0 1.45" size="0.10 6.0 1.45" material="wall_mat" conaffinity="1"/>
+    <geom name="partition_east_high" type="box" pos="38 29.0 1.45" size="0.10 11.0 1.45" material="wall_mat" conaffinity="1"/>
+    <geom name="south_yard_barrier_a" type="box" pos="9 13 0.80" size="5.0 0.08 0.80" material="machine_mat" conaffinity="1"/>
+    <geom name="south_yard_barrier_b" type="box" pos="50 13 0.80" size="5.0 0.08 0.80" material="machine_mat" conaffinity="1"/>
+
+    <!-- Columns and vertical features break up long planar corridors. -->
+    <geom name="col_a1" type="cylinder" pos="8 8 1.75" size="0.28 1.75" material="column_mat" conaffinity="1"/>
+    <geom name="col_a2" type="cylinder" pos="8 20 1.75" size="0.28 1.75" material="column_mat" conaffinity="1"/>
+    <geom name="col_a3" type="cylinder" pos="8 32 1.75" size="0.28 1.75" material="column_mat" conaffinity="1"/>
+    <geom name="col_b1" type="cylinder" pos="28 10 1.75" size="0.28 1.75" material="column_mat" conaffinity="1"/>
+    <geom name="col_b2" type="cylinder" pos="28 24 1.75" size="0.28 1.75" material="column_mat" conaffinity="1"/>
+    <geom name="col_b3" type="cylinder" pos="28 34 1.75" size="0.28 1.75" material="column_mat" conaffinity="1"/>
+    <geom name="col_c1" type="cylinder" pos="50 9 1.75" size="0.28 1.75" material="column_mat" conaffinity="1"/>
+    <geom name="col_c2" type="cylinder" pos="50 21 1.75" size="0.28 1.75" material="column_mat" conaffinity="1"/>
+    <geom name="col_c3" type="cylinder" pos="50 33 1.75" size="0.28 1.75" material="column_mat" conaffinity="1"/>
+
+    <!-- Start-side service zone. -->
+    <geom name="start_guardrail_1" type="box" pos="5.2 6.5 0.85" euler="0 0 0.55"
+          size="0.10 1.60 0.85" material="machine_mat" conaffinity="1" condim="3"/>
+    <geom name="start_guardrail_2" type="box" pos="8.0 3.0 0.85" euler="0 0 -0.45"
+          size="0.10 1.30 0.85" material="machine_mat" conaffinity="1" condim="3"/>
+    <geom name="start_crate" type="box" pos="6.2 2.0 0.38" size="0.55 0.60 0.38"
+          material="shelf_mat" conaffinity="1" condim="3"/>
+    <geom name="start_pump" type="cylinder" pos="11 5.4 0.65" size="0.45 0.65"
+          material="machine_mat" conaffinity="1" condim="3"/>
+
+    <!-- Container yard. -->
+    <geom name="container_a1" type="box" pos="8 17 1.20" size="2.4 1.10 1.20" material="container_blue" conaffinity="1"/>
+    <geom name="container_a2" type="box" pos="8 23 1.20" size="2.4 1.10 1.20" material="container_orange" conaffinity="1"/>
+    <geom name="container_a3" type="box" pos="13 28 1.20" size="2.4 1.10 1.20" material="container_blue" conaffinity="1"/>
+    <geom name="container_a4" type="box" pos="13 34 1.20" size="2.4 1.10 1.20" material="container_orange" conaffinity="1"/>
+
+    <!-- Central production island. -->
+    <geom name="machine_b1" type="box" pos="27 16 0.90" size="1.90 0.95 0.90" material="machine_mat" conaffinity="1" condim="3"/>
+    <geom name="machine_b1_top" type="box" pos="27.4 16.2 1.95" size="1.00 0.55 0.38" material="machine_mat" conaffinity="1" condim="3"/>
+    <geom name="machine_b2" type="box" pos="32 28 0.85" size="1.10 2.00 0.85" material="machine_mat" conaffinity="1" condim="3"/>
+    <geom name="conveyor_b1" type="box" pos="29.5 34 0.62" size="4.00 0.35 0.62" rgba=".18 .18 .18 1" conaffinity="1" condim="3"/>
+    <geom name="barrel_b1" type="cylinder" pos="23.5 11.0 0.55" size="0.32 0.55" material="barrel_mat" conaffinity="1" condim="3"/>
+    <geom name="barrel_b2" type="cylinder" pos="34.0 12.5 0.55" size="0.32 0.55" material="barrel_mat" conaffinity="1" condim="3"/>
+    <geom name="barrel_b3" type="cylinder" pos="35.2 25.0 0.55" size="0.32 0.55" material="barrel_mat" conaffinity="1" condim="3"/>
+
+    <!-- Warehouse and loading side. -->
+    <geom name="rack_c1" type="box" pos="45 6 1.10" size="0.45 2.30 1.10" material="shelf_mat" conaffinity="1" condim="3"/>
+    <geom name="rack_c2" type="box" pos="53 6 1.10" size="0.45 2.30 1.10" material="shelf_mat" conaffinity="1" condim="3"/>
+    <geom name="rack_c3" type="box" pos="45 17 1.10" size="0.45 2.30 1.10" material="shelf_mat" conaffinity="1" condim="3"/>
+    <geom name="rack_c4" type="box" pos="53 17 1.10" size="0.45 2.30 1.10" material="shelf_mat" conaffinity="1" condim="3"/>
+    <geom name="rack_c5" type="box" pos="45 29 1.10" size="0.45 2.30 1.10" material="shelf_mat" conaffinity="1" condim="3"/>
+    <geom name="rack_c6" type="box" pos="53 29 1.10" size="0.45 2.30 1.10" material="shelf_mat" conaffinity="1" condim="3"/>
+    <geom name="forklift_body" type="box" pos="48 36 0.45" size="0.85 0.55 0.45" rgba=".90 .62 .05 1" conaffinity="1"/>
+    <geom name="forklift_mast" type="box" pos="48.8 36 1.20" size="0.12 0.45 1.20" rgba=".35 .35 .35 1" conaffinity="1"/>
+    <geom name="pallet_c1" type="box" pos="55 34 0.18" size="0.90 0.65 0.18" material="shelf_mat" conaffinity="1" condim="3"/>
+    <geom name="crate_c1" type="box" pos="55 34 0.68" size="0.70 0.52 0.32" rgba=".55 .42 .28 1" conaffinity="1" condim="3"/>
+
+    <geom name="start_disk" type="cylinder" pos="3.0 4.0 0.01" size="0.70 0.01"
+          material="start_mat" conaffinity="0" contype="0"/>
+    <geom name="goal_disk" type="cylinder" pos="56.0 32.0 0.01" size="0.70 0.01"
+          material="goal_mat" conaffinity="0" contype="0"/>
+
+    <body name="robot_placeholder" pos="3.0 4.0 0.50">
+      <freejoint name="robot_root"/>
+      <geom name="chassis" type="box" size="0.42 0.28 0.10"
+            material="robot_mat" mass="22" conaffinity="1"/>
+      <inertial pos="0 0 0" mass="22" diaginertia="0.78 1.18 1.18"/>
+    </body>
+
+    <light name="sun" pos="16 -8 24" dir="-.2 .2 -1" diffuse=".75 .75 .70" specular=".08 .08 .08"/>
+    <light name="fill_west" pos="10 28 8" dir=".2 -.5 -1" diffuse=".30 .32 .34"/>
+    <light name="fill_east" pos="50 18 8" dir="-.5 .1 -1" diffuse=".28 .28 .25"/>
+  </worldbody>
+</mujoco>

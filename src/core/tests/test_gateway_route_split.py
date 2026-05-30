@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import shutil
 import tarfile
 import threading
@@ -92,6 +93,7 @@ def test_status_routes_register_expected_paths():
     assert "/api/v1/state" in paths
     assert "/api/v1/scene_graph" in paths
     assert "/api/v1/locations" in paths
+    assert "/api/v1/locations/{name}" in paths
     assert "/api/v1/path" in paths
     assert "/api/v1/localization/status" in paths
     assert "/api/v1/navigation/status" in paths
@@ -220,6 +222,7 @@ def test_command_routes_register_expected_paths():
 
     routes = {getattr(route, "path", ""): route for route in app.routes}
     assert "/api/v1/navigation/plan" in routes
+    assert "/api/v1/navigation/goal_candidate" in routes
     assert "/api/v1/goal" in routes
     assert "/api/v1/navigate/click" in routes
     assert "/api/v1/cmd_vel" in routes
@@ -280,13 +283,115 @@ def test_diagnostic_routes_export_tarball(monkeypatch):
             names = set(tar.getnames())
             assert "diag/modules.json" in names
             assert "diag/health.json" in names
+            assert "diag/app_web_snapshots.json" in names
+            assert "diag/app_web/readiness.json" in names
+            assert "diag/app_web/state.json" in names
+            assert "diag/app_web/bootstrap.json" in names
+            assert "diag/app_web/capabilities.json" in names
+            assert "diag/app_web/traffic.json" in names
+            assert "diag/app_web/media.json" in names
+            assert "diag/app_web/session.json" in names
+            assert "diag/app_web/maps.json" in names
+            assert "diag/app_web/commands.json" in names
+            assert "diag/app_web/routecheck.json" in names
+            assert "diag/app_web/frame_contract.json" in names
             modules_file = tar.extractfile("diag/modules.json")
             assert modules_file is not None
             modules = json.loads(modules_file.read().decode("utf-8"))
             assert modules["healthy"] == {"ok": True}
+            readiness_file = tar.extractfile("diag/app_web/readiness.json")
+            assert readiness_file is not None
+            readiness = json.loads(readiness_file.read().decode("utf-8"))
+            assert readiness["ok"] is True
+            assert readiness["data"]["schema_version"] == 1
+            assert readiness["data"]["status"] in {"ready", "degraded", "not_started"}
         assert list(temp_root.glob("diag_*.tar.gz")) == []
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_diagnostic_app_web_snapshots_cover_client_startup_surfaces():
+    from gateway.gateway_module import GatewayModule
+    from gateway.routes.diagnostics import _build_app_web_snapshots
+
+    gateway = GatewayModule()
+    gateway.setup()
+
+    snapshots = _build_app_web_snapshots(gateway)
+    expected = {
+        "bootstrap",
+        "capabilities",
+        "traffic",
+        "readiness",
+        "state",
+        "localization",
+        "navigation",
+        "path",
+        "scene_graph",
+        "locations",
+        "media",
+        "session",
+        "maps",
+        "commands",
+        "routecheck",
+        "frame_contract",
+    }
+
+    assert expected <= set(snapshots)
+    for name in expected:
+        assert "ok" in snapshots[name]
+
+    assert snapshots["bootstrap"]["ok"] is True
+    assert snapshots["bootstrap"]["data"]["links"]["diagnostic_pack"] == (
+        "/api/v1/diagnostic_pack"
+    )
+    assert snapshots["capabilities"]["ok"] is True
+    assert snapshots["capabilities"]["data"]["endpoints"]["app"]["bootstrap"][
+        "response_schema"
+    ] == "AppBootstrapResponse"
+    assert snapshots["traffic"]["ok"] is True
+    assert snapshots["traffic"]["data"]["client_policy"]["events_endpoint"] == (
+        "/api/v1/events"
+    )
+    assert snapshots["media"]["ok"] is True
+    assert snapshots["session"]["ok"] is True
+    assert snapshots["maps"]["ok"] is True
+    assert snapshots["commands"]["ok"] is True
+    assert snapshots["commands"]["data"]["idempotency_supported"] is True
+    assert snapshots["routecheck"]["ok"] is True
+    assert snapshots["routecheck"]["data"]["schema_version"] == 1
+    assert snapshots["frame_contract"]["ok"] is True
+    frame_contract = snapshots["frame_contract"]["data"]
+    assert frame_contract["contract"]["exists"] is True
+    assert frame_contract["expected"]["map_frame"] == "map"
+    assert frame_contract["expected"]["odom_frame"] == "odom"
+    assert frame_contract["expected"]["body_frame"] == "body"
+    assert frame_contract["navigation_frames"]["planning_frame_id"] == "map"
+
+
+def test_diagnostic_frame_contract_reports_navigation_mismatches():
+    from gateway.gateway_module import GatewayModule
+    from gateway.routes.diagnostics import _frame_contract_snapshot
+
+    gateway = GatewayModule()
+    gateway.setup()
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0, "y": 0.0, "frame_id": "odom"}
+        gateway._mission = {
+            "state": "EXECUTING",
+            "planning_frame_id": "map",
+            "goal_frame_id": "map",
+        }
+
+    snapshot = _frame_contract_snapshot(gateway)
+
+    assert snapshot["ok"] is False
+    assert snapshot["expected"]["map_frame"] == "map"
+    assert {
+        "source": "odometry",
+        "expected_frame": "map",
+        "received_frame": "odom",
+    } in snapshot["mismatches"]
 
 
 def test_gateway_module_builds_split_routes_once():
@@ -297,14 +402,19 @@ def test_gateway_module_builds_split_routes_once():
 
     counts = Counter(getattr(route, "path", "") for route in gateway._app.routes)
     assert counts["/api/v1/app/bootstrap"] == 1
+    assert counts["/api/v1/bootstrap"] == 1
     assert counts["/api/v1/app/capabilities"] == 1
     assert counts["/api/v1/auth/login"] == 1
     assert counts["/api/v1/auth/check"] == 1
     assert counts["/api/v1/diagnostic_pack"] == 1
+    assert counts["/api/v1/diagnostics/routecheck/latest"] == 1
     assert counts["/api/v1/events"] == 1
     assert counts["/api/v1/state"] == 1
+    assert counts["/api/v1/locations"] == 2
+    assert counts["/api/v1/locations/{name}"] == 2
     assert counts["/api/v1/localization/status"] == 1
     assert counts["/api/v1/navigation/status"] == 1
+    assert counts["/api/v1/navigation"] == 1
     assert counts["/api/v1/health"] == 1
     assert counts["/health"] == 1
     assert counts["/ready"] == 1
@@ -315,6 +425,7 @@ def test_gateway_module_builds_split_routes_once():
     assert counts["/api/v1/map/points"] == 1
     assert counts["/api/v1/map_cloud/reset"] == 1
     assert counts["/api/v1/navigation/plan"] == 1
+    assert counts["/api/v1/navigation/goal_candidate"] == 1
     assert counts["/api/v1/goal"] == 1
     assert counts["/api/v1/navigate/click"] == 1
     assert counts["/api/v1/cmd_vel"] == 1
@@ -343,6 +454,7 @@ def test_gateway_module_keeps_client_route_inventory():
         "/api/v1/state",
         "/api/v1/scene_graph",
         "/api/v1/locations",
+        "/api/v1/locations/{name}",
         "/api/v1/path",
         "/api/v1/localization/status",
         "/api/v1/navigation/status",
@@ -352,6 +464,7 @@ def test_gateway_module_keeps_client_route_inventory():
         "/ready",
         "/api/v1/session",
         "/api/v1/diagnostic_pack",
+        "/api/v1/diagnostics/routecheck/latest",
         "/api/v1/events",
         "/api/v1/maps",
         "/api/v1/slam/maps",
@@ -359,6 +472,7 @@ def test_gateway_module_keeps_client_route_inventory():
         "/api/v1/maps/{name}/points",
         "/api/v1/map_cloud/reset",
         "/api/v1/navigation/plan",
+        "/api/v1/navigation/goal_candidate",
         "/api/v1/goal",
         "/api/v1/navigate/click",
         "/api/v1/cmd_vel",
@@ -399,6 +513,80 @@ def test_capabilities_manifest_paths_exist_in_gateway_routes():
     assert manifest_paths <= route_paths
     assert capabilities["endpoints"]["realtime"]["camera"]["path"] == "/ws/camera"
     assert capabilities["endpoints"]["realtime"]["camera"]["method"] == "WS"
+
+
+def test_routecheck_latest_diagnostic_reads_latest_summary(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from gateway.routes.diagnostics import (
+        build_routecheck_latest_summary,
+        register_diagnostic_routes,
+    )
+
+    old_dir = tmp_path / "super_lio_route_preflight_old"
+    new_dir = tmp_path / "super_lio_route_preflight_new"
+    old_dir.mkdir()
+    new_dir.mkdir()
+    (old_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "mode": "routecheck_non_motion",
+                "outcome": "fail",
+                "non_motion": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    new_summary = {
+        "schema_version": 1,
+        "mode": "routecheck_non_motion",
+        "outcome": "pass",
+        "non_motion": True,
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "gateway_used": True,
+        "driver_used": False,
+        "published": {"goal_pose": 0, "cmd_vel": 0, "stop_cmd": 0},
+        "phases": {"baseline": {"selected_planner": "pct"}},
+    }
+    (new_dir / "summary.json").write_text(
+        json.dumps(new_summary),
+        encoding="utf-8",
+    )
+    os.utime(old_dir / "summary.json", (1, 1))
+    os.utime(new_dir / "summary.json", (2, 2))
+
+    payload = build_routecheck_latest_summary(tmp_path)
+    assert payload["ok"] is True
+    assert payload["count"] == 2
+    assert payload["artifact_dir"] == str(new_dir)
+    assert payload["report_mtime"] == 2
+    assert payload["report_age_s"] >= 0.0
+    assert payload["non_motion"] is True
+    assert payload["simulation_only"] is True
+    assert payload["real_robot_motion"] is False
+    assert payload["cmd_vel_sent_to_hardware"] is False
+    assert payload["gateway_used"] is True
+    assert payload["driver_used"] is False
+    assert payload["published"] == {"goal_pose": 0, "cmd_vel": 0, "stop_cmd": 0}
+    assert payload["latest"]["outcome"] == "pass"
+    assert payload["latest"]["phases"]["baseline"]["selected_planner"] == "pct"
+
+    monkeypatch.setenv("LINGTU_ROUTECHECK_ARTIFACT_ROOT", str(tmp_path))
+    app = FastAPI()
+    register_diagnostic_routes(app, SimpleNamespace(_all_modules={}))
+    response = TestClient(app).get("/api/v1/diagnostics/routecheck/latest")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema_version"] == 1
+    assert body["ok"] is True
+    assert body["report_mtime"] == 2
+    assert body["non_motion"] is True
+    assert body["published"]["cmd_vel"] == 0
+    assert body["latest"]["outcome"] == "pass"
 
 
 def _schema_ref_for(
@@ -458,8 +646,12 @@ def test_openapi_exposes_client_response_models():
     assert "LivenessResponse" in schemas
     assert "ControlCommandResponse" in schemas
     assert "GatewayErrorResponse" in schemas
+    assert "RoutecheckLatestResponse" in schemas
     assert "CommandReceipt" in schemas
     assert "CancelRequest" in schemas
+    assert "GoalCandidateRequest" in schemas
+    assert "GoalCandidateResponse" in schemas
+    assert "ConstructedGoalTarget" in schemas
     assert "PlanPreviewRequest" in schemas
     assert "PlanPreviewResponse" in schemas
     assert "SceneGraphResponse" in schemas
@@ -468,6 +660,8 @@ def test_openapi_exposes_client_response_models():
     assert "SceneGraphRegion" in schemas
     assert "LocationsResponse" in schemas
     assert "LocationEntry" in schemas
+    assert "LocationUpsertRequest" in schemas
+    assert "LocationOperationResponse" in schemas
     assert "PathResponse" in schemas
     assert "PathPoint" in schemas
     assert "RobotPoseSummary" in schemas
@@ -548,7 +742,25 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(openapi, "/api/v1/locations").endswith(
         "/LocationsResponse"
     )
+    assert _schema_ref_for(
+        openapi, "/api/v1/locations", method="post"
+    ).endswith("/LocationOperationResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/locations"
+    ).endswith("/LocationUpsertRequest")
+    assert _schema_ref_for(
+        openapi, "/api/v1/locations/{name}", method="put"
+    ).endswith("/LocationOperationResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/locations/{name}", method="put"
+    ).endswith("/LocationUpsertRequest")
+    assert _schema_ref_for(
+        openapi, "/api/v1/locations/{name}", method="delete"
+    ).endswith("/LocationOperationResponse")
     assert _schema_ref_for(openapi, "/api/v1/path").endswith("/PathResponse")
+    assert _schema_ref_for(
+        openapi, "/api/v1/diagnostics/routecheck/latest"
+    ).endswith("/RoutecheckLatestResponse")
     assert _schema_ref_for(openapi, "/api/v1/localization/status").endswith(
         "/LocalizationStatusResponse"
     )
@@ -558,6 +770,12 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/goal", method="post"
     ).endswith("/ControlCommandResponse")
+    assert _schema_ref_for(
+        openapi, "/api/v1/navigation/goal_candidate", method="post"
+    ).endswith("/GoalCandidateResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/navigation/goal_candidate"
+    ).endswith("/GoalCandidateRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/navigation/plan", method="post"
     ).endswith("/PlanPreviewResponse")
@@ -750,6 +968,12 @@ def test_openapi_exposes_client_response_models():
     assert schemas["LocationsResponse"]["properties"]["locations"]["items"][
         "$ref"
     ].endswith("/LocationEntry")
+    assert schemas["LocationOperationResponse"]["properties"]["location"]["anyOf"][0][
+        "$ref"
+    ].endswith("/LocationEntry")
+    assert schemas["LocationOperationResponse"]["properties"]["locations"]["$ref"].endswith(
+        "/LocationsResponse"
+    )
     assert schemas["PathResponse"]["properties"]["path"]["items"]["$ref"].endswith(
         "/PathPoint"
     )
@@ -759,6 +983,17 @@ def test_openapi_exposes_client_response_models():
     assert schemas["PlanPreviewResponse"]["properties"]["path"]["items"][
         "$ref"
     ].endswith("/PathPoint")
+    assert "selected_planner" in schemas["PlanPreviewResponse"]["properties"]
+    assert "plan_safety_policy" in schemas["PlanPreviewResponse"]["properties"]
+    assert "path_safety" in schemas["PlanPreviewResponse"]["properties"]
+    assert "fallback_reason" in schemas["PlanPreviewResponse"]["properties"]
+    assert "rejected_plans" in schemas["PlanPreviewResponse"]["properties"]
+    assert schemas["GoalCandidateResponse"]["properties"]["target"]["anyOf"][0][
+        "$ref"
+    ].endswith("/ConstructedGoalTarget")
+    assert schemas["GoalCandidateResponse"]["properties"]["preview"]["anyOf"][0][
+        "$ref"
+    ].endswith("/PlanPreviewResponse")
     assert schemas["NavigationStatusResponse"]["properties"]["control"]["$ref"].endswith(
         "/NavigationControlSummary"
     )
@@ -783,6 +1018,14 @@ def test_openapi_exposes_client_response_models():
     assert schemas["NavigationDiagnosticsSummary"]["properties"]["frame_mismatches"][
         "items"
     ]["$ref"].endswith("/NavigationFrameMismatch")
+    assert (
+        "plan_safety_policy"
+        in schemas["NavigationDiagnosticsSummary"]["properties"]
+    )
+    assert (
+        "last_plan_report"
+        in schemas["NavigationDiagnosticsSummary"]["properties"]
+    )
     assert schemas["AppTrafficResponse"]["properties"]["sse"]["$ref"].endswith(
         "/TrafficSSEStats"
     )
@@ -793,6 +1036,9 @@ def test_openapi_exposes_client_response_models():
     assert "ok" in schemas["ControlCommandResponse"]["properties"]
     assert "yaw" in schemas["ControlCommandResponse"]["properties"]
     assert "reason" in schemas["ControlCommandResponse"]["properties"]
+    assert schemas["ControlCommandResponse"]["properties"]["target"]["anyOf"][0][
+        "$ref"
+    ].endswith("/ConstructedGoalTarget")
     assert schemas["ControlCommandResponse"]["properties"]["command"]["$ref"].endswith(
         "/CommandReceipt"
     )
@@ -848,6 +1094,9 @@ def test_capabilities_manifest_http_paths_exist_in_openapi():
         capabilities["endpoints"]["state"]["snapshot"],
         capabilities["endpoints"]["state"]["scene_graph"],
         capabilities["endpoints"]["state"]["locations"],
+        capabilities["endpoints"]["state"]["location_create"],
+        capabilities["endpoints"]["state"]["location_update"],
+        capabilities["endpoints"]["state"]["location_delete"],
         capabilities["endpoints"]["state"]["path"],
         capabilities["endpoints"]["state"]["localization_status"],
         capabilities["endpoints"]["state"]["navigation_status"],
@@ -858,7 +1107,9 @@ def test_capabilities_manifest_http_paths_exist_in_openapi():
         capabilities["endpoints"]["app"]["traffic"],
         capabilities["endpoints"]["auth"]["login"],
         capabilities["endpoints"]["auth"]["check"],
+        capabilities["endpoints"]["control"]["navigation_goal_candidate"],
         capabilities["endpoints"]["control"]["navigation_plan"],
+        capabilities["endpoints"]["ops"]["routecheck_latest"],
     ]
     for spec in key_specs:
         assert spec["response_schema"]

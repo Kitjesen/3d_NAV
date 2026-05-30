@@ -102,12 +102,20 @@ class TestTSDFColorVolumeInterface:
         for key in list(sys.modules):
             if "open3d" in key:
                 saved[key] = sys.modules.pop(key)
+        real_import = __import__
+
+        def block_open3d_import(name, *args, **kwargs):
+            if name == "open3d" or name.startswith("open3d."):
+                raise ImportError("open3d hidden for test")
+            return real_import(name, *args, **kwargs)
+
         try:
             if "semantic.reconstruction.reconstruction_module" in sys.modules:
                 del sys.modules["semantic.reconstruction.reconstruction_module"]
             from semantic.reconstruction.reconstruction_module import TSDFColorVolume
-            with pytest.raises(RuntimeError, match="open3d"):
-                TSDFColorVolume()
+            with patch("builtins.__import__", side_effect=block_open3d_import):
+                with pytest.raises(RuntimeError, match="open3d"):
+                    TSDFColorVolume()
         finally:
             sys.modules.update(saved)
 

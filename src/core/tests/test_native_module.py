@@ -55,6 +55,18 @@ class TestNativeModuleConfig(unittest.TestCase):
         self.assertIn("-r", args)
         self.assertIn("/old:=/new", args)
 
+    def test_to_ros_args_parameter_files_precede_overrides(self):
+        cfg = _make_config(
+            parameter_files=["/tmp/tare.yaml"],
+            parameters={"kAutoStart": False},
+            remappings={"/old": "/new"},
+        )
+        args = cfg.to_ros_args()
+        self.assertEqual(args[0], "--ros-args")
+        self.assertEqual(args[1:3], ["--params-file", "/tmp/tare.yaml"])
+        self.assertLess(args.index("--params-file"), args.index("-p"))
+        self.assertIn("kAutoStart:=false", args)
+
     def test_to_ros_args_empty(self):
         cfg = _make_config(parameters={}, remappings={})
         self.assertEqual(cfg.to_ros_args(), [])

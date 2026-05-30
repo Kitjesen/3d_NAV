@@ -22,6 +22,7 @@ from core.blueprint import Blueprint, SystemHandle, autoconnect
 from core.module import Module, rpc, skill
 from core.msgs.geometry import PoseStamped, Vector3
 from core.msgs.semantic import Detection3D, GoalResult, SceneGraph
+from core.runtime_interface import TOPICS
 from core.stream import In, LocalTransport, Out
 
 # ============================================================================
@@ -380,12 +381,12 @@ class TestOutWithTransport:
         """Out 绑定 Transport 后，publish 同时发送到传输层。"""
         transport = LocalTransport()
         out = Out(SceneGraph, "scene_graph")
-        out._bind_transport(transport, "/nav/scene_graph")
+        out._bind_transport(transport, TOPICS.semantic_scene_graph)
 
         received_local = []
         received_transport = []
         out._add_callback(received_local.append)
-        transport.subscribe("/nav/scene_graph", received_transport.append)
+        transport.subscribe(TOPICS.semantic_scene_graph, received_transport.append)
 
         sg = SceneGraph()
         out.publish(sg)

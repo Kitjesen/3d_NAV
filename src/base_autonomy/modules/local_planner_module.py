@@ -2,6 +2,18 @@
 
 Takes terrain map + waypoint + odometry, produces obstacle-free local path.
 
+NAV COMPUTE CONTRACT (docs/architecture/NAVIGATION_COMPUTE_CONTRACT.md):
+  This module owns the L2 LOCAL PLANNING layer.
+    - MAIN INPUT  : terrain_map (+ boundary + added_obstacles) — local geometry.
+    - MAIN OUTPUT : local_path (+ control_hint).
+    - ALGORITHM   : CMU / nav_core point-cloud voxel scoring (NOT costmap
+                    rolling optimisation — this is not a DWA/TEB planner).
+  `fused_cost`/`costmap` is a GLOBAL-gating signal and is intentionally NOT a
+  primary scoring input here. The `esdf` In port is a RESERVED extension point:
+  nav_core's LocalPlannerCore has no set_esdf binding yet, so _on_esdf only
+  caches the field — it does NOT influence scoring. See contract §5 before
+  claiming ESDF affects local planning.
+
 Backends:
   "nanobind" — C++ LocalPlannerCore via nanobind (full CMU scoring, zero ROS2) [PREFERRED]
   "cmu"      — C++ local_planner (NativeModule subprocess, needs ROS2)
@@ -51,6 +63,7 @@ _PATH_SCALE           = 1.0   # pathScale_ default
 _PATH_RANGE           = 3.5   # adjacentRange_ default — scan radius in metres
 _DIR_THRE             = 90.0  # degrees — max allowed direction deviation
 _GOAL_CLEAR_RANGE     = 0.5   # m
+_MIN_TRACKABLE_LOCAL_PATH_XY = 0.30
 
 
 def _load_paths(paths_dir: str) -> dict | None:
@@ -323,13 +336,16 @@ class LocalPlannerModule(Module, layer=2):
     odometry:    In[Odometry]
     terrain_map: In[PointCloud2]
     waypoint:    In[PoseStamped]
+    global_path: In[list]
     clear_path:  In[bool]
+    map_frame_jump_event: In[dict]
     boundary:    In[PointCloud2]
     added_obstacles: In[PointCloud2]
     esdf:        In[dict]       # ESDF distance field + gradients for smoother scoring
 
     # -- Outputs --
     local_path: Out[Path]
+    control_hint: Out[dict]
     alive:      Out[bool]
 
     def __init__(self, backend: str = "cmu", **kw):
@@ -339,6 +355,19 @@ class LocalPlannerModule(Module, layer=2):
         self._robot_pos = np.zeros(3)
         self._robot_yaw = 0.0
         self._latest_waypoint: PoseStamped | None = None
+        self._global_path_points: np.ndarray | None = None
+        self._path_frame_id = "map"
+        self._corridor_lookahead_m = float(kw.get("corridor_lookahead_m", 3.0))
+        self._allow_direct_track_fallback = bool(
+            kw.get("allow_direct_track_fallback", False)
+        )
+        self._ignore_near_field_stop = bool(kw.get("ignore_near_field_stop", False))
+        self._direct_track_fallback_min_distance_m = float(
+            kw.get("direct_track_fallback_min_distance_m", _MIN_TRACKABLE_LOCAL_PATH_XY)
+        )
+        self._min_trackable_local_path_xy = float(
+            kw.get("min_trackable_local_path_m", _MIN_TRACKABLE_LOCAL_PATH_XY)
+        )
         self._terrain_points: np.ndarray | None = None
         self._boundary_points: np.ndarray | None = None
         self._added_obstacle_points: np.ndarray | None = None
@@ -357,6 +386,10 @@ class LocalPlannerModule(Module, layer=2):
         # One-shot warning flags
         self._warned_no_core: bool = False
         self._warned_no_path_data: bool = False
+        self._last_control_hint: dict[str, Any] = {}
+        self._last_local_path_points: int = 0
+        self._last_local_path_span_m: float = 0.0
+        self._last_direct_track_fallback_ts: float = 0.0
 
         # W2-6: cmu_py grid parameters — pulled from config at setup() if the
         # `local_planner_grid` section is present, otherwise keep CMU defaults.
@@ -393,7 +426,9 @@ class LocalPlannerModule(Module, layer=2):
         self.terrain_map.subscribe(self._on_terrain)
         self.terrain_map.set_policy("latest")
         self.waypoint.subscribe(self._on_waypoint)
+        self.global_path.subscribe(self._on_global_path)
         self.clear_path.subscribe(self._on_clear_path)
+        self.map_frame_jump_event.subscribe(self._on_map_frame_jump)
         self.boundary.subscribe(self._on_boundary)
         self.boundary.set_policy("latest")
         self.added_obstacles.subscribe(self._on_added_obstacles)
@@ -416,10 +451,10 @@ class LocalPlannerModule(Module, layer=2):
 
     def _setup_nanobind(self):
         """C++ LocalPlannerCore via nanobind — full CMU scoring in-process, zero ROS2."""
-        _nav_core = try_import_nav_core()
+        _nav_core = try_import_nav_core(("LocalPlannerParams", "LocalPlannerCore"))
         if _nav_core is None:
             raise RuntimeError(
-                f"LocalPlannerModule [nanobind]: _nav_core.so not found. "
+                f"LocalPlannerModule [nanobind]: compatible _nav_core not found. "
                 f"Build the C++ backend or explicitly choose backend='cmu_py' / 'simple'.\n"
                 f"  To build: {nav_core_build_hint()}"
             )
@@ -456,7 +491,7 @@ class LocalPlannerModule(Module, layer=2):
         except Exception as e:
             raise RuntimeError(
                 f"LocalPlannerModule [nanobind]: _nav_core init failed: {e}. "
-                f"Install _nav_core.so or explicitly choose backend='cmu_py' / 'simple'."
+                f"Rebuild _nav_core or explicitly choose backend='cmu_py' / 'simple'."
             ) from e
 
     def _setup_cmu(self):
@@ -570,12 +605,111 @@ class LocalPlannerModule(Module, layer=2):
         if cloud.points is not None:
             self._added_obstacle_points = cloud.points
 
+    def _coerce_path_point(self, point: Any) -> np.ndarray | None:
+        if isinstance(point, PoseStamped):
+            return np.array([point.x, point.y, point.z], dtype=float)
+        pose = getattr(point, "pose", None)
+        if pose is not None and hasattr(pose, "position"):
+            pos = pose.position
+            return np.array([
+                float(getattr(pos, "x", 0.0)),
+                float(getattr(pos, "y", 0.0)),
+                float(getattr(pos, "z", 0.0)),
+            ], dtype=float)
+        if isinstance(point, dict):
+            if "pose" in point and isinstance(point["pose"], dict):
+                return self._coerce_path_point(point["pose"])
+            if "position" in point:
+                return self._coerce_path_point(point["position"])
+            if "x" in point and "y" in point:
+                return np.array([
+                    float(point.get("x", 0.0)),
+                    float(point.get("y", 0.0)),
+                    float(point.get("z", 0.0)),
+                ], dtype=float)
+        try:
+            arr = np.asarray(point, dtype=float).reshape(-1)
+        except (TypeError, ValueError):
+            return None
+        if arr.size < 2 or not np.all(np.isfinite(arr[:2])):
+            return None
+        out = np.zeros(3, dtype=float)
+        out[: min(arr.size, 3)] = arr[: min(arr.size, 3)]
+        return out
+
+    def _on_global_path(self, path: Any) -> None:
+        frame_id = getattr(path, "frame_id", None)
+        if frame_id:
+            self._path_frame_id = str(frame_id)
+        points_src = getattr(path, "poses", path)
+        points = []
+        try:
+            iterator = iter(points_src)
+        except TypeError:
+            iterator = iter(())
+        for item in iterator:
+            point = self._coerce_path_point(item)
+            if point is not None:
+                points.append(point)
+        self._global_path_points = (
+            np.asarray(points, dtype=float) if points else None
+        )
+
+    def _clear_local_plan(self) -> None:
+        self._latest_waypoint = None
+        self._global_path_points = None
+        self._publish_control_hint(reason="clear_path")
+        self._publish_local_path([])
+
+    def _on_map_frame_jump(self, event: dict) -> None:
+        if isinstance(event, dict):
+            self._clear_local_plan()
+
+    def _waypoint_goal(self, wp: PoseStamped) -> np.ndarray:
+        return np.array([
+            wp.pose.position.x,
+            wp.pose.position.y,
+            wp.pose.position.z,
+        ], dtype=float)
+
+    def _effective_goal(self, wp: PoseStamped) -> np.ndarray:
+        return self._select_corridor_goal(self._waypoint_goal(wp))
+
+    def _select_corridor_goal(self, fallback_goal: np.ndarray) -> np.ndarray:
+        points = self._global_path_points
+        if points is None or len(points) < 2:
+            return fallback_goal
+        robot_xy = self._robot_pos[:2]
+        dists = np.linalg.norm(points[:, :2] - robot_xy, axis=1)
+        if not np.all(np.isfinite(dists)):
+            return fallback_goal
+        idx = int(np.argmin(dists))
+        if idx >= len(points) - 1:
+            return fallback_goal
+
+        remaining = max(0.1, self._corridor_lookahead_m)
+        cursor = points[idx].astype(float, copy=True)
+        for next_idx in range(idx + 1, len(points)):
+            target = points[next_idx].astype(float, copy=False)
+            segment = target - cursor
+            seg_len = float(np.linalg.norm(segment[:2]))
+            if seg_len <= 1e-6:
+                cursor = target.astype(float, copy=True)
+                continue
+            if remaining <= seg_len:
+                return cursor + segment * (remaining / seg_len)
+            remaining -= seg_len
+            cursor = target.astype(float, copy=True)
+        return fallback_goal
+
     def _on_waypoint(self, wp: PoseStamped):
         """Store waypoint; simple backend generates path immediately."""
         self._latest_waypoint = wp
+        if wp is not None:
+            self._path_frame_id = wp.frame_id or self._path_frame_id
 
         if self._backend == "simple" and wp is not None:
-            goal = np.array([wp.pose.position.x, wp.pose.position.y, 0.0])
+            goal = self._effective_goal(wp)
             path_points = self._straight_line(self._robot_pos, goal, step=0.5)
             poses = [
                 PoseStamped(
@@ -583,17 +717,19 @@ class LocalPlannerModule(Module, layer=2):
                         position=Vector3(p[0], p[1], p[2]),
                         orientation=Quaternion(0, 0, 0, 1),
                     ),
-                    frame_id="map",
+                    frame_id=self._path_frame_id,
                 )
                 for p in path_points
             ]
-            self.local_path.publish(Path(poses=poses))
+            self._publish_local_path(poses)
+            self._publish_control_hint(reason="simple_path")
+        elif self._backend == "nanobind" and wp is not None and self._core is not None:
+            self._run_nanobind(float(getattr(wp, "ts", 0.0) or time.time()))
 
     def _on_clear_path(self, clear: bool) -> None:
         if not clear:
             return
-        self._latest_waypoint = None
-        self.local_path.publish(Path(poses=[], frame_id="map"))
+        self._clear_local_plan()
 
     # ------------------------------------------------------------------ #
     # nanobind C++ scorer (full CMU algorithm, in-process)                 #
@@ -647,29 +783,88 @@ class LocalPlannerModule(Module, layer=2):
         self._core.set_vehicle(
             self._robot_pos[0], self._robot_pos[1], self._robot_pos[2],
             self._robot_yaw)
-        self._core.set_goal(wp.pose.position.x, wp.pose.position.y)
+        goal = self._effective_goal(wp)
+        self._core.set_goal(float(goal[0]), float(goal[1]))
 
         merged = self._merge_obstacle_clouds()
         obs_flat = merged.ravel().tolist() if merged.shape[0] > 0 else []
 
         result = self._core.plan(obs_flat, timestamp)
+        self._publish_control_hint(
+            slow_down=int(getattr(result, "slow_down", 0) or 0),
+            near_field_stop=bool(getattr(result, "near_field_stop", False)),
+            path_found=bool(getattr(result, "path_found", True)),
+            recovery_state=int(getattr(result, "recovery_state", 0) or 0),
+            reason="nanobind",
+        )
 
-        if result.path:
-            poses = []
-            cos_yaw = math.cos(self._robot_yaw)
-            sin_yaw = math.sin(self._robot_yaw)
-            for v in result.path:
-                wx = v.x * cos_yaw - v.y * sin_yaw + self._robot_pos[0]
-                wy = v.x * sin_yaw + v.y * cos_yaw + self._robot_pos[1]
-                wz = v.z + self._robot_pos[2]
-                poses.append(PoseStamped(
-                    pose=Pose(
-                        position=Vector3(wx, wy, wz),
-                        orientation=Quaternion(0, 0, 0, 1),
-                    ),
-                    frame_id="map",
-                ))
-            self.local_path.publish(Path(poses=poses))
+        if not result.path:
+            if self._publish_direct_track_fallback(
+                near_field_stop=bool(getattr(result, "near_field_stop", False)),
+                path_found=bool(getattr(result, "path_found", False)),
+                recovery_state=int(getattr(result, "recovery_state", 0) or 0),
+                reason="no_local_path",
+            ):
+                return
+            self._publish_control_hint(
+                slow_down=int(getattr(result, "slow_down", 0) or 0),
+                near_field_stop=bool(getattr(result, "near_field_stop", False)),
+                path_found=bool(getattr(result, "path_found", False)),
+                recovery_state=int(getattr(result, "recovery_state", 0) or 0),
+                safety_stop=True,
+                reason="no_local_path",
+            )
+            self._publish_local_path([])
+            return
+
+        raw_xy = np.asarray([[float(v.x), float(v.y)] for v in result.path], dtype=float)
+        xy_length = (
+            float(np.sum(np.linalg.norm(np.diff(raw_xy, axis=0), axis=1)))
+            if len(raw_xy) > 1
+            else 0.0
+        )
+        xy_span = float(np.linalg.norm(raw_xy[-1] - raw_xy[0])) if len(raw_xy) > 1 else 0.0
+        path_found = bool(getattr(result, "path_found", True))
+        recovery_state = int(getattr(result, "recovery_state", 0))
+        trackable = (
+            len(result.path) >= 2
+            and max(xy_length, xy_span) >= self._min_trackable_local_path_xy
+            and (path_found or recovery_state in (1, 2))
+        )
+        if not trackable:
+            if self._publish_direct_track_fallback(
+                near_field_stop=bool(getattr(result, "near_field_stop", False)),
+                path_found=path_found,
+                recovery_state=recovery_state,
+                reason="untrackable_local_path",
+            ):
+                return
+            self._publish_control_hint(
+                slow_down=int(getattr(result, "slow_down", 0) or 0),
+                near_field_stop=bool(getattr(result, "near_field_stop", False)),
+                path_found=path_found,
+                recovery_state=recovery_state,
+                safety_stop=True,
+                reason="untrackable_local_path",
+            )
+            self._publish_local_path([])
+            return
+
+        poses = []
+        cos_yaw = math.cos(self._robot_yaw)
+        sin_yaw = math.sin(self._robot_yaw)
+        for v in result.path:
+            wx = v.x * cos_yaw - v.y * sin_yaw + self._robot_pos[0]
+            wy = v.x * sin_yaw + v.y * cos_yaw + self._robot_pos[1]
+            wz = v.z + self._robot_pos[2]
+            poses.append(PoseStamped(
+                pose=Pose(
+                    position=Vector3(wx, wy, wz),
+                    orientation=Quaternion(0, 0, 0, 1),
+                ),
+                frame_id=self._path_frame_id,
+            ))
+        self._publish_local_path(poses)
 
     # ------------------------------------------------------------------ #
     # CMU Python scorer                                                    #
@@ -697,8 +892,9 @@ class LocalPlannerModule(Module, layer=2):
         grid_voxel_num_y   = pd["grid_voxel_num_y"]
 
         # Goal in body frame
-        gx = wp.pose.position.x - self._robot_pos[0]
-        gy = wp.pose.position.y - self._robot_pos[1]
+        goal = self._effective_goal(wp)
+        gx = goal[0] - self._robot_pos[0]
+        gy = goal[1] - self._robot_pos[1]
         cos_yaw = math.cos(self._robot_yaw)
         sin_yaw = math.sin(self._robot_yaw)
         rel_goal_x = gx * cos_yaw + gy * sin_yaw
@@ -740,20 +936,13 @@ class LocalPlannerModule(Module, layer=2):
                 selected_group_id = i
 
         if selected_group_id < 0 or max_score <= 0.0:
-            # No feasible path — publish straight-line fallback
-            goal_world = np.array([wp.pose.position.x, wp.pose.position.y, 0.0])
-            path_points = self._straight_line(self._robot_pos, goal_world, step=0.5)
-            poses = [
-                PoseStamped(
-                    pose=Pose(
-                        position=Vector3(float(p[0]), float(p[1]), float(p[2])),
-                        orientation=Quaternion(0, 0, 0, 1),
-                    ),
-                    frame_id="map",
-                )
-                for p in path_points
-            ]
-            self.local_path.publish(Path(poses=poses))
+            # No feasible local path: publish empty so downstream stops instead of tracking into obstacles.
+            self._publish_control_hint(
+                safety_stop=True,
+                path_found=False,
+                reason="no_feasible_local_path",
+            )
+            self._publish_local_path([])
             return
 
         rot_dir    = selected_group_id // _GROUP_NUM
@@ -787,11 +976,12 @@ class LocalPlannerModule(Module, layer=2):
                         position=Vector3(x_world, y_world, z_world),
                         orientation=Quaternion(0, 0, 0, 1),
                     ),
-                    frame_id="map",
+                    frame_id=self._path_frame_id,
                 )
             )
 
-        self.local_path.publish(Path(poses=poses))
+        self._publish_local_path(poses)
+        self._publish_control_hint(reason="cmu_py_path")
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
@@ -801,19 +991,123 @@ class LocalPlannerModule(Module, layer=2):
         diff = goal - start
         dist = np.linalg.norm(diff)
         if dist < step:
-            return [goal]
+            return [start, goal]
         n = max(int(dist / step), 2)
         return [start + diff * (i / n) for i in range(1, n + 1)]
 
+    def _publish_control_hint(
+        self,
+        *,
+        slow_down: int = 0,
+        near_field_stop: bool = False,
+        safety_stop: bool | None = None,
+        path_found: bool | None = None,
+        recovery_state: int | None = None,
+        reason: str = "",
+    ) -> None:
+        slow_down = max(0, min(3, int(slow_down or 0)))
+        near_field_stop = bool(near_field_stop)
+        if safety_stop is None:
+            stop = near_field_stop and not self._ignore_near_field_stop
+        else:
+            stop = bool(safety_stop)
+        payload: dict[str, Any] = {
+            "ts": time.time(),
+            "source": "LocalPlannerModule",
+            "slow_down": slow_down,
+            "near_field_stop": near_field_stop,
+            "safety_stop": stop,
+            "reason": reason,
+        }
+        if path_found is not None:
+            payload["path_found"] = bool(path_found)
+        if recovery_state is not None:
+            payload["recovery_state"] = int(recovery_state)
+        self._last_control_hint = dict(payload)
+        self.control_hint.publish(payload)
+
+    def _publish_local_path(self, poses: list[PoseStamped]) -> None:
+        self._last_local_path_points = len(poses)
+        if len(poses) >= 2:
+            start = poses[0].pose.position
+            end = poses[-1].pose.position
+            self._last_local_path_span_m = float(
+                math.hypot(end.x - start.x, end.y - start.y)
+            )
+        else:
+            self._last_local_path_span_m = 0.0
+        self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
+
+    def _publish_direct_track_fallback(
+        self,
+        *,
+        near_field_stop: bool,
+        path_found: bool,
+        recovery_state: int,
+        reason: str,
+    ) -> bool:
+        if not self._allow_direct_track_fallback:
+            return False
+        if near_field_stop:
+            if not self._ignore_near_field_stop:
+                return False
+            if not path_found:
+                return False
+        wp = self._latest_waypoint
+        if wp is None:
+            return False
+        goal = self._effective_goal(wp)
+        if not np.all(np.isfinite(goal[:2])):
+            return False
+        span = float(np.linalg.norm(goal[:2] - self._robot_pos[:2]))
+        if span < max(0.0, self._direct_track_fallback_min_distance_m):
+            return False
+        path_points = self._straight_line(self._robot_pos.copy(), goal, step=0.5)
+        if len(path_points) < 2:
+            return False
+        poses = [
+            PoseStamped(
+                pose=Pose(
+                    position=Vector3(float(p[0]), float(p[1]), float(p[2])),
+                    orientation=Quaternion(0, 0, 0, 1),
+                ),
+                frame_id=self._path_frame_id,
+            )
+            for p in path_points
+        ]
+        self._last_direct_track_fallback_ts = time.time()
+        self._publish_control_hint(
+            near_field_stop=near_field_stop,
+            safety_stop=False,
+            path_found=path_found,
+            recovery_state=recovery_state,
+            reason=f"direct_track_fallback:{reason}",
+        )
+        self._publish_local_path(poses)
+        return True
+
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
+        core_paths_loaded = False
+        if self._core is not None and hasattr(self._core, "paths_loaded"):
+            core_paths_loaded = bool(self._core.paths_loaded())
         info["local_planner"] = {
             "backend":       self._backend,
-            "paths_loaded":  self._path_data is not None or (self._core is not None and self._core.paths_loaded()),
+            "paths_loaded":  self._path_data is not None or core_paths_loaded,
             "terrain_pts":   (self._terrain_points.shape[0]
                               if self._terrain_points is not None else 0),
             "running":       (self._core is not None) or
                              (self._node is not None
                               and getattr(self._node, "_process", None) is not None),
+            "direct_track_fallback_enabled": self._allow_direct_track_fallback,
+            "min_trackable_local_path_m": round(self._min_trackable_local_path_xy, 3),
+            "last_direct_track_fallback_age_ms": (
+                round((time.time() - self._last_direct_track_fallback_ts) * 1000)
+                if self._last_direct_track_fallback_ts > 0
+                else None
+            ),
+            "last_control_hint": dict(self._last_control_hint),
+            "last_local_path_points": self._last_local_path_points,
+            "last_local_path_span_m": round(self._last_local_path_span_m, 3),
         }
         return info

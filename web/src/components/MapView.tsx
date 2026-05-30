@@ -92,7 +92,7 @@ function MapCard({ m, selected, onPreview, onActivate, onRename, onDelete }: Car
           <Pencil size={11} />
         </button>
         {!m.is_active && (
-          <button className={styles.btnTinyAccent} onClick={() => onActivate(m.name)} title="激活">
+          <button className={styles.btnTinyAccent} onClick={() => onActivate(m.name)} title="激活地图（需确认）">
             <Star size={11} /> 激活
           </button>
         )}
@@ -114,6 +114,7 @@ export function MapView({ showToast }: MapViewProps) {
 
   // Modal state
   const [saveOpen,   setSaveOpen  ] = useState(false)
+  const [activateFrom, setActivateFrom] = useState<string | null>(null)
   const [renameFrom, setRenameFrom] = useState<string | null>(null)
   const [deleteFrom, setDeleteFrom] = useState<string | null>(null)
   const [lastSaveSummary, setLastSaveSummary] = useState<string | null>(null)
@@ -163,13 +164,23 @@ export function MapView({ showToast }: MapViewProps) {
 
   useEffect(() => { loadMaps() }, [loadMaps])
 
-  const handleActivate = async (name: string) => {
-    try { await api.activateMap(name); showToast(`已激活: ${name}`, 'success'); loadMaps() }
-    catch { showToast(`激活失败: ${name}`, 'error') }
-  }
+  const handleActivate = (name: string) => setActivateFrom(name)
   const handleDelete = (name: string) => setDeleteFrom(name)
   const handleRename = (name: string) => setRenameFrom(name)
   const handleSave = () => setSaveOpen(true)
+
+  const confirmActivate = async () => {
+    const name = activateFrom
+    setActivateFrom(null)
+    if (!name) return
+    try {
+      await api.activateMap(name)
+      showToast(`已激活: ${name}`, 'success')
+      loadMaps()
+    } catch {
+      showToast(`激活失败: ${name}`, 'error')
+    }
+  }
 
   const confirmDelete = async () => {
     const name = deleteFrom
@@ -310,6 +321,15 @@ export function MapView({ showToast }: MapViewProps) {
         validate={nameValidator}
         onConfirm={confirmRename}
         onCancel={() => setRenameFrom(null)}
+      />
+
+      <ConfirmModal
+        open={activateFrom != null}
+        title="激活地图"
+        message={`将 "${activateFrom ?? ''}" 设为当前活动地图？此操作不会移动机器人，但会切换后续定位/导航使用的地图。`}
+        confirmLabel="激活"
+        onConfirm={confirmActivate}
+        onCancel={() => setActivateFrom(null)}
       />
 
       <ConfirmModal

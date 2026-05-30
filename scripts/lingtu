@@ -44,6 +44,7 @@
 #   lingtu soak --duration 120 --json --strict # non-motion readiness soak
 #   lingtu slamcheck super_lio # switch, verify Super-LIO Gateway contract, rollback
 #   lingtu slamcompare --map <name> # localizer vs Super-LIO relocation non-motion gate
+#   lingtu plan-preview --internal-only --strict # offline tomogram planner preview, no motion
 #   lingtu routecheck --map <name> --goal X Y YAW # route A/B preflight, no motion
 #   lingtu routecompare --map <name> --goal X Y YAW --allow-motion # route A/B motion run
 set -u
@@ -178,7 +179,7 @@ PY
 
 nav_goal_precheck() {
     local payload="$1"
-    local NAVJ CAN BLOCKERS ADVISORIES STATE PLANJ FEASIBLE COUNT PLANNER REASONS
+    local NAVJ CAN BLOCKERS ADVISORIES STATE PLANJ FEASIBLE COUNT PLANNER REASONS POLICY SAFETY_OK FALLBACK REJECTED
     NAVJ=$(curl -s --max-time 3 "$GW/api/v1/navigation/status" 2>/dev/null || echo '{}')
     CAN=$(pjson "$NAVJ" 'r=d.get("readiness") or {}; print(str(r.get("can_accept_goal", d.get("can_accept_goal", False))).lower())')
     BLOCKERS=$(pjson "$NAVJ" 'r=d.get("readiness") or {}; b=r.get("blockers") or []; print(",".join(map(str,b)) if isinstance(b,list) else str(b or ""))')
@@ -194,14 +195,19 @@ nav_goal_precheck() {
         -d "$payload" "$GW/api/v1/navigation/plan" 2>/dev/null || echo '{}')
     FEASIBLE=$(pjson "$PLANJ" 'print(str(bool(d.get("feasible"))).lower())')
     COUNT=$(pjson "$PLANJ" 'print(d.get("count","-"))')
-    PLANNER=$(pjson "$PLANJ" 'print(d.get("planner") or "-")')
+    PLANNER=$(pjson "$PLANJ" 'print(d.get("selected_planner") or d.get("planner") or "-")')
+    POLICY=$(pjson "$PLANJ" 'print(d.get("plan_safety_policy") or "-")')
+    SAFETY_OK=$(pjson "$PLANJ" 's=d.get("path_safety") if isinstance(d.get("path_safety"),dict) else {}; v=s.get("ok","-"); print(str(v).lower() if isinstance(v,bool) else v)')
+    FALLBACK=$(pjson "$PLANJ" 'print(d.get("fallback_reason") or "-")')
+    REJECTED=$(pjson "$PLANJ" 'r=d.get("rejected_plans") or []; print(len(r) if isinstance(r,list) else 0)')
     REASONS=$(pjson "$PLANJ" 'r=d.get("reasons") or []; print(",".join(map(str,r)) if isinstance(r,list) else str(r or ""))')
     if [ "$FEASIBLE" != "true" ]; then
-        printf "${R}FAIL${N}: navigation plan preview is not feasible (points=%s planner=%s reasons=%s)\n" \
-            "$COUNT" "$PLANNER" "${REASONS:-unknown}"
+        printf "${R}FAIL${N}: navigation plan preview is not feasible (points=%s planner=%s policy=%s safety=%s fallback=%s rejected=%s reasons=%s)\n" \
+            "$COUNT" "$PLANNER" "$POLICY" "$SAFETY_OK" "$FALLBACK" "$REJECTED" "${REASONS:-unknown}"
         return 1
     fi
-    printf "${D}plan preview feasible: points=%s planner=%s${N}\n" "$COUNT" "$PLANNER"
+    printf "${D}plan preview feasible: points=%s planner=%s policy=%s safety=%s fallback=%s rejected=%s${N}\n" \
+        "$COUNT" "$PLANNER" "$POLICY" "$SAFETY_OK" "$FALLBACK" "$REJECTED"
     return 0
 }
 
@@ -381,9 +387,9 @@ cmd_map() {
         save)
             local name="${2:-}"
             [ -z "$name" ] && { echo "Usage: lingtu map save <name>"; exit 1; }
-            echo -e "${D}Saving & cleaning dynamic obstacles (15-60s)...${N}"
-            curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"$name\"}" \
-                "$GW/api/v1/map/save" | python3 -m json.tool ;;
+            echo -e "${D}Saving MapManager artifacts (PGO + DUFOMap + tomogram + occupancy)...${N}"
+            curl -s -X POST -H "Content-Type: application/json" -d "{\"action\":\"save\",\"name\":\"$name\"}" \
+                "$GW/api/v1/maps" | python3 -m json.tool ;;
         end|stop)
             curl -s -X POST "$GW/api/v1/session/end" | python3 -m json.tool ;;
         list|ls)
@@ -393,8 +399,21 @@ cmd_map() {
             local name="${2:-}"
             [ -z "$name" ] && { echo "Usage: lingtu map restore <name>"; exit 1; }
             echo -e "${D}Restoring map.pcd from DUFOMap pre-filter backup...${N}"
-            curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"$name\"}" \
-                "$GW/api/v1/map/restore_predufo" | python3 -m json.tool ;;
+            local restore_json restore_ok rebuild_action rebuild_json rebuild_ok
+            restore_json=$(curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"$name\"}" \
+                "$GW/api/v1/map/restore_predufo" 2>/dev/null || echo '{}')
+            echo "$restore_json" | python3 -m json.tool 2>/dev/null || echo "$restore_json"
+            restore_ok=$(pjson "$restore_json" 'print(str(d.get("success", False)).lower())')
+            [ "$restore_ok" = "true" ] || { echo -e "${R}FAIL${N}: restore_predufo failed"; exit 1; }
+            for rebuild_action in build_tomogram build_occupancy; do
+                echo -e "${D}Rebuilding ${rebuild_action#build_} for $name...${N}"
+                rebuild_json=$(curl -s -X POST -H "Content-Type: application/json" \
+                    -d "{\"action\":\"$rebuild_action\",\"name\":\"$name\"}" \
+                    "$GW/api/v1/maps" 2>/dev/null || echo '{}')
+                echo "$rebuild_json" | python3 -m json.tool 2>/dev/null || echo "$rebuild_json"
+                rebuild_ok=$(pjson "$rebuild_json" 'print(str(d.get("success", False)).lower())')
+                [ "$rebuild_ok" = "true" ] || { echo -e "${R}FAIL${N}: $rebuild_action failed"; exit 1; }
+            done ;;
         *) echo "Usage: lingtu map [start|save <name>|end|list|restore <name>]"; exit 1 ;;
     esac
 }
@@ -438,9 +457,22 @@ svc_unit() {
         super_lio_relocation|super_lio_reloc|super-lio-relocation|super-lio-reloc|superlio-relocation|superlio-reloc|relocation)
                     echo "robot-super-lio-relocation.service" ;;
         lingtu|app) echo "lingtu.service" ;;
-        robot-*.service|lingtu.service)
-                    echo "$1" ;;
-        robot-*)    echo "$1.service" ;;
+        robot-lidar|robot-lidar.service)
+                    echo "robot-lidar.service" ;;
+        robot-camera|robot-camera.service)
+                    echo "robot-camera.service" ;;
+        robot-brainstem|robot-brainstem.service)
+                    echo "robot-brainstem.service" ;;
+        robot-fastlio2|robot-fastlio2.service)
+                    echo "robot-fastlio2.service" ;;
+        robot-localizer|robot-localizer.service)
+                    echo "robot-localizer.service" ;;
+        robot-super-lio|robot-super-lio.service)
+                    echo "robot-super-lio.service" ;;
+        robot-super-lio-relocation|robot-super-lio-relocation.service)
+                    echo "robot-super-lio-relocation.service" ;;
+        lingtu.service)
+                    echo "lingtu.service" ;;
         *)          return 1 ;;
     esac
 }
@@ -723,12 +755,28 @@ DATA_NAV_BLOCKERS = {
     "localization_initializing",
     "pose_stale",
 }
+MOVING_NAV_STATES = {"EXECUTING", "NAVIGATING", "PLANNING", "EXPLORING", "RECOVERY", "RUNNING"}
+
+
+def resolve_tool(args):
+    if not args:
+        return args
+    overrides = {
+        "ros2": os.environ.get("LINGTU_ROS2_BIN"),
+        "systemctl": os.environ.get("LINGTU_SYSTEMCTL_BIN"),
+        "journalctl": os.environ.get("LINGTU_JOURNALCTL_BIN"),
+        "ip": os.environ.get("LINGTU_IP_BIN"),
+    }
+    override = overrides.get(args[0])
+    if override:
+        return [override, *args[1:]]
+    return args
 
 
 def run(args, timeout=3):
     try:
         proc = subprocess.run(
-            args,
+            resolve_tool(args),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -793,6 +841,17 @@ def command_source_name(control):
     if source in (None, ""):
         return "none"
     return str(source)
+
+
+def navigation_state_name(nav):
+    mission = nav.get("mission") if isinstance(nav, dict) else {}
+    if not isinstance(mission, dict):
+        mission = {}
+    return str(nav.get("state") or mission.get("state") or "unknown")
+
+
+def navigation_state_is_idle(state):
+    return str(state or "").upper() not in MOVING_NAV_STATES
 
 
 def check_age(payload, key, max_age_ms, blockers):
@@ -1013,6 +1072,23 @@ def latest_livox_sdk_event():
     return status, {"returncode": rc, "latest_event": line}
 
 
+def netdev_state(name):
+    base = f"/sys/class/net/{name}"
+    evidence = {"interface": name}
+    for field in ("operstate", "carrier"):
+        path = os.path.join(base, field)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                evidence[field] = fh.read().strip()
+        except OSError as exc:
+            evidence[f"{field}_error"] = str(exc)
+    rc, out, err = run(["ip", "-br", "addr", "show", name], timeout=2)
+    evidence["ip_br"] = out.strip()
+    if err:
+        evidence["ip_error"] = err
+    return evidence
+
+
 def add(check_id, status, level, message, evidence=None):
     checks.append(
         {
@@ -1069,6 +1145,14 @@ if active_legacy:
     )
 else:
     add("service.legacy_conflicts", "pass", "p0", "no active legacy localization services")
+
+eth0 = netdev_state(os.environ.get("LINGTU_LIDAR_NETDEV", "eth0"))
+if eth0.get("carrier") == "1":
+    add("livox.netdev_carrier", "pass", "p0", "LiDAR network interface has carrier", eth0)
+elif "carrier" in eth0:
+    add("livox.netdev_carrier", "fail", "p0", "LiDAR network interface has no carrier", eth0)
+else:
+    add("livox.netdev_carrier", "warn", "p1", "could not inspect LiDAR network interface carrier", eth0)
 
 livox_event, livox_evidence = latest_livox_sdk_event()
 if livox_event == "success":
@@ -1213,6 +1297,41 @@ else:
     ]:
         add_dataflow_pressure_check(ready, module_name, port_name, level)
 
+client_ready_code, client_ready, client_ready_err = http_json("/api/v1/readiness", timeout=3)
+if client_ready_err or not isinstance(client_ready, dict):
+    add(
+        "gateway.client_readiness",
+        "fail",
+        "p0",
+        "/api/v1/readiness unavailable",
+        {"http_status": client_ready_code, "error": client_ready_err},
+    )
+else:
+    status_value = client_ready.get("status")
+    reasons_value = client_ready.get("reasons")
+    modules_value = client_ready.get("modules")
+    shape_ok = (
+        client_ready.get("schema_version") == 1
+        and status_value in {"ready", "degraded", "not_started"}
+        and isinstance(reasons_value, list)
+        and isinstance(modules_value, dict)
+    )
+    add(
+        "gateway.client_readiness",
+        "pass" if shape_ok else "fail",
+        "p0",
+        "/api/v1/readiness exposes client-readable readiness"
+        if shape_ok
+        else "/api/v1/readiness schema is not client-readable",
+        {
+            "http_status": client_ready_code,
+            "schema_version": client_ready.get("schema_version"),
+            "status": status_value,
+            "reasons": reasons_value if isinstance(reasons_value, list) else [],
+            "module_count": len(modules_value) if isinstance(modules_value, dict) else None,
+        },
+    )
+
 health_code, health, health_err = http_json("/api/v1/health", timeout=3)
 if health_err or not isinstance(health, dict):
     add("gateway.health", "fail", "p0", "/api/v1/health unavailable", {"http_status": health_code, "error": health_err})
@@ -1335,7 +1454,7 @@ else:
     blockers = readiness.get("blockers") or []
     reason_codes = nav.get("reason_codes") or []
     can_accept = bool(nav.get("can_accept_goal", readiness.get("can_execute_autonomy", False)))
-    state = str(nav.get("state") or nav.get("mission", {}).get("state") or "unknown")
+    state = navigation_state_name(nav)
     control = nav.get("control") or {}
     active_source = command_source_name(control)
     data_blockers = list(
@@ -1374,9 +1493,8 @@ else:
         },
     )
     if non_motion:
-        moving_states = {"EXECUTING", "NAVIGATING", "PLANNING", "EXPLORING", "RECOVERY"}
         source_idle = str(active_source).lower() in {"", "none", "unknown", "null"}
-        state_idle = state.upper() not in moving_states
+        state_idle = navigation_state_is_idle(state)
         add(
             "safety.non_motion_guard",
             "pass" if source_idle and state_idle else "fail",
@@ -1459,16 +1577,21 @@ if non_motion:
         nav_after_code, nav_after, nav_after_err = http_json("/api/v1/navigation/status", timeout=3)
         nav_after_ok = nav_after_code == 200 and isinstance(nav_after, dict)
         active_after = command_source_name((nav_after or {}).get("control") or {}) if nav_after_ok else "unavailable"
+        state_after = navigation_state_name(nav_after) if nav_after_ok else "unavailable"
         source_idle_after = str(active_after).lower() in {"", "none", "null"}
+        state_idle_after = navigation_state_is_idle(state_after) if nav_after_ok else False
         if not preview_ok:
             status = "fail"
             message = "navigation plan preview endpoint is unavailable or unversioned"
         elif not nav_after_ok:
             status = "fail"
-            message = "navigation plan preview could not verify command source afterwards"
+            message = "navigation plan preview could not verify non-motion state afterwards"
         elif not source_idle_after:
             status = "fail"
             message = "navigation plan preview changed the active command source"
+        elif not state_idle_after:
+            status = "fail"
+            message = "navigation plan preview changed the mission state"
         elif preview_feasible:
             status = "pass"
             message = "navigation plan preview produced a path without taking control"
@@ -1484,6 +1607,7 @@ if non_motion:
                 "offset_m": PLAN_PREVIEW_OFFSET_M,
                 "attempts": attempts,
                 "active_cmd_source_after": active_after,
+                "state_after": state_after,
                 "nav_after_http_status": nav_after_code,
                 "nav_after_error": nav_after_err,
             },
@@ -1822,6 +1946,20 @@ def active_cmd_source(nav):
     return source
 
 
+MOVING_NAV_STATES = {"EXECUTING", "NAVIGATING", "PLANNING", "EXPLORING", "RECOVERY", "RUNNING"}
+
+
+def navigation_state(nav):
+    mission = nav.get("mission") if isinstance(nav, dict) else {}
+    if not isinstance(mission, dict):
+        mission = {}
+    return str(nav.get("state") or mission.get("state") or "unknown")
+
+
+def navigation_state_idle(state):
+    return str(state or "").upper() not in MOVING_NAV_STATES
+
+
 try:
     _, state = get_json("/api/v1/state")
     odom = state.get("odometry") or {}
@@ -1861,14 +1999,17 @@ for label, dx, dy in offsets:
 try:
     _, nav = get_json("/api/v1/navigation/status")
     source = str(active_cmd_source(nav)).lower()
+    state_after = navigation_state(nav)
 except Exception as exc:
-    print(f"  FAIL: cannot verify command source after preview ({exc})")
+    print(f"  FAIL: cannot verify non-motion state after preview ({exc})")
     raise SystemExit(0)
 
-if source in {"", "none", "null"}:
-    print("  ok: preview did not take control; active_cmd_source_after=none")
-else:
+if source in {"", "none", "null"} and navigation_state_idle(state_after):
+    print(f"  ok: preview did not take control; active_cmd_source_after=none state_after={state_after}")
+elif source not in {"", "none", "null"}:
     print(f"  FAIL: preview changed active_cmd_source_after={source}")
+else:
+    print(f"  FAIL: preview changed state_after={state_after}")
 if endpoint_ok and not path_ok:
     print("  WARN: preview endpoint works, but nearby moving candidates were not feasible")
 PY
@@ -2652,6 +2793,22 @@ sys.exit(1 if violations else 0)
 PY
 }
 
+# -- Subcommand: plan-preview --
+plan_preview_usage() {
+    echo "Usage: lingtu plan-preview [--tomogram PATH] [--map-root DIR] [--start X Y [Z]] [--goal X Y [Z]] [--internal-only] [--strict]"
+    echo "Runs an offline NavigationModule.preview_plan() against a tomogram. No services, Gateway calls, goals, or cmd_vel are used."
+}
+
+cmd_plan_preview() {
+    local map_root
+    map_root="$(lingtu_maps_root)"
+    if [ ! -f "$SCRIPT_DIR/plan_preview.py" ]; then
+        echo -e "${R}FAIL${N}: plan preview helper not found: $SCRIPT_DIR/plan_preview.py"
+        return 1
+    fi
+    python3 "$SCRIPT_DIR/plan_preview.py" --map-root "$map_root" "$@"
+}
+
 # -- Subcommand: routecheck --
 routecheck_usage() {
     echo "Usage: lingtu routecheck --map NAME --goal X Y [YAW] [--artifact-dir DIR] [--candidate-warmup SEC] [--with-slamcompare] [--slamcompare-duration SEC] [--slamcompare-warmup SEC]"
@@ -2669,6 +2826,16 @@ lingtu_routecheck_cleanup() {
             | python3 -m json.tool 2>/dev/null || true
         if [ "$status" -ne 0 ] && [ -n "${LINGTU_ROUTECHECK_ARTIFACT_DIR:-}" ]; then
             routecheck_capture_phase "failed_rollback" "$LINGTU_ROUTECHECK_ARTIFACT_DIR/failed_rollback" || true
+            if [ -n "${LINGTU_ROUTECHECK_MAP_NAME:-}" ] && [ -n "${LINGTU_ROUTECHECK_GOAL_X:-}" ] && [ -n "${LINGTU_ROUTECHECK_GOAL_Y:-}" ]; then
+                routecheck_write_summary \
+                    "$LINGTU_ROUTECHECK_ARTIFACT_DIR" \
+                    "fail" \
+                    "$LINGTU_ROUTECHECK_MAP_NAME" \
+                    "$LINGTU_ROUTECHECK_GOAL_X" \
+                    "$LINGTU_ROUTECHECK_GOAL_Y" \
+                    "${LINGTU_ROUTECHECK_GOAL_YAW:-0}" \
+                    "$status"
+            fi
         fi
     fi
     return "$status"
@@ -2704,7 +2871,7 @@ routecheck_capture_phase() {
 
 routecheck_plan_preview() {
     local phase="$1" payload="$2" dir="$3"
-    local NAVJ PLANJ CAN BLOCKERS ADVISORIES STATE FEASIBLE COUNT PLANNER REASONS SOURCE SOURCE_L
+    local NAVJ PLANJ CAN BLOCKERS ADVISORIES STATE FEASIBLE COUNT PLANNER POLICY SAFETY_OK FALLBACK REJECTED REASONS SOURCE SOURCE_L
     mkdir -p "$dir"
     NAVJ=$(curl -s --max-time 4 "$GW/api/v1/navigation/status" 2>/dev/null || echo '{}')
     printf '%s\n' "$NAVJ" > "$dir/navigation.pre_plan.json"
@@ -2732,16 +2899,98 @@ routecheck_plan_preview() {
     printf '%s\n' "$PLANJ" | python3 -m json.tool > "$dir/plan.pretty.json" 2>/dev/null || true
     FEASIBLE=$(pjson "$PLANJ" 'print(str(bool(d.get("feasible"))).lower())')
     COUNT=$(pjson "$PLANJ" 'print(d.get("count","-"))')
-    PLANNER=$(pjson "$PLANJ" 'print(d.get("planner") or "-")')
+    PLANNER=$(pjson "$PLANJ" 'print(d.get("selected_planner") or d.get("planner") or "-")')
+    POLICY=$(pjson "$PLANJ" 'print(d.get("plan_safety_policy") or "-")')
+    SAFETY_OK=$(pjson "$PLANJ" 's=d.get("path_safety") if isinstance(d.get("path_safety"),dict) else {}; v=s.get("ok","-"); print(str(v).lower() if isinstance(v,bool) else v)')
+    FALLBACK=$(pjson "$PLANJ" 'print(d.get("fallback_reason") or "-")')
+    REJECTED=$(pjson "$PLANJ" 'r=d.get("rejected_plans") or []; print(len(r) if isinstance(r,list) else 0)')
     REASONS=$(pjson "$PLANJ" 'r=d.get("reasons") or []; print(",".join(map(str,r)) if isinstance(r,list) else str(r or ""))')
+    python3 - "$phase" "$SOURCE" "$NAVJ" "$PLANJ" > "$dir/plan_summary.json" <<'PY' || true
+import json
+import sys
+
+phase, source, nav_raw, plan_raw = sys.argv[1:5]
+try:
+    nav = json.loads(nav_raw)
+except Exception:
+    nav = {}
+try:
+    plan = json.loads(plan_raw)
+except Exception:
+    plan = {}
+readiness = nav.get("readiness") if isinstance(nav.get("readiness"), dict) else {}
+path_safety = plan.get("path_safety") if isinstance(plan.get("path_safety"), dict) else {}
+rejected = plan.get("rejected_plans") if isinstance(plan.get("rejected_plans"), list) else []
+payload = {
+    "schema_version": 1,
+    "phase": phase,
+    "non_motion": True,
+    "navigation_state": nav.get("state"),
+    "can_accept_goal": bool(readiness.get("can_accept_goal", nav.get("can_accept_goal", False))),
+    "active_cmd_source_before": source or "none",
+    "feasible": bool(plan.get("feasible")),
+    "count": plan.get("count"),
+    "planner": plan.get("planner"),
+    "selected_planner": plan.get("selected_planner") or plan.get("planner"),
+    "plan_safety_policy": plan.get("plan_safety_policy"),
+    "path_safety_ok": path_safety.get("ok"),
+    "fallback_reason": plan.get("fallback_reason") or "",
+    "rejected_plan_count": len(rejected),
+    "reasons": plan.get("reasons") if isinstance(plan.get("reasons"), list) else [],
+}
+json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+print()
+PY
     if [ "$FEASIBLE" != "true" ]; then
-        printf "${R}FAIL${N}: %s route plan preview is not feasible (points=%s planner=%s reasons=%s)\n" \
-            "$phase" "$COUNT" "$PLANNER" "${REASONS:-unknown}"
+        printf "${R}FAIL${N}: %s route plan preview is not feasible (points=%s planner=%s policy=%s safety=%s fallback=%s rejected=%s reasons=%s)\n" \
+            "$phase" "$COUNT" "$PLANNER" "$POLICY" "$SAFETY_OK" "$FALLBACK" "$REJECTED" "${REASONS:-unknown}"
         return 1
     fi
-    printf "${G}PASS${N}: %s route plan preview feasible (points=%s planner=%s)\n" \
-        "$phase" "$COUNT" "$PLANNER"
+    printf "${G}PASS${N}: %s route plan preview feasible (points=%s planner=%s policy=%s safety=%s fallback=%s rejected=%s)\n" \
+        "$phase" "$COUNT" "$PLANNER" "$POLICY" "$SAFETY_OK" "$FALLBACK" "$REJECTED"
     return 0
+}
+
+routecheck_write_summary() {
+    local artifact_dir="$1" outcome="$2" map_name="$3" goal_x="$4" goal_y="$5" goal_yaw="$6" exit_status="${7:-0}"
+    [ -n "$artifact_dir" ] || return 0
+    python3 - "$artifact_dir" "$outcome" "$map_name" "$goal_x" "$goal_y" "$goal_yaw" "$exit_status" <<'PY' || true
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+outcome, map_name, goal_x, goal_y, goal_yaw, exit_status = sys.argv[2:8]
+
+def load(rel):
+    path = root / rel
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+summary = {
+    "schema_version": 1,
+    "mode": "routecheck_non_motion",
+    "outcome": outcome,
+    "exit_status": int(exit_status),
+    "non_motion": True,
+    "map": map_name,
+    "goal": {"x": float(goal_x), "y": float(goal_y), "yaw": float(goal_yaw)},
+    "phases": {
+        "baseline": load("baseline/plan_summary.json"),
+        "candidate": load("candidate/plan_summary.json"),
+    },
+    "artifacts": {
+        "before": str(root / "before"),
+        "baseline": str(root / "baseline"),
+        "candidate": str(root / "candidate"),
+        "after_rollback": str(root / "after_rollback"),
+        "failed_rollback": str(root / "failed_rollback"),
+    },
+}
+(root / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
 }
 
 cmd_routecheck() {
@@ -2847,6 +3096,10 @@ cmd_routecheck() {
 
     LINGTU_ROUTECHECK_ROLLBACK=1
     LINGTU_ROUTECHECK_ARTIFACT_DIR="$artifact_dir"
+    LINGTU_ROUTECHECK_MAP_NAME="$map_name"
+    LINGTU_ROUTECHECK_GOAL_X="$goal_x"
+    LINGTU_ROUTECHECK_GOAL_Y="$goal_y"
+    LINGTU_ROUTECHECK_GOAL_YAW="$goal_yaw"
     trap lingtu_routecheck_cleanup EXIT
     routecheck_capture_phase "before" "$artifact_dir/before"
     routecheck_require_no_active_command_source "routecheck before SLAM switching" || return 1
@@ -2900,11 +3153,16 @@ cmd_routecheck() {
     LINGTU_ROUTECHECK_ROLLBACK=0
     slamcompare_wait_ready "localizer" || return 1
     routecheck_capture_phase "after_rollback" "$artifact_dir/after_rollback"
+    routecheck_write_summary "$artifact_dir" "pass" "$map_name" "$goal_x" "$goal_y" "$goal_yaw" 0
     trap - EXIT
 
     echo -e "${G}PASS${N}: route validation preflight completed without motion"
     echo "Artifact dir: $artifact_dir"
     LINGTU_ROUTECHECK_ARTIFACT_DIR=""
+    LINGTU_ROUTECHECK_MAP_NAME=""
+    LINGTU_ROUTECHECK_GOAL_X=""
+    LINGTU_ROUTECHECK_GOAL_Y=""
+    LINGTU_ROUTECHECK_GOAL_YAW=""
 }
 
 # -- Subcommand: routecompare --
@@ -3469,6 +3727,7 @@ case "${1:-status}" in
     soak|field-soak|readiness-soak) shift; cmd_soak "$@" ;;
     slamcheck|slam-check) shift; cmd_slamcheck "$@" ;;
     slamcompare|slam-compare|super-lio-compare|super_lio_compare|superlio-compare) shift; cmd_slamcompare "$@" ;;
+    plan-preview|planpreview|preview-plan) shift; cmd_plan_preview "$@" ;;
     routecheck|route-check|route-preflight|super-lio-routecheck|super_lio_routecheck) shift; cmd_routecheck "$@" ;;
     routecompare|route-compare|super-lio-routecompare|super_lio_routecompare) shift; cmd_routecompare "$@" ;;
     super-lio-smoke|super_lio_smoke|superlio-smoke) shift; cmd_slamcheck super_lio "$@" ;;

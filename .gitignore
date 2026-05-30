@@ -9,6 +9,8 @@ third_party/
 build/
 install/
 log/
+!scripts/build/
+!scripts/build/build_ros_workspace.sh
 
 # ── ROS bag files ──
 *.bag
@@ -17,6 +19,8 @@ log/
 
 # ── Runtime state ──
 .lingtu/
+artifacts/
+MUJOCO_LOG.TXT
 
 # ── Python ──
 __pycache__/
@@ -35,10 +39,13 @@ env/
 # ── C/C++ build artifacts ──
 *.o
 *.so
+*.pyd
+*.dll
 *.a
 *.dylib
 *.exe
 *.out
+src/nav/core/build_nb*/
 
 # ── Model weights (large binaries — distribute via release-models.yml) ──
 *.pt

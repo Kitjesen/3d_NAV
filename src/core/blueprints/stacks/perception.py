@@ -24,10 +24,11 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
     drv_name = config.get("_driver_cls_name", "")
     needs_camera_bridge = bool(config.get("force_camera_bridge")) or (
         drv_name not in _NATIVE_CAMERA_DRIVERS
+        and not bool(config.get("use_driver_camera", False))
     )
 
     try:
-        from drivers.thunder.camera_bridge_module import CameraBridgeModule
+        from drivers.real.thunder.camera_bridge_module import CameraBridgeModule
 
         if needs_camera_bridge:
             # Read camera rotation from robot_config.yaml

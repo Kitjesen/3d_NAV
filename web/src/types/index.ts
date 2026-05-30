@@ -96,6 +96,7 @@ export interface LocationEntry {
   tags: string[]
   source?: string | null
   ts?: number | null
+  metadata?: Record<string, unknown>
 }
 
 export interface LocationsResponse {
@@ -105,6 +106,34 @@ export interface LocationsResponse {
   frame_id: string
   ts?: number | null
   source: string
+}
+
+export interface LocationUpsertRequest {
+  name: string
+  x?: number | null
+  y?: number | null
+  z?: number
+  yaw?: number | null
+  tags?: string[]
+  source?: string
+  metadata?: Record<string, unknown>
+  use_current_pose?: boolean
+  request_id?: string | null
+  client_id?: string
+}
+
+export interface LocationOperationResponse {
+  schema_version: number
+  ok: boolean
+  status: 'saved' | 'deleted' | 'not_found' | 'unavailable' | 'invalid' | 'error'
+  action: 'create' | 'update' | 'delete'
+  location?: LocationEntry | null
+  locations: LocationsResponse
+  message?: string | null
+  error?: string | null
+  request_id?: string | null
+  client_id: string
+  ts: number
 }
 
 export interface StateResponse {
@@ -145,6 +174,63 @@ export interface HealthResponse {
   modules: Record<string, string>
   brainstem: Record<string, unknown>
   [key: string]: unknown
+}
+
+export interface ReadinessModuleStatus {
+  ok: boolean
+  detail?: Record<string, unknown> | null
+  error?: string | null
+}
+
+export interface ReadinessResponse {
+  schema_version: number
+  status: string
+  ready: boolean
+  data_ready: boolean
+  motion_ready: boolean
+  non_motion_safe: boolean
+  modules: Record<string, ReadinessModuleStatus>
+  module_count: number
+  failed_modules: string[]
+  reasons: string[]
+  advisories?: string[]
+  runtime: Record<string, unknown>
+  ts: number
+}
+
+export interface RoutecheckPhaseSummary {
+  selected_planner?: string | null
+  planner?: string | null
+  outcome?: string | null
+  ok?: boolean | null
+  feasible?: boolean | null
+  fallback_reason?: string | null
+  error?: string | null
+  reasons?: string[]
+  [key: string]: unknown
+}
+
+export interface RoutecheckSummary {
+  schema_version?: number
+  mode?: string | null
+  outcome?: string | null
+  non_motion?: boolean | null
+  phases?: Record<string, RoutecheckPhaseSummary>
+  generated_at?: string | null
+  ts?: number | null
+  [key: string]: unknown
+}
+
+export interface RoutecheckLatestResponse {
+  schema_version: number
+  ok: boolean
+  artifacts_root: string
+  count: number
+  artifact_dir?: string | null
+  summary_path?: string | null
+  latest?: RoutecheckSummary | null
+  reason?: string | null
+  ts: number
 }
 
 export interface DeviceEntry {
@@ -197,6 +283,7 @@ export interface PlanPreviewRequest {
   x: number
   y: number
   z?: number
+  frame_id?: 'map'
   client_id?: string
 }
 
@@ -213,7 +300,72 @@ export interface PlanPreviewResponse {
   distance_m?: number | null
   plan_ms?: number | null
   planner?: string | null
+  selected_planner?: string | null
+  plan_safety_policy?: string | null
+  path_safety?: Record<string, unknown> | null
+  fallback_reason?: string
+  rejected_plans?: Record<string, unknown>[]
   source: string
+  reasons: string[]
+  error?: string | null
+  ts: number
+}
+
+export type GoalSource =
+  | 'coordinate'
+  | 'map_click'
+  | 'saved_location'
+  | 'semantic'
+  | 'frontier'
+  | 'api'
+
+export type GoalTargetType =
+  | 'coordinate'
+  | 'map_point'
+  | 'saved_location'
+  | 'semantic_target'
+  | 'frontier'
+
+export interface GoalCandidateRequest {
+  x?: number | null
+  y?: number | null
+  z?: number
+  yaw?: number | null
+  frame_id?: 'map'
+  source?: GoalSource
+  target_type?: GoalTargetType
+  label?: string | null
+  location_name?: string | null
+  acceptance_radius_m?: number | null
+  max_speed_mps?: number | null
+  metadata?: Record<string, unknown>
+  preview?: boolean
+  client_id?: string
+}
+
+export interface ConstructedGoalTarget {
+  schema_version: number
+  x: number
+  y: number
+  z: number
+  yaw: number
+  frame_id: string
+  source: string
+  target_type: string
+  label?: string | null
+  location_name?: string | null
+  acceptance_radius_m?: number | null
+  max_speed_mps?: number | null
+  metadata: Record<string, unknown>
+  ts?: number | null
+}
+
+export interface GoalCandidateResponse {
+  schema_version: number
+  ok: boolean
+  status: string
+  target?: ConstructedGoalTarget | null
+  preview?: PlanPreviewResponse | null
   reasons: string[]
   error?: string | null
   ts: number
@@ -304,6 +456,8 @@ export interface NavigationDiagnosticsSummary {
   cmd_vel_mux_available: boolean
   frame_mismatches: NavigationFrameMismatch[]
   safety?: Record<string, unknown> | null
+  plan_safety_policy?: string | null
+  last_plan_report?: Record<string, unknown>
 }
 
 export interface NavigationMissionSummary {
@@ -377,10 +531,12 @@ export interface ClientLinks {
   state?: string
   scene_graph?: string
   locations?: string
+  location_detail?: string
   path?: string
   localization_status?: string
   navigation_status?: string
   devices?: string
+  readiness?: string
   auth_login?: string
   auth_check?: string
   events?: string
@@ -397,6 +553,7 @@ export interface ClientLinks {
   session?: string
   session_start?: string
   session_end?: string
+  navigation_goal_candidate?: string
   navigation_plan?: string
   navigation_cancel?: string
   goal?: string
@@ -427,6 +584,7 @@ export interface ClientLinks {
   memory_temporal?: string
   memory_temporal_semantic?: string
   diagnostic_pack?: string
+  routecheck_latest?: string
   [key: string]: string | undefined
 }
 
@@ -653,12 +811,30 @@ export interface CommandReceipt {
   ts: number
 }
 
+export interface GatewayCommandErrorDetail {
+  reason_code: string
+  reason?: string | null
+  source?: string | null
+  path?: string | null
+  blockers?: string[]
+  advisories?: string[]
+  safety?: Record<string, unknown> | null
+  preview?: PlanPreviewResponse | Record<string, unknown> | null
+  lease?: Record<string, unknown> | null
+  state?: string | null
+  has_odometry?: boolean | null
+  session_mode?: string | null
+  localization?: Record<string, unknown> | null
+  error?: string | null
+  [key: string]: unknown
+}
+
 export interface GatewayErrorResponse {
   schema_version?: number
   ok?: false
   error: string
   message?: string | null
-  detail?: unknown
+  detail?: GatewayCommandErrorDetail | Record<string, unknown> | null
   command?: CommandReceipt
 }
 
@@ -669,9 +845,11 @@ export interface ControlCommandResponse {
   command: CommandReceipt
   goal?: number[] | null
   yaw?: number | null
+  frame_id?: string | null
   instruction?: string | null
   mode?: string | null
   reason?: string | null
+  target?: ConstructedGoalTarget | null
   [key: string]: unknown
 }
 
@@ -761,6 +939,16 @@ export interface NavigationStatusEvent {
 export interface LeaseEvent {
   type: 'lease'
   data?: LeaseResponse | Record<string, unknown>
+}
+
+export interface LocationEvent {
+  type: 'location'
+  data?: LocationOperationResponse | Record<string, unknown>
+}
+
+export interface LocationsEvent {
+  type: 'locations'
+  data?: LocationsResponse | Record<string, unknown>
 }
 
 export interface CommandAckEvent {
@@ -996,6 +1184,8 @@ export type SSEEvent = SSEEnvelopeFields & (
   | SafetyEvent
   | NavigationStatusEvent
   | LeaseEvent
+  | LocationEvent
+  | LocationsEvent
   | CommandAckEvent
   | EvalEvent
   | DialogueEvent

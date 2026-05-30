@@ -78,12 +78,15 @@ def test_app_bootstrap_service_returns_client_contract():
     assert payload["capabilities_endpoint"] == "/api/v1/app/capabilities"
     assert payload["links"]["state"] == "/api/v1/state"
     assert payload["links"]["traffic"] == "/api/v1/app/traffic"
+    assert payload["links"]["readiness"] == "/api/v1/readiness"
     assert payload["links"]["auth_login"] == "/api/v1/auth/login"
     assert payload["links"]["auth_check"] == "/api/v1/auth/check"
     assert payload["links"]["localization_status"] == "/api/v1/localization/status"
     assert payload["links"]["navigation_status"] == "/api/v1/navigation/status"
+    assert payload["links"]["navigation_goal_candidate"] == "/api/v1/navigation/goal_candidate"
     assert payload["links"]["navigation_plan"] == "/api/v1/navigation/plan"
     assert payload["links"]["navigation_cancel"] == "/api/v1/navigation/cancel"
+    assert payload["links"]["routecheck_latest"] == "/api/v1/diagnostics/routecheck/latest"
     assert payload["links"]["teleop_ws"] == "/ws/teleop"
     assert payload["links"]["camera_ws"] == "/ws/camera"
     assert payload["links"]["session_start"] == "/api/v1/session/start"
@@ -109,7 +112,9 @@ def test_app_bootstrap_service_returns_client_contract():
         capabilities["endpoints"]["state"]["navigation_status"]["path"]
         == "/api/v1/navigation/status"
     )
+    assert capabilities["endpoints"]["state"]["readiness"]["path"] == "/api/v1/readiness"
     assert capabilities["endpoints"]["control"]["goal"]["method"] == "POST"
+    assert capabilities["endpoints"]["control"]["navigation_goal_candidate"]["method"] == "POST"
     assert capabilities["endpoints"]["control"]["navigation_plan"]["method"] == "POST"
     assert capabilities["endpoints"]["control"]["navigation_cancel"]["method"] == "POST"
     assert capabilities["endpoints"]["map"]["maps"]["path"] == "/api/v1/slam/maps"
@@ -122,6 +127,10 @@ def test_app_bootstrap_service_returns_client_contract():
         == "/api/v1/map/restore_predufo"
     )
     assert capabilities["probes"]["readiness"]["path"] == "/ready"
+    assert (
+        capabilities["endpoints"]["ops"]["routecheck_latest"]["path"]
+        == "/api/v1/diagnostics/routecheck/latest"
+    )
     assert capabilities["realtime"]["events"]["transport"] == "sse"
     assert capabilities["realtime"]["events"]["event_schema"] == "SSEEventEnvelope"
     assert capabilities["realtime"]["events"]["event_id_field"] == "event_id"
@@ -347,6 +356,12 @@ def test_app_bootstrap_route_endpoint_returns_payload():
     assert payload["ts"] > 0
     assert payload["links"]["health"] == "/api/v1/health"
 
+    legacy_route = next(route for route in app.routes if route.path == "/api/v1/bootstrap")
+    legacy_payload = asyncio.run(legacy_route.endpoint())
+
+    assert legacy_payload["schema_version"] == 1
+    assert legacy_payload["links"]["bootstrap"] == "/api/v1/app/bootstrap"
+
     cap_route = next(route for route in app.routes if route.path == "/api/v1/app/capabilities")
     capabilities = asyncio.run(cap_route.endpoint())
 
@@ -366,6 +381,27 @@ def test_app_bootstrap_route_endpoint_returns_payload():
     assert traffic["schema_version"] == 1
     assert traffic["status"] == "ok"
     assert traffic["links"]["events"] == "/api/v1/events"
+
+
+def test_client_readiness_endpoint_returns_details_without_probe_503():
+    from fastapi.testclient import TestClient
+
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    gateway.setup()
+    client = TestClient(gateway._app)
+
+    probe = client.get("/ready")
+    client_status = client.get("/api/v1/readiness")
+
+    assert probe.status_code == 503
+    assert client_status.status_code == 200
+    payload = client_status.json()
+    assert payload["schema_version"] == 1
+    assert payload["status"] == "not_started"
+    assert payload["ready"] is False
+    assert payload["reasons"] == ["no_modules_loaded"]
 
 
 def test_app_capabilities_enriches_specs_from_openapi():
@@ -390,7 +426,11 @@ def test_app_capabilities_enriches_specs_from_openapi():
     auth_check = capabilities["endpoints"]["auth"]["check"]
     localization = capabilities["endpoints"]["state"]["localization_status"]
     navigation = capabilities["endpoints"]["state"]["navigation_status"]
+    readiness = capabilities["endpoints"]["state"]["readiness"]
     control = capabilities["endpoints"]["control"]
+    navigation_goal_candidate = capabilities["endpoints"]["control"][
+        "navigation_goal_candidate"
+    ]
     navigation_plan = capabilities["endpoints"]["control"]["navigation_plan"]
     navigation_cancel = capabilities["endpoints"]["control"]["navigation_cancel"]
     goal = capabilities["endpoints"]["control"]["goal"]
@@ -417,6 +457,9 @@ def test_app_capabilities_enriches_specs_from_openapi():
     assert auth_check["response_schema"] == "AuthCheckResponse"
     assert localization["response_schema"] == "LocalizationStatusResponse"
     assert navigation["response_schema"] == "NavigationStatusResponse"
+    assert readiness["response_schema"] == "ReadinessResponse"
+    assert navigation_goal_candidate["request_schema"] == "GoalCandidateRequest"
+    assert navigation_goal_candidate["response_schema"] == "GoalCandidateResponse"
     assert navigation_plan["request_schema"] == "PlanPreviewRequest"
     assert navigation_plan["response_schema"] == "PlanPreviewResponse"
     assert navigation_cancel["request_schema"] == "CancelRequest"
@@ -543,6 +586,7 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     bootstrap = client.get("/api/v1/app/bootstrap")
     traffic = client.get("/api/v1/app/traffic")
     state = client.get("/api/v1/state")
+    readiness = client.get("/api/v1/readiness")
     scene_graph = client.get("/api/v1/scene_graph")
     locations = client.get("/api/v1/locations")
     path = client.get("/api/v1/path")
@@ -552,6 +596,7 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
         bootstrap,
         traffic,
         state,
+        readiness,
         scene_graph,
         locations,
         path,
@@ -562,6 +607,7 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     bootstrap_payload = bootstrap.json()
     traffic_payload = traffic.json()
     state_payload = state.json()
+    readiness_payload = readiness.json()
     scene_graph_payload = scene_graph.json()
     locations_payload = locations.json()
     path_payload = path.json()
@@ -610,10 +656,17 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     assert state_payload["links"]["camera_ws"] == "/ws/camera"
     assert state_payload["links"]["cloud_ws"] == "/ws/cloud"
     assert state_payload["links"]["health"] == "/api/v1/health"
+    assert state_payload["links"]["readiness"] == "/api/v1/readiness"
     assert state_payload["links"]["goal"] == "/api/v1/goal"
     assert state_payload["links"]["stop"] == "/api/v1/stop"
     assert state_payload["links"]["navigation_cancel"] == "/api/v1/navigation/cancel"
     assert state_payload["path"]["points"] == 2
+
+    assert readiness_payload["schema_version"] == 1
+    assert readiness_payload["status"] in {"ready", "degraded", "not_started"}
+    assert readiness_payload["ts"] > 0
+    assert isinstance(readiness_payload["reasons"], list)
+    assert isinstance(readiness_payload["modules"], dict)
 
     assert scene_graph_payload["schema_version"] == 1
     assert scene_graph_payload["frame_id"] == "map"
@@ -646,6 +699,10 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
         == "StateResponse"
     )
     assert (
+        capabilities_payload["endpoints"]["state"]["readiness"]["response_schema"]
+        == "ReadinessResponse"
+    )
+    assert (
         capabilities_payload["endpoints"]["auth"]["login"]["request_schema"]
         == "AuthLoginRequest"
     )
@@ -658,9 +715,14 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
         == "AuthCheckResponse"
     )
     assert capabilities_payload["links"]["events"] == "/api/v1/events"
+    assert capabilities_payload["links"]["readiness"] == "/api/v1/readiness"
     assert capabilities_payload["links"]["map_activate"] == "/api/v1/map/activate"
     assert capabilities_payload["links"]["map_rename"] == "/api/v1/map/rename"
     assert capabilities_payload["links"]["map_save"] == "/api/v1/map/save"
+    assert (
+        capabilities_payload["links"]["navigation_goal_candidate"]
+        == "/api/v1/navigation/goal_candidate"
+    )
     assert capabilities_payload["links"]["navigation_cancel"] == "/api/v1/navigation/cancel"
 
 

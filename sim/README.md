@@ -131,7 +131,22 @@ python sim/scripts/go1_indoor_nav.py    # Go1 indoor navigation demo
 python lingtu.py sim                     # Full LingTu stack in simulation
 ```
 
-### 6.2.1 Headless Navigation Smoke Mode
+### 6.2.1 Product Tasks On Simulation Endpoints
+
+LingTu now keeps the task profile separate from the runtime connection layer.
+Use these entries when validating the product stack instead of calling scattered
+gate scripts directly:
+
+```bash
+python lingtu.py explore --endpoint mujoco_live        # MuJoCo raw MID-360 + Fast-LIO
+python lingtu.py explore --endpoint gazebo --record    # Gazebo industrial demo + RViz
+python lingtu.py tare_explore --endpoint cmu_unity     # CMU Unity external TARE adapter
+```
+
+The older `sim_mujoco_live`, `sim_industrial`, and `sim_cmu_tare` profiles stay
+as compatibility aliases for CI/server gates.
+
+### 6.2.2 Headless Navigation Smoke Mode
 
 `MujocoDriverModule` supports two drive modes:
 
@@ -160,13 +175,67 @@ PYTHONPATH=src:. python -m pytest src/core/tests/test_sim_runtime_compat.py -q \
 
 PYTHONPATH=src:. python sim/scripts/policy_nav_smoke.py \
   --world open_field \
-  --direct-duration 6 \
-  --nav-duration 18 \
-  --goal-distance 1.0
+  --direct-duration 4 \
+  --goal-distance 0.8 \
+  --nav-duration 14 \
+  --nav-local-planner-backend nanobind \
+  --nav-path-follower-backend nav_core \
+  --nav-costmap-wait 3 \
+  --nav-path-min-speed 0.12 \
+  --nav-path-max-speed 0.35 \
+  --nav-waypoint-threshold 0.30 \
+  --nav-final-waypoint-threshold 0.25 \
+  --nav-path-goal-tolerance 0.25 \
+  --max-nav-dist-to-goal 0.30 \
+  --min-nav-motion 0.35 \
+  --nav-max-angular-z 0.1
 ```
 
-For a longer server-side soak, increase `--nav-duration` to 60 seconds and save
-the JSON output with `--json-out artifacts/policy_nav_smoke_open_field.json`.
+For the full server-side closure report, run:
+
+```bash
+PYTHONPATH=src:. python sim/scripts/routecheck_preflight_gate.py \
+  --map server_sim_demo \
+  --goal-x 1.0 \
+  --goal-y 0.0 \
+  --goal-yaw 0.0 \
+  --json-out artifacts/server_sim_closure/routecheck/summary.json \
+  --strict
+
+PYTHONPATH=src:. python sim/scripts/server_sim_closure.py \
+  --json-out artifacts/server_sim_closure_summary_all.json \
+  --strict
+```
+
+The summary is an evidence aggregator. It does not launch missing gates on its
+own; run the command shown in each failed gate before treating the closure as
+complete. A passing full summary must report `ok=true`,
+`simulation_only=true`, `real_robot_motion=false`,
+`cmd_vel_sent_to_hardware=false`, and `missing_or_failed=[]`.
+When `--required` names only a subset, non-required failures are reported in
+`optional_missing_or_failed` and `optional_gaps`; do not treat those as full
+closure evidence.
+
+Current full closure gates:
+
+| Gate | Required evidence |
+| --- | --- |
+| `multifloor_exploration` | multi-floor matrix, frontier loop, LiDAR localization contract, native PCT, nanobind local planning, nav_core tracking |
+| `large_terrain` | PCT/native planning on large terrain routes with path safety |
+| `native_pct_mujoco` | native PCT route through ROS2 local planner/path follower into MuJoCo kinematic motion |
+| `dynamic_obstacle_local_planner` | nanobind local planner replans around changing obstacles |
+| `fastlio2_live` | live MuJoCo LiDAR/IMU through Fast-LIO2 and SlamBridge tracking |
+| `policy_nav` | ONNX gait policy plus full-stack simulated navigation dataflow |
+| `gateway_dry_run` | Gateway preview/goal command flow without hardware cmd_vel |
+| `routecheck_preflight` | Gateway non-motion baseline/candidate route preflight with zero published goal/cmd_vel/stop |
+| `gazebo_runtime` | ROS-native Gazebo TF, odometry, and point-cloud frame smoke |
+| `saved_map_relocalize` | saved-map relocalization contract for localizer navigation mode |
+
+For server bootstrap verification, `scripts/deploy/setup_server_ros_pct.sh`
+runs the setup-safe subset it generates itself: the multi-floor closure gate,
+the Gateway routecheck preflight gate, and a strict summary at
+`artifacts/server_sim_closure_summary_setup.json`. Disable the routecheck
+preflight only with `LINGTU_RUN_ROUTECHECK_PREFLIGHT=0`.
 
 ### 6.2.2 Full Simulation Validation Gate
 
@@ -223,9 +292,20 @@ export PYTHONIOENCODING=utf-8
 
 python sim/scripts/policy_nav_smoke.py \
   --world open_field \
-  --direct-duration 6 \
-  --nav-duration 60 \
-  --goal-distance 1.0 \
+  --direct-duration 4 \
+  --goal-distance 0.8 \
+  --nav-duration 14 \
+  --nav-local-planner-backend nanobind \
+  --nav-path-follower-backend nav_core \
+  --nav-costmap-wait 3 \
+  --nav-path-min-speed 0.12 \
+  --nav-path-max-speed 0.35 \
+  --nav-waypoint-threshold 0.30 \
+  --nav-final-waypoint-threshold 0.25 \
+  --nav-path-goal-tolerance 0.25 \
+  --max-nav-dist-to-goal 0.30 \
+  --min-nav-motion 0.35 \
+  --nav-max-angular-z 0.1 \
   --json-out artifacts/policy_nav_smoke_open_field.json
 ```
 
@@ -234,7 +314,7 @@ loads, all poses stay finite, direct policy motion exceeds `0.20 m`, body height
 stays inside `0.35 m < z < 0.55 m`, roll/pitch stay below the script gate,
 full-stack nav emits costmap, waypoint, local path, path-follower command and
 mux command, `direct_fallback == 0`, and full-stack policy motion exceeds
-`0.20 m`.
+`0.35 m`.
 
 Common failures:
 
@@ -254,15 +334,316 @@ The preferred navigation gait checkpoint is brainstem's default
 `model/policy_251119.onnx`; place it at
 `sim/robots/nova_dog/model/policy_251119.onnx`, repo-root
 `model/policy_251119.onnx`, or a sibling `brainstem` checkout using the same
-relative `model/policy_251119.onnx` path. The checked-in legacy
-`robots/nova_dog/policy.onnx` remains only as a development fallback and uses
-5 frames (`285` input values), while brainstem's public
-`onnx_runtime/example/policy.onnx` is a single-frame (`57` input values)
-example. Newer Thunder checkpoints with non-57-multiple inputs, such as 76-D
+relative `model/policy_251119.onnx` path. If that file is unavailable,
+`sim/robots/nova_dog/policy.onnx` is the verified development fallback. Its
+metadata is recorded in `sim/robots/nova_dog/policy_manifest.json`; the current
+server-verified asset is a single-frame `57`-input policy with SHA256
+`c672253ffb89ae4f0c766615e7028a9a676572c77fc1741474e552eae55b2672`.
+Newer Thunder checkpoints with non-57-multiple inputs, such as 76-D
 RobotLab-style exports, need their original training observation field order,
 normalization, and action semantics wired into a dedicated observation builder
 before running. The runner intentionally refuses to pad or truncate those inputs
 because that produces misleading "policy runs but robot will not walk" failures.
+
+### 6.2.2 Multi-Floor LiDAR Localization / Planning Validation
+
+Use this gate for hardware-free validation of the navigation dataflow in a
+rich two-floor scene. It generates a MuJoCo XML scene, a PCT-compatible
+tomogram, and a synthetic map cloud, then validates:
+
+- synthetic scan-to-map localization health (`LOCKED` samples in `map` frame)
+- native PCT availability, ABI/lib path, tomogram hash, and route evidence
+- PCT floor-graph composition with a stairs transition edge
+- A* same-floor fallback planning
+- `global_path -> local_path -> cmd_vel -> CmdVelMux` dataflow in memory only
+- continuous odometry replay through the native `nav_core` path follower
+- optional MuJoCo bridge-loop validation:
+  `GlobalPath + WaypointTracker -> LocalPlanner -> PathFollower(nav_core) -> CmdVelMux -> MujocoDriver`
+- Wavefront frontier exploration candidate generation
+
+The script does not start Gateway, ROS services, robot services, or any real
+driver. It must keep `cmd_vel_sent_to_hardware=false`.
+
+This is not a real robot, gait policy, ROS2 SLAM, or physical stairs gate.
+Reports must include `validation_level=kinematic_module_ports`,
+`physical_gait_verified=false`, `slam_verified=false`,
+`real_lidar_verified=false`, and `cross_floor_physical_verified=false`.
+`--bridge-loop` uses kinematic MuJoCo motion unless a separate policy-mode gate
+is run.
+
+```bash
+PYTHONPATH=src:. python sim/scripts/multifloor_nav_validation.py \
+  --output-dir artifacts/multifloor_matrix \
+  --route matrix \
+  --planners pct,astar \
+  --strict \
+  --json-out artifacts/multifloor_matrix/report.json
+```
+
+To validate simulated motion through the module ports, add `--bridge-loop`.
+This moves only the MuJoCo robot. It still must report
+`real_robot_motion=false` and `cmd_vel_sent_to_hardware=false`.
+The default local planner backend is `simple`; use
+`--local-planner-backend nanobind --require-production-local-planner` when the
+native local planner has been built and the report must fail on simple fallback.
+
+```bash
+PYTHONPATH=src:. python sim/scripts/multifloor_nav_validation.py \
+  --output-dir artifacts/multifloor_matrix_bridge \
+  --route matrix \
+  --planners pct,astar \
+  --local-planner-backend nanobind \
+  --require-production-local-planner \
+  --bridge-loop \
+  --strict \
+  --json-out artifacts/multifloor_matrix_bridge/report.json
+```
+
+For focused debugging, run a single route:
+
+```bash
+PYTHONPATH=src:. python sim/scripts/multifloor_nav_validation.py \
+  --output-dir artifacts/multifloor_cross_floor \
+  --route cross_floor \
+  --planners pct,astar \
+  --strict \
+  --json-out artifacts/multifloor_cross_floor/report.json
+
+PYTHONPATH=src:. python sim/scripts/multifloor_nav_validation.py \
+  --output-dir artifacts/multifloor_same_floor \
+  --route same_floor \
+  --planners pct,astar \
+  --strict \
+  --json-out artifacts/multifloor_same_floor/report.json
+```
+
+For shorter bridge-loop debugging, limit the matrix:
+
+```bash
+PYTHONPATH=src:. python sim/scripts/multifloor_nav_validation.py \
+  --output-dir artifacts/multifloor_lower_bridge \
+  --route matrix \
+  --matrix-routes same_floor,lower_approach \
+  --planners astar \
+  --bridge-loop \
+  --local-planner-backend nanobind \
+  --require-production-local-planner \
+  --strict \
+  --json-out artifacts/multifloor_lower_bridge/report.json
+```
+
+Expected result for a strict `pct,astar` run on a host with native PCT
+available:
+
+- `passed=true`
+- `validation_level=kinematic_module_ports`
+- `physical_gait_verified=false`
+- `slam_verified=false`
+- `real_lidar_verified=false`
+- `cross_floor_physical_verified=false`
+- `mujoco_scene_load.ok=true`
+- `lidar_localization.ok=true`
+- `native_pct_gate.ok=true`
+- `native_pct_gate.runtime_ok=true`
+- `native_pct_gate.tomogram_sha256` is populated
+- `local_planner_backend_verified=nanobind` when production local planning is required
+- `production_local_planner_verified=true` when production local planning is required
+- `planning[pct].feasible=true`
+- `planning[pct].status=pass`
+- `planning[pct].backend_available=true`
+- `planning[pct].native_backend_used=true`
+- `planning[pct].path_validation.ok=true`
+- `command_flow.ok=true`
+- `command_flow.cmd_vel_sent_to_hardware=false`
+- `tracking_replay.ok=true`
+- `tracking_replay.backend_actual=nav_core`
+- `tracking_replay.cmd_vel_sent_to_hardware=false`
+- when `--bridge-loop` is enabled:
+  - `mujoco_bridge_loop.ok=true`
+  - every segment has `reached_goal=true`
+  - every segment has `nonzero_linear_xy_cmd_count>0`
+  - every segment has `max_linear_xy>0.02`
+  - every segment has `moved_m>0.05`
+  - every segment reports `path_follower_backend=nav_core`
+  - production local-planner segments report `local_path_trim_start_dist_m=0.2`
+  - `mujoco_bridge_loop.cmd_vel_sent_to_hardware=false`
+- `exploration.ok=true`
+
+The bridge loop intentionally fails if the modules only exchange messages but
+all velocity commands stay zero. This catches dense or degenerate local paths
+that are not actually trackable by `PathFollowerModule(backend="nav_core")`.
+`LocalPlannerModule(backend="nanobind")` also filters untrackable placeholder
+paths before publishing, so a one-point `{0,0,0}` recovery/stop result clears
+the local path instead of masquerading as a valid plan.
+
+For the cross-floor route, A* is expected to fail because it has no floor graph
+or vertical transition model. PCT is required, but this script validates
+cross-floor as floor-graph composition: per-floor native PCT segments plus an
+explicit stairs transition edge. It does not prove that native PCT solved one
+single 3D multi-floor problem, and it does not prove physical stair climbing.
+The cross-floor PCT result must report `native_backend_used=true`,
+`transition_validation.ok=true`, `native_pct_single_plan_verified=false`, and
+`transition_motion_verified=false`.
+
+If native PCT cannot load on the current host or the tomogram is missing, the
+report must use `planning[pct].status=blocked`,
+`planning[pct].blocked=true`, and `native_pct_gate.blocked=true`. That is not a
+pass; it is explicit evidence that this machine cannot validate the production
+PCT route yet.
+
+If `tracking_replay.backend_actual` falls back to `pid`, build the native
+backend first:
+
+```bash
+bash scripts/build_nav_core.sh
+```
+
+#### Native PCT + ROS2 Local Planner + MuJoCo Showcase Gate
+
+Use this gate when a demo needs stronger evidence than the in-process
+`nanobind` module loop. It reuses a multifloor validation report that already
+contains native PCT output, starts the ROS2 native `localPlanner` and
+`pathFollower` executables, feeds them PCT waypoints, and applies the native
+`/cmd_vel` stream to a kinematic MuJoCo robot.
+
+The script is still simulation-only. It does not start Gateway, CmdVelMux,
+robot drivers, robot services, or hardware bridges. Before launching
+`pathFollower`, it checks the selected ROS domain for existing `/cmd_vel` or
+`/nav/cmd_vel` subscribers and refuses to run unless the domain is isolated.
+When `--video-out` is used on a headless server, the script defaults
+`MUJOCO_GL=egl` for offscreen rendering unless that environment variable is
+already set.
+
+Obstacle checking is enabled by default. The gate publishes scene metadata
+obstacles to the native local planner and applies a conservative waypoint
+safety filter before handing PCT output to the path follower. This prevents a
+demo from passing only because it tracked a path through a pillar. Use
+`--disable-obstacle-check` or `--disable-waypoint-safety-filter` only for
+debugging, and do not report those runs as obstacle-avoidance evidence.
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export PYTHONPATH=src:.
+
+python sim/scripts/native_pct_mujoco_gate.py \
+  --generate-source-report \
+  --route same_floor \
+  --ros-domain-id 93 \
+  --strict \
+  --json-out artifacts/native_pct_mujoco_gate/report.json \
+  --video-out artifacts/native_pct_mujoco_gate/navigation.mp4
+```
+
+For an App/Web-style evidence video, use the four-panel layout. It records the
+front camera RGB panel, robot-frame local planner view, MuJoCo observer view,
+and live point-cloud/map view in one MP4. The report also captures sampled
+native `/path` messages in `local_path_samples`, so the video can distinguish
+global route display from real local-planner output.
+
+For algorithm demos, prefer `--video-layout scene_overlay --sim-vehicle
+omni_cart`. It keeps the same native PCT and ROS2 `localPlanner` output, but
+draws the global preview, native local `/path`, actual trail, and LiDAR points
+directly into one MuJoCo observer scene. Use the quadruped visualization only
+when gait, contact, or body-yaw behavior is the thing being evaluated.
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM=egl
+export PYTHONPATH=src:.
+
+python sim/scripts/native_pct_mujoco_gate.py \
+  --source-report artifacts/large_terrain_nav_validation_pct_ros_v10/report.json \
+  --route terrain_long \
+  --planner pct \
+  --artifact-dir artifacts/native_pct_evidence_video \
+  --json-out artifacts/native_pct_evidence_video/report.json \
+  --video-out artifacts/native_pct_evidence_video/navigation_evidence.mp4 \
+  --video-layout scene_overlay \
+  --sim-vehicle omni_cart \
+  --video-fps 1 \
+  --video-width 1920 \
+  --video-height 1080 \
+  --camera-fovy 78 \
+  --front-path-lookahead-m 16 \
+  --scene-overlay-point-limit 500 \
+  --n-rays 64 \
+  --lidar-sample-count 256 \
+  --timeout-s 260 \
+  --sample-limit 260 \
+  --trajectory-sample-stride 5 \
+  --max-speed 0.45 \
+  --max-lateral-speed 0.45 \
+  --omni-lookahead-m 1.3 \
+  --omni-min-speed 0.14 \
+  --omni-yaw-gain 0.35 \
+  --omni-max-yaw-rate 0.16 \
+  --omni-yaw-deadband 0.16 \
+  --ros-domain-id 198 \
+  --strict
+```
+
+Expected proof fields:
+
+- `ok=true`
+- `pct_native_backend_used=true`
+- `pct_runtime_ok=true`
+- `video.image_source="MuJoCo observer renderer with 3D scene overlays"` for scene overlay videos
+- `video.lidar_source.kind="MuJoCo ray-cast simulated Livox MID-360 style scan"`
+- `sim_vehicle=omni_cart` for algorithm showcase videos
+- `drive_adapter=omni_local_path_tracker` for algorithm showcase videos
+- `backend.local_planner=cmu_ros2_native/localPlanner`
+- `backend.path_follower=cmu_ros2_native/pathFollower`
+- `backend.sim_driver=MuJoCoEngine(kinematic)`
+- `reached_goal=true`
+- `path_count>0`
+- `local_path_samples` is non-empty for evidence videos
+- `cmd_count_nonzero>0`
+- `moved_m` exceeds the configured `--min-motion-m`
+- `obstacle_aware.enabled=true`
+- `obstacle_clearance.collision=false`
+- `real_robot_motion=false`
+- `cmd_vel_sent_to_hardware=false`
+- `video.exists=true` when `--video-out` is provided
+
+This is the right gate for showing that global planning, ROS2 native local
+planning, native path following, and simulated robot motion are connected. It
+still does not prove real Fast-LIO2 localization, policy gait stability,
+real-device latency, safety mux delivery to a robot driver, or long-duration
+field robustness.
+
+#### Large Terrain Planning Asset Gate
+
+Use this gate before recording large-field motion videos. It builds a
+24m-class synthetic terrain with boundary walls, boulders, a central narrow
+gate, rough/high-cost zones, a slope band, and a no-go ditch. The gate validates
+global planning assets only: no ROS2 nodes, Gateway, driver, CmdVelMux, or real
+robot command path is started.
+
+```bash
+PYTHONPATH=src:. python sim/scripts/large_terrain_nav_validation.py \
+  --output-dir artifacts/large_terrain_nav_validation \
+  --json-out artifacts/large_terrain_nav_validation/report.json \
+  --strict
+```
+
+Expected proof fields:
+
+- `ok=true`
+- `validation_level=global_planning_assets`
+- `simulation_only=true`
+- `real_robot_motion=false`
+- `cmd_vel_sent_to_hardware=false`
+- each case has `planning[0].feasible=true`
+- each case has `path_safety.ok=true`
+- gate routes have `gate_crossing.passed_gate=true`
+
+Current routes are `terrain_short`, `terrain_long`, `terrain_narrow_gap`, and
+`terrain_slope_bypass`. The next stronger gate is to feed this report into the
+native ROS2 local-planner + MuJoCo video loop and require
+`obstacle_clearance.collision=false`.
 
 ### 6.3 Full Stack with ROS2
 
@@ -308,6 +689,106 @@ Offline LiDAR/IMU datasets for algorithm development and testing:
 |---------|--------|----------|
 | `datasets/Avia/` | Livox Avia | LiDAR-inertial odometry testing |
 | `datasets/legkilo*/` | Legged robot | Kinematic-inertial-LiDAR fusion |
+
+### 8.1 ROS2 Bag Replay Gates
+
+There are four distinct replay levels. Do not report the lower level as proof
+of the higher level:
+
+| Gate | Script | Proves | Does not prove |
+|------|--------|--------|----------------|
+| Raw CDR bridge replay | `sim/scripts/rosbag_slam_bridge_replay.py` | Real rosbag2 CDR messages can enter `SlamBridgeModule` and produce localization health | Fast-LIO2/Super-LIO/localizer algorithm output |
+| Fast-LIO2 algorithm replay | `sim/scripts/fastlio2_rosbag_replay_gate.py` | Real `/imu_raw + /points_raw` rosbag replay through `fastlio2/lio_node`, then `/Odometry + /cloud_registered` into `SlamBridgeModule` | Saved-map relocalization |
+| MuJoCo live Fast-LIO2 gate | `python lingtu.py sim_mujoco_live gate` | Live MuJoCo LiDAR/IMU publishes `/points_raw + /imu_raw`, Fast-LIO2 publishes `/Odometry + /cloud_map`, and canonical `/nav/*` topics are present | Real robot gait, real MID-360 driver timing, saved-map relocalization |
+| Localizer replay | localizer node with `/Odometry + /cloud_registered` and a static map | ICP localizer contract against a map | BBS3D global relocalization unless `libcpu_bbs3d` is installed |
+
+Server evidence from the 2026-05-07 validation run:
+
+```bash
+# Raw rosbag2 CDR -> SlamBridge
+source /opt/ros/humble/setup.bash
+PYTHONPATH=src:.:$PYTHONPATH python3 sim/scripts/rosbag_slam_bridge_replay.py \
+  --bag artifacts/rosbag_replay_subset/grass_raw_odom_cloud_tiny \
+  --odom-topic /state_SDK \
+  --cloud-topic /points_raw \
+  --json-out artifacts/rosbag_replay_subset/grass_raw_bridge_report.json \
+  --strict
+
+# Fast-LIO2 node -> SlamBridge
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export LD_LIBRARY_PATH="$PWD/.third_party/livox_sdk2/lib:$LD_LIBRARY_PATH"
+PYTHONPATH=src:.:$PYTHONPATH python3 sim/scripts/fastlio2_rosbag_replay_gate.py \
+  --bag artifacts/rosbag_replay_subset/grass_fastlio2_aligned_window \
+  --imu-topic /imu_raw \
+  --lidar-topic /points_raw \
+  --playback-rate 1.0 \
+  --json-out artifacts/fastlio2_rosbag_replay/grass_window_final_tracking/report.json \
+  --strict
+
+# MuJoCo live LiDAR/IMU -> Fast-LIO2 -> canonical /nav/*.
+python lingtu.py sim_mujoco_live gate
+
+# Same source path plus LingTu frontier/navigation driving /nav/cmd_vel.
+python lingtu.py sim_mujoco_live explore
+
+# Long-running live review: starts exploration and opens RViz with cloud,
+# map, path, odometry, and TF displays.
+python lingtu.py sim_mujoco_live demo
+
+# Same as explore, with MP4 evidence.
+python lingtu.py sim_mujoco_live video
+```
+
+Expected Fast-LIO2 strict evidence:
+
+- `ok=true`
+- `real_rosbag_replay_verified=true`
+- `slam_algorithm_output_verified=true`
+- `bridge_verified=true`
+- `outputs.fastlio2_odometry > 0`
+- `outputs.fastlio2_cloud_registered > 0`
+- `final_bridge_status.state=TRACKING`
+
+Expected MuJoCo live strict evidence:
+
+- `ok=true`
+- `simulation_only=true`
+- `real_robot_motion=false`
+- `live_mujoco_lidar_verified=true`
+- `live_mujoco_imu_verified=true`
+- `slam_algorithm_output_verified=true`
+- `outputs.fastlio2_odometry > 0`
+- `outputs.fastlio2_cloud_map > 0`
+- `final_bridge_status.state=TRACKING`
+
+MuJoCo live LiDAR topic inventory:
+
+| Topic | Message Type | Frame | Purpose |
+|-------|--------------|-------|---------|
+| `/points_raw` | `livox_ros_driver2/msg/CustomMsg` by default, or `sensor_msgs/msg/PointCloud2` with `--fastlio-lidar-input timed_pointcloud2` | `body` | Raw MID-360-pattern LiDAR input to Fast-LIO2 |
+| `/imu_raw` | `sensor_msgs/msg/Imu` | `body` | Raw simulated IMU input to Fast-LIO2 |
+| `/cloud_registered` | `sensor_msgs/msg/PointCloud2` | `body` | Fast-LIO2 registered scan output |
+| `/cloud_map` | `sensor_msgs/msg/PointCloud2` | `odom` | Fast-LIO2 local map output |
+| `/Odometry` | `nav_msgs/msg/Odometry` | `odom -> body` | Fast-LIO2 localization output |
+| `/nav/registered_cloud` | `sensor_msgs/msg/PointCloud2` | `body` | LingTu canonical current cloud |
+| `/nav/map_cloud` | `sensor_msgs/msg/PointCloud2` | `odom` | LingTu canonical map cloud |
+| `/nav/odometry` | `nav_msgs/msg/Odometry` | `odom -> body` | LingTu canonical odometry |
+| `/nav/exploration_grid` | `nav_msgs/msg/OccupancyGrid` | `odom` | Occupancy map used by exploration |
+| `/nav/global_path` | `nav_msgs/msg/Path` | `odom` | LingTu global path for RViz and gates |
+| `/nav/local_path` | `nav_msgs/msg/Path` | `odom` | LingTu local path for RViz and gates |
+| `/nav/cmd_vel` | `geometry_msgs/msg/TwistStamped` | `body` | LingTu navigation command fed back to MuJoCo only |
+
+For large MuJoCo scenes, the live gate injects a temporary `<size
+memory="64M"/>` into the scene before the engine merges the world with the
+robot XML. `MuJoCoEngine.load()` preserves that size block during merge so rich
+factory scenes do not fail with a constraint-stack overflow. The original scene
+XML is not modified.
+
+The LEG-KILO bag has storage timestamps and message header timestamps that are
+not aligned at the beginning of the file. Fast-LIO2 synchronizes on message
+header time, so use the extracted aligned window rather than the first raw
+messages in the bag.
 
 ## 9. ROS2 Interface
 

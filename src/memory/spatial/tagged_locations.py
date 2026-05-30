@@ -10,9 +10,10 @@ Tagged Location Store — 用户/Agent 手动标记的地点记忆。
 
 import json
 import logging
+import time
 import os
 import threading
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,10 @@ class TaggedLocationStore:
         y: float,
         z: float = 0.0,
         yaw: float | None = None,
+        tags: list[str] | None = None,
+        source: str | None = None,
+        ts: float | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """存储一个标签地点（已存在则覆盖）。
 
@@ -50,9 +55,18 @@ class TaggedLocationStore:
             x, y, z: 地图坐标（map 帧）
             yaw: 朝向角（弧度），可选
         """
-        entry = {"name": name, "position": [float(x), float(y), float(z)], "yaw": yaw}
+        entry = {
+            "name": name,
+            "position": [float(x), float(y), float(z)],
+            "yaw": yaw,
+            "tags": [str(tag) for tag in (tags or [])],
+            "source": source,
+            "ts": float(ts if ts is not None else time.time()),
+            "metadata": dict(metadata or {}),
+        }
         with self._lock:
             self._store[name] = entry
+        self.save()
         logger.info("Tagged location '%s' at (%.2f, %.2f, %.2f)", name, x, y, z)
 
     def remove(self, name: str) -> bool:
@@ -60,6 +74,8 @@ class TaggedLocationStore:
         with self._lock:
             existed = name in self._store
             self._store.pop(name, None)
+        if existed:
+            self.save()
         if existed:
             logger.info("Removed tagged location '%s'", name)
         return existed

@@ -31,6 +31,14 @@ from geometry_msgs.msg import TwistStamped, TransformStamped
 from sensor_msgs.msg import PointCloud2, PointField
 from tf2_ros import TransformBroadcaster
 
+from pathlib import Path
+
+SRC_DIR = Path(__file__).resolve().parents[2] / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from core.runtime_interface import FRAMES, TOPICS
+
 # ── 3D 建筑场景 ──────────────────────────────────────────────────
 SCENE_XML = """
 <mujoco model="building_nav">
@@ -329,11 +337,11 @@ class MuJoCoSimNode(Node):
             mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, 'root')]
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
-        self.pub_odom = self.create_publisher(Odometry, '/nav/odometry', qos)
-        self.pub_cloud = self.create_publisher(PointCloud2, '/nav/registered_cloud', qos)
+        self.pub_odom = self.create_publisher(Odometry, TOPICS.odometry, qos)
+        self.pub_cloud = self.create_publisher(PointCloud2, TOPICS.registered_cloud, qos)
         self.pub_cloud2 = self.create_publisher(PointCloud2, '/livox/lidar', qos)
         self.tf_br = TransformBroadcaster(self)
-        self.create_subscription(TwistStamped, '/nav/cmd_vel', self._cmd_cb, qos)
+        self.create_subscription(TwistStamped, TOPICS.cmd_vel, self._cmd_cb, qos)
         self.create_subscription(Path, '/path', self._path_cb, qos)
 
         self._cmd_vx = 0.0
@@ -399,8 +407,8 @@ class MuJoCoSimNode(Node):
 
         odom = Odometry()
         odom.header.stamp = stamp
-        odom.header.frame_id = 'odom'
-        odom.child_frame_id = 'body'
+        odom.header.frame_id = FRAMES.odom
+        odom.child_frame_id = FRAMES.body
         odom.pose.pose.position.x = float(pos[0])
         odom.pose.pose.position.y = float(pos[1])
         odom.pose.pose.position.z = float(pos[2])
@@ -415,13 +423,13 @@ class MuJoCoSimNode(Node):
 
         t1 = TransformStamped()
         t1.header.stamp = stamp
-        t1.header.frame_id = 'map'
-        t1.child_frame_id = 'odom'
+        t1.header.frame_id = FRAMES.map
+        t1.child_frame_id = FRAMES.odom
         t1.transform.rotation.w = 1.0
         t2 = TransformStamped()
         t2.header.stamp = stamp
-        t2.header.frame_id = 'odom'
-        t2.child_frame_id = 'body'
+        t2.header.frame_id = FRAMES.odom
+        t2.child_frame_id = FRAMES.body
         t2.transform.translation.x = float(pos[0])
         t2.transform.translation.y = float(pos[1])
         t2.transform.translation.z = float(pos[2])
@@ -439,7 +447,7 @@ class MuJoCoSimNode(Node):
         if len(pts_body) == 0:
             return
         stamp = self._stamp()
-        msg = pack_pointcloud2(pts_body, 'body', stamp)
+        msg = pack_pointcloud2(pts_body, FRAMES.body, stamp)
         self.pub_cloud.publish(msg)
         self.pub_cloud2.publish(msg)
         if self._frame % 50 == 0:

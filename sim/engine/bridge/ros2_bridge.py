@@ -22,6 +22,8 @@ from typing import Optional
 
 import numpy as np
 
+from core.runtime_interface import FRAMES, TOPICS
+
 
 class SimROS2Bridge:
     """Bridge simulation engine data to ROS2 topics.
@@ -106,17 +108,17 @@ class SimROS2Bridge:
 
         # Publishers
         self._odom_pub = self._node.create_publisher(
-            Odometry, "/nav/odometry", qos)
+            Odometry, TOPICS.odometry, qos)
         self._cloud_pub = self._node.create_publisher(
-            PointCloud2, "/nav/map_cloud", qos)
+            PointCloud2, TOPICS.map_cloud, qos)
         self._cloud_body_pub = self._node.create_publisher(
-            PointCloud2, "/nav/registered_cloud", qos)
+            PointCloud2, TOPICS.registered_cloud, qos)
         self._img_pub = self._node.create_publisher(
-            Image, "/camera/color/image_raw", qos)
+            Image, TOPICS.camera_color, qos)
         self._depth_pub = self._node.create_publisher(
-            Image, "/camera/depth/image_raw", qos)
+            Image, TOPICS.camera_depth, qos)
         self._info_pub = self._node.create_publisher(
-            CameraInfo, "/camera/color/camera_info", qos_tl)
+            CameraInfo, TOPICS.camera_info, qos_tl)
 
         # TF broadcasters
         self._tf_broadcaster = TransformBroadcaster(self._node)
@@ -124,7 +126,7 @@ class SimROS2Bridge:
 
         # Subscriber
         self._node.create_subscription(
-            TwistStamped, "/nav/cmd_vel", self._cmd_vel_cb, qos)
+            TwistStamped, TOPICS.cmd_vel, self._cmd_vel_cb, qos)
 
         # Save message type references
         self._Odometry = Odometry
@@ -166,8 +168,8 @@ class SimROS2Bridge:
         """Publish static TF: map -> odom (treated as same frame in simulation)."""
         tf = self._TransformStamped()
         tf.header.stamp = self._node.get_clock().now().to_msg()
-        tf.header.frame_id = "map"
-        tf.child_frame_id = "odom"
+        tf.header.frame_id = FRAMES.map
+        tf.child_frame_id = FRAMES.odom
         tf.transform.rotation.w = 1.0
         self._static_tf_broadcaster.sendTransform([tf])
 
@@ -205,8 +207,8 @@ class SimROS2Bridge:
         # Odometry
         odom = self._Odometry()
         odom.header.stamp = now
-        odom.header.frame_id = "odom"
-        odom.child_frame_id = "body"
+        odom.header.frame_id = FRAMES.odom
+        odom.child_frame_id = FRAMES.body
         odom.pose.pose.position.x = float(pos[0])
         odom.pose.pose.position.y = float(pos[1])
         odom.pose.pose.position.z = float(pos[2])
@@ -226,8 +228,8 @@ class SimROS2Bridge:
         # TF: odom -> body
         tf = self._TransformStamped()
         tf.header.stamp = now
-        tf.header.frame_id = "odom"
-        tf.child_frame_id = "body"
+        tf.header.frame_id = FRAMES.odom
+        tf.child_frame_id = FRAMES.body
         tf.transform.translation.x = float(pos[0])
         tf.transform.translation.y = float(pos[1])
         tf.transform.translation.z = float(pos[2])
@@ -255,7 +257,7 @@ class SimROS2Bridge:
         # World frame -> /nav/map_cloud
         msg = self._PointCloud2()
         msg.header.stamp = now
-        msg.header.frame_id = "odom"
+        msg.header.frame_id = FRAMES.odom
         msg.height = 1
         msg.width = len(pts_f32)
         msg.is_dense = False
@@ -283,7 +285,7 @@ class SimROS2Bridge:
 
             msg2 = self._PointCloud2()
             msg2.header.stamp = now
-            msg2.header.frame_id = "body"
+            msg2.header.frame_id = FRAMES.body
             msg2.height = 1
             msg2.width = len(pts_body)
             msg2.is_dense = False
@@ -307,7 +309,7 @@ class SimROS2Bridge:
             h, w = cam.rgb.shape[:2]
             img_msg = self._Image()
             img_msg.header.stamp = now
-            img_msg.header.frame_id = "camera_link"
+            img_msg.header.frame_id = FRAMES.camera
             img_msg.height = h
             img_msg.width = w
             img_msg.encoding = "rgb8"
@@ -325,7 +327,7 @@ class SimROS2Bridge:
             h, w = cam.depth.shape[:2]
             depth_msg = self._Image()
             depth_msg.header.stamp = now
-            depth_msg.header.frame_id = "camera_link"
+            depth_msg.header.frame_id = FRAMES.camera
             depth_msg.height = h
             depth_msg.width = w
             depth_msg.encoding = "32FC1"
@@ -344,7 +346,7 @@ class SimROS2Bridge:
                     else cam.depth.shape[:2])
             info = self._CameraInfo()
             info.header.stamp = now
-            info.header.frame_id = "camera_link"
+            info.header.frame_id = FRAMES.camera
             info.height = h
             info.width = w
             K = cam.K.flatten().tolist()

@@ -3,7 +3,12 @@
 #include <chrono>
 #include <cstdio>
 #include <exception>
+
+#ifdef LINGTU_ENABLE_BBS3D
 #include <cpu_bbs3d/bbs3d.hpp>
+#else
+namespace cpu { class BBS3D {}; }
+#endif
 
 namespace {
 inline std::vector<Eigen::Vector3d> to_eigen(const CloudType::Ptr& c) {
@@ -17,6 +22,7 @@ inline std::vector<Eigen::Vector3d> to_eigen(const CloudType::Ptr& c) {
 }
 }  // namespace
 
+#ifdef LINGTU_ENABLE_BBS3D
 BBS3DGlobalLocalizer::BBS3DGlobalLocalizer(const Config& cfg)
     : cfg_(cfg), bbs_(std::make_unique<cpu::BBS3D>()) {
     bbs_->set_num_threads(cfg_.num_threads);
@@ -109,3 +115,25 @@ BBS3DGlobalLocalizer::Result BBS3DGlobalLocalizer::localize(const CloudType::Ptr
         r.pose(0, 3), r.pose(1, 3), r.pose(2, 3));
     return r;
 }
+#else
+BBS3DGlobalLocalizer::BBS3DGlobalLocalizer(const Config& cfg)
+    : cfg_(cfg), bbs_(nullptr) {}
+
+BBS3DGlobalLocalizer::~BBS3DGlobalLocalizer() = default;
+
+bool BBS3DGlobalLocalizer::set_map(const CloudType::Ptr& map_cloud) {
+    (void)map_cloud;
+    has_map_ = false;
+    return false;
+}
+
+BBS3DGlobalLocalizer::Result BBS3DGlobalLocalizer::localize(const CloudType::Ptr& scan_cloud) {
+    Result r;
+    if (!scan_cloud || scan_cloud->empty()) {
+        r.message = "scan empty";
+        return r;
+    }
+    r.message = "BBS3D disabled at build time";
+    return r;
+}
+#endif

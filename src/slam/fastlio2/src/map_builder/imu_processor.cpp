@@ -99,6 +99,9 @@ void IMUProcessor::undistort(SyncPackage &package)
     m_last_imu = m_imu_cache.back();
     m_last_propagate_end_time = propagate_time_end;
 
+    if (m_config.vertical_velocity_constraint_enabled)
+        m_kf->injectVerticalVelocityConstraint(m_config.vertical_velocity_sigma_v);
+
     checkIMUStationary(m_imu_cache);
 
     M3D cur_r_wi = m_kf->x().r_wi;

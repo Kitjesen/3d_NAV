@@ -35,8 +35,10 @@ install(TARGETS
 )
 
 # Python mission_arc 节点
-install(PROGRAMS src/mission_arc.py
-  DESTINATION lib/${PROJECT_NAME})
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/mission_arc.py")
+  install(PROGRAMS src/mission_arc.py
+    DESTINATION lib/${PROJECT_NAME})
+endif()
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

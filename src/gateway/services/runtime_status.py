@@ -8,6 +8,9 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from core.runtime_policy import (
+    backend_capability_defaults as _backend_capability_defaults,
+)
 from gateway.services.safety_status import (
     SAFETY_STOP_BLOCKER,
     safety_stop_active,
@@ -188,61 +191,7 @@ def _as_optional_bool(value: Any) -> bool | None:
 
 
 def backend_capability_defaults(backend_name: str | None) -> dict[str, Any]:
-    backend = str(backend_name or "").strip().lower()
-    backend = {
-        "super-lio": "super_lio",
-        "superlio": "super_lio",
-        "super_lio_reloc": "super_lio_relocation",
-        "super-lio-reloc": "super_lio_relocation",
-        "superlio-reloc": "super_lio_relocation",
-        "super-lio-relocation": "super_lio_relocation",
-        "superlio-relocation": "super_lio_relocation",
-        "relocation": "super_lio_relocation",
-    }.get(backend, backend)
-    if backend == "super_lio":
-        return {
-            "map_save_supported": True,
-            "map_save_source": "live_map_cloud_snapshot",
-            "relocalization_supported": False,
-            "saved_map_relocalization_supported": False,
-            "restart_recovery_supported": True,
-            "recovery_method": "restart_super_lio",
-        }
-    if backend == "super_lio_relocation":
-        return {
-            "map_save_supported": False,
-            "map_save_source": "active_map",
-            "relocalization_supported": False,
-            "saved_map_relocalization_supported": False,
-            "restart_recovery_supported": True,
-            "recovery_method": "restart_super_lio_relocation",
-        }
-    if backend == "localizer":
-        return {
-            "map_save_supported": False,
-            "map_save_source": "active_map",
-            "relocalization_supported": True,
-            "saved_map_relocalization_supported": True,
-            "restart_recovery_supported": True,
-            "recovery_method": "relocalize_service",
-        }
-    if backend in {"fastlio2", "slam"}:
-        return {
-            "map_save_supported": True,
-            "map_save_source": "slam_save_maps",
-            "relocalization_supported": False,
-            "saved_map_relocalization_supported": False,
-            "restart_recovery_supported": True,
-            "recovery_method": "restart_slam",
-        }
-    return {
-        "map_save_supported": False,
-        "map_save_source": None,
-        "relocalization_supported": True,
-        "saved_map_relocalization_supported": True,
-        "restart_recovery_supported": False,
-        "recovery_method": "relocalize_service",
-    }
+    return _backend_capability_defaults(backend_name)
 
 
 def _reason_code_from_text(prefix: str, text: str) -> str:
@@ -750,12 +699,18 @@ def _target_summary(
         mission.get("current_waypoint") or mission.get("waypoint"),
         ts=ts,
     )
-    distance_to_goal = _finite_float(mission.get("distance_to_goal_m"))
-    if distance_to_goal is None:
-        distance_to_goal = _distance_xy(robot, goal)
-    waypoint_distance = _finite_float(mission.get("active_waypoint_distance_m"))
-    if waypoint_distance is None:
-        waypoint_distance = _distance_xy(robot, current_waypoint)
+    live_goal_distance = _distance_xy(robot, goal)
+    distance_to_goal = (
+        live_goal_distance
+        if live_goal_distance is not None
+        else _finite_float(mission.get("distance_to_goal_m"))
+    )
+    live_waypoint_distance = _distance_xy(robot, current_waypoint)
+    waypoint_distance = (
+        live_waypoint_distance
+        if live_waypoint_distance is not None
+        else _finite_float(mission.get("active_waypoint_distance_m"))
+    )
     remaining_waypoints = _as_optional_int(mission.get("remaining_waypoints"))
     if remaining_waypoints is None and wp_total:
         remaining_waypoints = max(0, wp_total - wp_index)
@@ -905,7 +860,7 @@ def _navigation_reason_codes(
         codes.append(SAFETY_STOP_BLOCKER)
     if bool(session.get("pending", False)):
         codes.append("session_transition_pending")
-    if _session_mode(session) != "navigating":
+    if _session_mode(session) not in {"navigating", "exploring"}:
         codes.append("navigation_session_inactive")
 
     localization_state = str(localization.get("state") or "unknown")
@@ -1075,7 +1030,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         mode != "estop"
         and odometry is not None
         and not bool(session.get("pending", False))
-        and session_mode == "navigating"
+        and session_mode in {"navigating", "exploring"}
     )
     control = _control_summary(
         mode=mode,
@@ -1142,6 +1097,14 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         readiness=readiness,
         reason_codes=reason_codes,
     )
+    plan_safety_policy = (
+        nav_runtime.get("plan_safety_policy")
+        or mission.get("plan_safety_policy")
+    )
+    last_plan_report = (
+        _mapping(nav_runtime.get("last_plan_report"))
+        or _mapping(mission.get("last_plan_report"))
+    )
 
     return {
         "schema_version": NAVIGATION_STATUS_SCHEMA_VERSION,
@@ -1183,6 +1146,8 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
             "cmd_vel_mux_available": control.get("mux_available", False),
             "frame_mismatches": frames.get("mismatches", []),
             "safety": safety_summary(safety),
+            "plan_safety_policy": plan_safety_policy,
+            "last_plan_report": last_plan_report,
         },
         "mission": {
             "state": state,

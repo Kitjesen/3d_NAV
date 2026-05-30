@@ -15,6 +15,7 @@ All tests are pure-Python, no ROS2 / hardware required.
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -147,6 +148,22 @@ class TestMapManagerModule(unittest.TestCase):
     def test_build_tomogram_missing_name(self):
         resp = self.mod._build_tomogram("")
         self.assertFalse(resp["success"])
+
+    def test_build_occupancy_command_dispatches_snapshot_builder(self):
+        with patch.object(
+            self.mod,
+            "_build_occupancy_snapshot",
+            return_value={
+                "action": "build_occupancy_snapshot",
+                "success": True,
+                "occupancy": "occupancy.npz",
+            },
+        ) as occupancy:
+            resp = self._cmd({"action": "build_occupancy", "name": "demo"})
+
+        self.assertTrue(resp["success"])
+        self.assertEqual(resp["action"], "build_occupancy_snapshot")
+        occupancy.assert_called_once_with("demo")
 
     def test_map_save_missing_name(self):
         resp = self.mod._map_save("")
@@ -294,6 +311,41 @@ class TestMapManagerModule(unittest.TestCase):
         "gateway.gateway_module._apply_dynamic_filter_step1half",
         return_value=None,
     )
+    def test_map_save_localizer_requires_navigation_tomogram(
+        self,
+        _filter,
+        run,
+    ):
+        run.return_value = MagicMock(returncode=0, stderr="")
+
+        with patch.object(
+            self.mod,
+            "_build_tomogram",
+            return_value={
+                "success": False,
+                "message": "tomogram source has no occupied structure",
+            },
+        ):
+            with patch.object(self.mod, "_build_occupancy_snapshot") as occupancy:
+                resp = self.mod._map_save(
+                    "bad_nav_map",
+                    slam_profile="localizer",
+                )
+
+        self.assertFalse(resp["success"], resp)
+        self.assertEqual(resp["slam_profile"], "localizer")
+        self.assertTrue(resp["map_save_supported"])
+        self.assertEqual(resp["map_save_source"], "slam_service")
+        self.assertFalse(resp["tomogram_ok"])
+        self.assertIn("not ready for navigation", resp["message"])
+        self.assertIn("tomogram source", resp["tomogram_message"])
+        occupancy.assert_not_called()
+
+    @patch("subprocess.run")
+    @patch(
+        "gateway.gateway_module._apply_dynamic_filter_step1half",
+        return_value=None,
+    )
     def test_simulation_only_map_save_closes_active_artifact_loop(
         self,
         _filter,
@@ -304,28 +356,30 @@ class TestMapManagerModule(unittest.TestCase):
         map_dir = Path(self._map_dir) / map_name
 
         def _fake_save_maps(*_args, **_kw):
-            map_dir.mkdir(parents=True, exist_ok=True)
-            (map_dir / "map.pcd").write_text(
-                "VERSION 0.7\n"
-                "FIELDS x y z\n"
-                "SIZE 4 4 4\n"
-                "TYPE F F F\n"
-                "COUNT 1 1 1\n"
-                "WIDTH 8\n"
-                "HEIGHT 1\n"
-                "VIEWPOINT 0 0 0 1 0 0 0\n"
-                "POINTS 8\n"
-                "DATA ascii\n"
-                "0.0 0.0 0.0\n"
-                "1.0 0.0 0.0\n"
-                "0.0 1.0 0.0\n"
-                "1.0 1.0 0.0\n"
-                "0.0 0.0 0.5\n"
-                "1.0 0.0 0.5\n"
-                "0.0 1.0 0.5\n"
-                "1.0 1.0 0.5\n",
-                encoding="utf-8",
-            )
+            cmd = list(_args[0]) if _args else []
+            if "/pgo/save_maps" in cmd:
+                map_dir.mkdir(parents=True, exist_ok=True)
+                (map_dir / "map.pcd").write_text(
+                    "VERSION 0.7\n"
+                    "FIELDS x y z\n"
+                    "SIZE 4 4 4\n"
+                    "TYPE F F F\n"
+                    "COUNT 1 1 1\n"
+                    "WIDTH 8\n"
+                    "HEIGHT 1\n"
+                    "VIEWPOINT 0 0 0 1 0 0 0\n"
+                    "POINTS 8\n"
+                    "DATA ascii\n"
+                    "0.0 0.0 0.0\n"
+                    "1.0 0.0 0.0\n"
+                    "0.0 1.0 0.0\n"
+                    "1.0 1.0 0.0\n"
+                    "0.0 0.0 0.5\n"
+                    "1.0 0.0 0.5\n"
+                    "0.0 1.0 0.5\n"
+                    "1.0 1.0 0.5\n",
+                    encoding="utf-8",
+                )
             return MagicMock(returncode=0, stderr="")
 
         def _fake_build_tomogram(name):
@@ -350,8 +404,8 @@ class TestMapManagerModule(unittest.TestCase):
         self.assertTrue(Path(resp["tomogram"]).exists())
         self.assertTrue(Path(resp["occupancy"]).exists())
         self.assertTrue(resp["saved_map_relocalization_supported"])
-        run.assert_called_once()
-        self.assertIn("/pgo/save_maps", run.call_args.args[0])
+        save_calls = [call for call in run.call_args_list if "/pgo/save_maps" in call.args[0]]
+        self.assertEqual(len(save_calls), 1)
 
         active = self._cmd({"action": "set_active", "name": map_name})
         self.assertTrue(active["success"], active)
@@ -531,6 +585,81 @@ class TestWavefrontFrontierExplorer(unittest.TestCase):
         mod._on_costmap(costmap)
         self.assertIsNotNone(mod._costmap_data)
 
+    def test_frontier_detection_prefers_exploration_grid_over_nav_costmap(self):
+        mod = self._make_explorer(min_frontier_size=1)
+        nav_costmap = {
+            "grid": np.zeros((20, 20), dtype=np.int16),
+            "resolution": 0.1,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 20,
+            "height": 20,
+            "source": "navigation_costmap",
+        }
+        exploration_grid = {
+            "grid": np.full((20, 20), -1, dtype=np.int16),
+            "resolution": 0.1,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 20,
+            "height": 20,
+            "source": "exploration_grid",
+        }
+        exploration_grid["grid"][8:13, 8:13] = 0
+        mod._on_costmap(nav_costmap)
+        mod._on_exploration_grid(exploration_grid)
+        mod._on_odometry(Odometry(pose=Pose(1.0, 1.0, 0.0)))
+
+        frontiers = mod.get_frontiers()
+
+        self.assertGreater(len(frontiers), 0)
+        health = mod.health()
+        self.assertEqual(health["frontier_grid_source"], "exploration_grid")
+        self.assertEqual(health["visited_goal_count"], 0)
+        self.assertGreater(health["current_frontier_candidates"], 0)
+        self.assertGreater(health["frontier_debug"]["frontier_cell_count"], 0)
+        self.assertEqual(
+            health["frontier_debug"]["last_empty_reason"],
+            "scored_frontiers_ready",
+        )
+
+    def test_frontier_health_distinguishes_visited_from_detected_frontiers(self):
+        mod = self._make_explorer(min_frontier_size=1)
+        grid = np.full((20, 20), -1, dtype=np.int16)
+        grid[8:13, 8:13] = 0
+        payload = {
+            "grid": grid,
+            "resolution": 0.1,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 20,
+            "height": 20,
+            "source": "raycast_lidar_exploration_grid",
+            "counts": {
+                "unknown": int((grid < 0).sum()),
+                "free": int((grid == 0).sum()),
+                "occupied": int((grid >= 100).sum()),
+            },
+        }
+        mod._on_exploration_grid(payload)
+        mod._on_odometry(Odometry(pose=Pose(1.0, 1.0, 0.0)))
+
+        frontiers = mod.get_frontiers()
+        health = mod.health()
+
+        self.assertGreater(len(frontiers), 0)
+        self.assertEqual(health["frontier_count"], 0)
+        self.assertEqual(health["visited_goal_count"], 0)
+        self.assertEqual(health["current_frontier_candidates"], len(frontiers))
+        self.assertEqual(
+            health["frontier_grid_counts"],
+            {"unknown": 375, "free": 25, "occupied": 0},
+        )
+        self.assertEqual(
+            health["frontier_debug"]["last_empty_reason"],
+            "scored_frontiers_ready",
+        )
+
     def test_parse_costmap_valid(self):
         mod = self._make_explorer()
         data = {"grid": np.zeros((20, 30), dtype=np.int16),
@@ -568,6 +697,21 @@ class TestWavefrontFrontierExplorer(unittest.TestCase):
         clusters = mod._find_frontier_clusters(grid, meta, 1.0, 1.0)
         self.assertGreater(len(clusters), 0)
 
+    def test_find_frontiers_does_not_traverse_unknown(self):
+        """Unknown cells are frontier boundaries, not traversable free space."""
+        mod = self._make_explorer(min_frontier_size=1, max_explored_distance=10.0)
+        grid = np.full((9, 14), -1, dtype=np.int16)
+        grid[4, 1:4] = 0
+        grid[4, 10:13] = 0
+        meta = {"resolution": 1.0, "origin_x": 0.0, "origin_y": 0.0,
+                "width": 14, "height": 9}
+
+        clusters = mod._find_frontier_clusters(grid, meta, 1.0, 4.0)
+        xs = [cluster["cx"] for cluster in clusters]
+
+        self.assertTrue(xs)
+        self.assertLess(max(xs), 5.0)
+
     def test_score_clusters_empty(self):
         mod = self._make_explorer()
         result = mod._score_clusters([], 0.0, 0.0, 0.0, {})
@@ -587,10 +731,322 @@ class TestWavefrontFrontierExplorer(unittest.TestCase):
         self.assertEqual(len(scored), 2)
         self.assertGreaterEqual(scored[0]["score"], scored[1]["score"])
 
+    def test_score_clusters_filters_unreachable_costmap_goals(self):
+        mod = self._make_explorer(safe_distance=0.0, max_explored_distance=10.0)
+        costmap = np.full((10, 10), 100, dtype=np.int16)
+        costmap[1, 1:4] = 0
+        costmap[7, 7] = 0
+        mod._costmap_data = {
+            "grid": costmap,
+            "resolution": 1.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 10,
+            "height": 10,
+        }
+        clusters = [
+            {"cx": 3.0, "cy": 1.0, "size": 5, "cells": []},
+            {"cx": 7.0, "cy": 7.0, "size": 50, "cells": []},
+        ]
+        meta = {
+            "resolution": 1.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 10,
+            "height": 10,
+        }
+
+        scored = mod._score_clusters(clusters, 1.0, 1.0, 0.0, meta)
+
+        self.assertEqual(len(scored), 1)
+        self.assertAlmostEqual(scored[0]["cx"], 3.0)
+
+    def test_score_clusters_uses_reachable_approach_when_all_frontiers_unreachable(self):
+        mod = self._make_explorer(safe_distance=0.0, max_explored_distance=10.0)
+        costmap = np.full((10, 10), 100, dtype=np.int16)
+        costmap[1, 1:4] = 0
+        mod._costmap_data = {
+            "grid": costmap,
+            "resolution": 1.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 10,
+            "height": 10,
+        }
+        clusters = [{"cx": 4.0, "cy": 1.0, "size": 50, "cells": [(1, 4)]}]
+        meta = {
+            "resolution": 1.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 10,
+            "height": 10,
+        }
+
+        scored = mod._score_clusters(clusters, 1.0, 1.0, 0.0, meta)
+
+        self.assertEqual(len(scored), 1)
+        self.assertNotAlmostEqual(scored[0]["cx"], 4.0)
+        self.assertTrue(
+            mod._is_costmap_reachable(
+                costmap,
+                meta,
+                1.0,
+                1.0,
+                scored[0]["cx"],
+                scored[0]["cy"],
+            )
+        )
+
+    def test_score_clusters_reanchors_frontier_boundary_to_approach_goal(self):
+        mod = self._make_explorer(
+            safe_distance=0.0,
+            max_explored_distance=10.0,
+            approach_standoff_m=1.0,
+            approach_goal_max_distance_m=8.0,
+        )
+        costmap = np.full((10, 10), 100, dtype=np.int16)
+        costmap[1, 1:9] = 0
+        mod._costmap_data = {
+            "grid": costmap,
+            "resolution": 1.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 10,
+            "height": 10,
+        }
+        clusters = [{"cx": 8.0, "cy": 1.0, "size": 50, "cells": [(1, 8)]}]
+        meta = {
+            "resolution": 1.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 10,
+            "height": 10,
+        }
+
+        scored = mod._score_clusters(clusters, 1.0, 1.0, 0.0, meta)
+        debug = mod.health()["frontier_debug"]
+
+        self.assertEqual(len(scored), 1)
+        self.assertGreaterEqual(math.hypot(scored[0]["cx"] - 8.0, scored[0]["cy"] - 1.0), 1.0)
+        self.assertTrue(debug["selected_frontier_approach"])
+        self.assertEqual(debug["reachability_filter_reason"], "approach")
+
+    def test_score_clusters_rejects_approach_far_from_frontier_target(self):
+        mod = self._make_explorer(
+            safe_distance=0.0,
+            max_explored_distance=10.0,
+            approach_max_target_distance_m=1.5,
+        )
+        costmap = np.full((12, 12), 100, dtype=np.int16)
+        costmap[1, 1:4] = 0
+        mod._costmap_data = {
+            "grid": costmap,
+            "resolution": 1.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 12,
+            "height": 12,
+        }
+        clusters = [{"cx": 9.0, "cy": 1.0, "size": 50, "cells": [(1, 9)]}]
+        meta = {
+            "resolution": 1.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 12,
+            "height": 12,
+        }
+
+        scored = mod._score_clusters(clusters, 1.0, 1.0, 0.0, meta)
+        debug = mod.health()["frontier_debug"]
+
+        self.assertEqual(scored, [])
+        self.assertEqual(debug["reachability_filter_reason"], "none")
+        self.assertEqual(debug["reachable_rejected_count"], 1)
+
+    def test_score_clusters_does_not_direct_track_frontier_boundary(self):
+        mod = self._make_explorer(
+            safe_distance=0.0,
+            max_explored_distance=12.0,
+            approach_max_target_distance_m=1.5,
+            approach_goal_max_distance_m=3.0,
+        )
+        costmap = np.full((12, 12), 100, dtype=np.int16)
+        costmap[1, 1:10] = 0
+        mod._costmap_data = {
+            "grid": costmap,
+            "resolution": 1.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 12,
+            "height": 12,
+        }
+        clusters = [{"cx": 9.0, "cy": 1.0, "size": 50, "cells": [(1, 9)]}]
+        meta = {
+            "resolution": 1.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 12,
+            "height": 12,
+        }
+
+        scored = mod._score_clusters(clusters, 1.0, 1.0, 0.0, meta)
+        debug = mod.health()["frontier_debug"]
+
+        self.assertEqual(scored, [])
+        self.assertEqual(debug["reachability_filter_reason"], "none")
+        self.assertEqual(debug["reachable_direct_count"], 0)
+
+    def test_costmap_reachability_matches_astar_corner_cutting(self):
+        mod = self._make_explorer(max_explored_distance=5.0)
+        costmap = np.full((3, 3), 100, dtype=np.int16)
+        costmap[0, 0] = 0
+        costmap[1, 1] = 0
+        meta = {
+            "resolution": 1.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 3,
+            "height": 3,
+        }
+
+        reachable = mod._is_costmap_reachable(costmap, meta, 0.0, 0.0, 1.0, 1.0)
+
+        self.assertFalse(reachable)
+
     def test_on_goal_reached(self):
         mod = self._make_explorer()
         mod._on_goal_reached(True)
         self.assertTrue(mod._goal_reached_event.is_set())
+
+    def test_navigation_failure_blocks_matching_frontier_goal(self):
+        mod = self._make_explorer(
+            blocked_goal_radius=0.5,
+            navigation_failure_grace_s=0.0,
+        )
+        mod._current_goal = (1.0, 2.0)
+        mod._costmap_data = {
+            "grid": np.zeros((50, 50), dtype=np.int16),
+            "resolution": 0.1,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "width": 50,
+            "height": 50,
+        }
+
+        mod._on_navigation_status({
+            "state": "FAILED",
+            "goal": [1.0, 2.0, 0.0],
+            "failure_reason": "planner returned empty path",
+        })
+
+        self.assertTrue(mod._goal_reached_event.is_set())
+        self.assertEqual(mod.health()["blocked_goal_count"], 1)
+        scored = mod._score_clusters(
+            [
+                {"cx": 1.0, "cy": 2.0, "size": 5, "cells": []},
+                {"cx": 3.0, "cy": 2.0, "size": 5, "cells": []},
+            ],
+            0.0,
+            0.0,
+            0.0,
+            {
+                "resolution": 0.1,
+                "origin_x": 0.0,
+                "origin_y": 0.0,
+                "width": 50,
+                "height": 50,
+            },
+        )
+        self.assertEqual([round(item["cx"], 1) for item in scored], [3.0])
+
+    def test_navigation_status_matches_current_goal_accepts_list_and_dict_goal(self):
+        mod = self._make_explorer(blocked_goal_radius=0.5)
+        mod._current_goal = (1.0, 2.0)
+
+        self.assertTrue(
+            mod._navigation_status_matches_current_goal({
+                "goal": [1.0, 2.0, 0.0],
+            })
+        )
+        self.assertTrue(
+            mod._navigation_status_matches_current_goal({
+                "goal": {"x": 1.0, "y": 2.0, "z": 0.0},
+            })
+        )
+        self.assertFalse(
+            mod._navigation_status_matches_current_goal({
+                "goal": {"x": 5.0, "y": 5.0, "z": 0.0},
+            })
+        )
+
+    def test_transient_failed_then_executing_does_not_block_frontier_goal(self):
+        mod = self._make_explorer(
+            blocked_goal_radius=0.5,
+            navigation_failure_grace_s=5.0,
+        )
+        mod._current_goal = (1.0, 2.0)
+
+        mod._on_navigation_status({
+            "state": "FAILED",
+            "goal": [1.0, 2.0, 0.0],
+            "failure_reason": "planner transient empty path",
+        })
+        self.assertFalse(mod._goal_reached_event.is_set())
+        self.assertIsNotNone(mod.health()["pending_goal_failure"])
+
+        mod._on_navigation_status({
+            "state": "EXECUTING",
+            "goal": {"x": 1.0, "y": 2.0, "z": 0.0},
+        })
+
+        self.assertFalse(mod._goal_reached_event.is_set())
+        self.assertEqual(mod.health()["blocked_goal_count"], 0)
+        self.assertIsNone(mod.health()["pending_goal_failure"])
+
+    def test_navigation_failure_without_goal_is_pending_for_current_goal(self):
+        mod = self._make_explorer(navigation_failure_grace_s=5.0)
+        mod._current_goal = (1.0, 2.0)
+
+        mod._on_navigation_status({
+            "state": "FAILED",
+            "failure_reason": "planner returned empty path",
+        })
+
+        self.assertFalse(mod._goal_reached_event.is_set())
+        self.assertEqual(mod.health()["blocked_goal_count"], 0)
+        self.assertIsNotNone(mod.health()["pending_goal_failure"])
+
+    def test_persistent_navigation_failure_blocks_after_grace(self):
+        mod = self._make_explorer(
+            blocked_goal_radius=0.5,
+            navigation_failure_grace_s=1.0,
+        )
+        mod._current_goal = (1.0, 2.0)
+
+        mod._on_navigation_status({
+            "state": "FAILED",
+            "goal": [1.0, 2.0, 0.0],
+            "failure_reason": "planner returned empty path",
+        })
+        with mod._state_lock:
+            mod._pending_goal_failure["ts"] -= 2.0
+
+        self.assertTrue(mod._wait_for_goal_result(timeout=0.2))
+        self.assertTrue(mod._goal_reached_event.is_set())
+        self.assertEqual(mod.health()["blocked_goal_count"], 1)
+
+    def test_navigation_failure_for_other_goal_is_ignored_by_frontier(self):
+        mod = self._make_explorer(blocked_goal_radius=0.5)
+        mod._current_goal = (1.0, 2.0)
+
+        mod._on_navigation_status({
+            "state": "FAILED",
+            "goal": [5.0, 5.0, 0.0],
+            "failure_reason": "external goal failed",
+        })
+
+        self.assertFalse(mod._goal_reached_event.is_set())
+        self.assertEqual(mod.health()["blocked_goal_count"], 0)
 
     def test_make_pose_stamped(self):
         self._make_explorer()
@@ -972,7 +1428,7 @@ class TestCameraBridgeModule(unittest.TestCase):
     """Test CameraBridgeModule instantiation and stub mode (no rclpy)."""
 
     def _make_bridge(self, **kw):
-        from drivers.thunder.camera_bridge_module import CameraBridgeModule
+        from drivers.real.thunder.camera_bridge_module import CameraBridgeModule
         return CameraBridgeModule(**kw)
 
     def _make_stub_bridge(self, **kw):

@@ -10,7 +10,7 @@ import unittest
 from core import In, Module, Out, autoconnect
 from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
-from drivers.thunder.han_dog_module import ThunderDriver
+from drivers.real.thunder.han_dog_module import ThunderDriver
 
 
 class TestPortDeclaration(unittest.TestCase):

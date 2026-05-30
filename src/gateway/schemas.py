@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class GatewayResponseModel(BaseModel):
@@ -23,17 +23,73 @@ class CommandReceipt(GatewayResponseModel):
     ts: float
 
 
+class GatewayCommandErrorDetail(GatewayResponseModel):
+    reason_code: str
+    reason: str | None = None
+    source: str | None = None
+    path: str | None = None
+    blockers: list[str] = Field(default_factory=list)
+    advisories: list[str] = Field(default_factory=list)
+    safety: dict[str, Any] | None = None
+    preview: dict[str, Any] | None = None
+    lease: dict[str, Any] | None = None
+    state: str | None = None
+    has_odometry: bool | None = None
+    session_mode: str | None = None
+    localization: dict[str, Any] | None = None
+    error: str | None = None
+
+
 class GatewayErrorResponse(GatewayResponseModel):
     schema_version: int = 1
     ok: Literal[False] = False
     error: str
     message: str | None = None
-    detail: Any = None
+    detail: dict[str, Any] | GatewayCommandErrorDetail | None = None
     command: CommandReceipt | None = None
+
+
+class RoutecheckLatestResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool
+    artifacts_root: str
+    count: int = 0
+    artifact_dir: str | None = None
+    summary_path: str | None = None
+    report_mtime: float | None = None
+    report_age_s: float | None = None
+    non_motion: bool | None = None
+    simulation_only: bool | None = None
+    real_robot_motion: bool | None = None
+    cmd_vel_sent_to_hardware: bool | None = None
+    gateway_used: bool | None = None
+    driver_used: bool | None = None
+    published: dict[str, Any] | None = None
+    latest: dict[str, Any] | None = None
+    reason: str | None = None
+    ts: float
 
 
 class BitrateRequest(BaseModel):
     bps: int
+
+
+GoalSource = Literal[
+    "coordinate",
+    "map_click",
+    "saved_location",
+    "semantic",
+    "frontier",
+    "api",
+]
+
+GoalTargetType = Literal[
+    "coordinate",
+    "map_point",
+    "saved_location",
+    "semantic_target",
+    "frontier",
+]
 
 
 class GoalRequest(BaseModel):
@@ -43,8 +99,23 @@ class GoalRequest(BaseModel):
     yaw: float = 0.0
     frame_id: Literal["map"] = "map"
     instruction: str | None = None
+    source: GoalSource = "coordinate"
+    target_type: GoalTargetType = "coordinate"
+    label: str | None = Field(default=None, max_length=128)
+    acceptance_radius_m: float | None = Field(default=None, gt=0, le=20)
+    max_speed_mps: float | None = Field(default=None, gt=0, le=5)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     request_id: str | None = Field(default=None, max_length=128)
     client_id: str = Field(default="unknown", max_length=128)
+
+    @field_validator("x", "y", "z", "yaw")
+    @classmethod
+    def finite(cls, v: float) -> float:
+        import math
+
+        if not math.isfinite(v):
+            raise ValueError("must be finite")
+        return v
 
 
 class ClickNavRequest(BaseModel):
@@ -52,8 +123,23 @@ class ClickNavRequest(BaseModel):
     y: float
     z: float = 0.0
     frame_id: Literal["map"] = "map"
+    source: GoalSource = "map_click"
+    target_type: GoalTargetType = "map_point"
+    label: str | None = Field(default=None, max_length=128)
+    acceptance_radius_m: float | None = Field(default=None, gt=0, le=20)
+    max_speed_mps: float | None = Field(default=None, gt=0, le=5)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     request_id: str | None = Field(default=None, max_length=128)
     client_id: str = Field(default="unknown", max_length=128)
+
+    @field_validator("x", "y", "z")
+    @classmethod
+    def finite(cls, v: float) -> float:
+        import math
+
+        if not math.isfinite(v):
+            raise ValueError("must be finite")
+        return v
 
 
 class PlanPreviewRequest(BaseModel):
@@ -71,6 +157,38 @@ class PlanPreviewRequest(BaseModel):
         if not math.isfinite(v):
             raise ValueError("must be finite")
         return v
+
+
+class GoalCandidateRequest(BaseModel):
+    x: float | None = None
+    y: float | None = None
+    z: float = 0.0
+    yaw: float | None = None
+    frame_id: Literal["map"] = "map"
+    source: GoalSource = "coordinate"
+    target_type: GoalTargetType = "coordinate"
+    label: str | None = Field(default=None, max_length=128)
+    location_name: str | None = Field(default=None, min_length=1, max_length=128)
+    acceptance_radius_m: float | None = Field(default=None, gt=0, le=20)
+    max_speed_mps: float | None = Field(default=None, gt=0, le=5)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    preview: bool = True
+    client_id: str = Field(default="unknown", max_length=128)
+
+    @field_validator("x", "y", "z", "yaw")
+    @classmethod
+    def finite_optional(cls, v: float | None) -> float | None:
+        import math
+
+        if v is not None and not math.isfinite(v):
+            raise ValueError("must be finite")
+        return v
+
+    @model_validator(mode="after")
+    def require_coordinates_or_location(self) -> "GoalCandidateRequest":
+        if self.location_name is None and (self.x is None or self.y is None):
+            raise ValueError("x and y are required unless location_name is provided")
+        return self
 
 
 class CmdVelRequest(BaseModel):
@@ -150,6 +268,8 @@ class MapRequest(BaseModel):
             "delete",
             "rename",
             "set_active",
+            "build_occupancy",
+            "build_occupancy_snapshot",
             "build_tomogram",
         }
         if v not in allowed:
@@ -253,6 +373,7 @@ class ReadinessResponse(GatewayResponseModel):
     module_count: int
     failed_modules: list[str]
     reasons: list[str]
+    advisories: list[str] = Field(default_factory=list)
     runtime: dict[str, Any] = Field(default_factory=dict)
     ts: float
 
@@ -284,6 +405,23 @@ class HealthResponse(GatewayResponseModel):
     brainstem: dict[str, Any] = Field(default_factory=dict)
 
 
+class ConstructedGoalTarget(GatewayResponseModel):
+    schema_version: int = 1
+    x: float
+    y: float
+    z: float = 0.0
+    yaw: float = 0.0
+    frame_id: str = "map"
+    source: str = "coordinate"
+    target_type: str = "coordinate"
+    label: str | None = None
+    location_name: str | None = None
+    acceptance_radius_m: float | None = None
+    max_speed_mps: float | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    ts: float | None = None
+
+
 class ControlCommandResponse(GatewayResponseModel):
     schema_version: int = 1
     ok: bool = True
@@ -295,6 +433,7 @@ class ControlCommandResponse(GatewayResponseModel):
     instruction: str | None = None
     mode: str | None = None
     reason: str | None = None
+    target: ConstructedGoalTarget | None = None
 
 
 class AuthLoginRequest(BaseModel):
@@ -373,6 +512,35 @@ class LocationEntry(GatewayResponseModel):
     ts: float | None = None
 
 
+class LocationUpsertRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    x: float | None = None
+    y: float | None = None
+    z: float = 0.0
+    yaw: float | None = None
+    tags: list[str] = Field(default_factory=list)
+    source: str = Field(default="app", max_length=64)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    use_current_pose: bool = False
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
+
+    @field_validator("x", "y", "z", "yaw")
+    @classmethod
+    def finite_optional(cls, v: float | None) -> float | None:
+        import math
+
+        if v is not None and not math.isfinite(v):
+            raise ValueError("must be finite")
+        return v
+
+    @model_validator(mode="after")
+    def require_coordinates_or_current_pose(self) -> "LocationUpsertRequest":
+        if not self.use_current_pose and (self.x is None or self.y is None):
+            raise ValueError("x and y are required unless use_current_pose is true")
+        return self
+
+
 class LocationsResponse(GatewayResponseModel):
     schema_version: int = 1
     locations: list[LocationEntry] = Field(default_factory=list)
@@ -380,6 +548,20 @@ class LocationsResponse(GatewayResponseModel):
     frame_id: str = "map"
     ts: float | None = None
     source: str = "tagged_locations"
+
+
+class LocationOperationResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool
+    status: Literal["saved", "deleted", "not_found", "unavailable", "invalid", "error"]
+    action: Literal["create", "update", "delete"]
+    location: LocationEntry | None = None
+    locations: LocationsResponse
+    message: str | None = None
+    error: str | None = None
+    request_id: str | None = None
+    client_id: str = "unknown"
+    ts: float = Field(default_factory=time.time)
 
 
 class PathPoint(GatewayResponseModel):
@@ -427,7 +609,23 @@ class PlanPreviewResponse(GatewayResponseModel):
     distance_m: float | None = None
     plan_ms: float | None = None
     planner: str | None = None
+    selected_planner: str | None = None
+    plan_safety_policy: str | None = None
+    path_safety: dict[str, Any] | None = None
+    fallback_reason: str = ""
+    rejected_plans: list[dict[str, Any]] = Field(default_factory=list)
     source: str = "navigation_preview"
+    reasons: list[str] = Field(default_factory=list)
+    error: str | None = None
+    ts: float
+
+
+class GoalCandidateResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool = True
+    status: str
+    target: ConstructedGoalTarget | None = None
+    preview: PlanPreviewResponse | None = None
     reasons: list[str] = Field(default_factory=list)
     error: str | None = None
     ts: float
@@ -560,6 +758,8 @@ class NavigationDiagnosticsSummary(GatewayResponseModel):
     cmd_vel_mux_available: bool = False
     frame_mismatches: list[NavigationFrameMismatch] = Field(default_factory=list)
     safety: dict[str, Any] | None = None
+    plan_safety_policy: str | None = None
+    last_plan_report: dict[str, Any] = Field(default_factory=dict)
 
 
 class NavigationMissionSummary(GatewayResponseModel):
@@ -710,6 +910,14 @@ class MapLifecycleResponse(GatewayResponseModel):
     old_name: str | None = None
     new_name: str | None = None
     path: str | None = None
+    map_dir: str | None = None
+    pcd: str | None = None
+    tomogram: str | None = None
+    tomogram_ok: bool | None = None
+    tomogram_message: str | None = None
+    occupancy: str | None = None
+    occupancy_ok: bool | None = None
+    occupancy_message: str | None = None
     size: str | None = None
     restored_size: int | None = None
     replaced_backups_kept: int | None = None
@@ -833,10 +1041,12 @@ class ClientLinks(GatewayResponseModel):
     state: str | None = None
     scene_graph: str | None = None
     locations: str | None = None
+    location_detail: str | None = None
     path: str | None = None
     localization_status: str | None = None
     navigation_status: str | None = None
     devices: str | None = None
+    readiness: str | None = None
     auth_login: str | None = None
     auth_check: str | None = None
     events: str | None = None
@@ -853,6 +1063,7 @@ class ClientLinks(GatewayResponseModel):
     session: str | None = None
     session_start: str | None = None
     session_end: str | None = None
+    navigation_goal_candidate: str | None = None
     navigation_plan: str | None = None
     navigation_cancel: str | None = None
     goal: str | None = None

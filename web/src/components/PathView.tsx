@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
-import type { SSEState, PathPoint } from '../types'
+import type { SSEState, PathPoint, PlanPreviewResponse } from '../types'
 import * as api from '../services/api'
 import styles from './PathView.module.css'
 
@@ -17,6 +17,8 @@ const GOAL_COLOR    = '#ef4444'
 const TRAIL_COLOR   = 'rgba(0,255,136,0.20)'
 const ARROW_INTERVAL = 8  // draw direction arrow every N path segments
 const TRAIL_MAX      = 200
+const GOAL_SPEED_OPTIONS = [0.25, 0.4, 0.6]
+const GOAL_RADIUS_OPTIONS = [0.25, 0.45, 0.8]
 
 interface ViewTransform {
   scale: number       // pixels per metre
@@ -30,6 +32,30 @@ function worldToCanvas(wx: number, wy: number, t: ViewTransform): [number, numbe
 
 function canvasToWorld(cx: number, cy: number, t: ViewTransform): [number, number] {
   return [(cx - t.originX) / t.scale, -(cy - t.originY) / t.scale]
+}
+
+function formatPlanSafetySummary(preview: PlanPreviewResponse | null | undefined): string {
+  if (!preview) return ''
+  const safety = preview.path_safety ?? {}
+  const planner = preview.selected_planner ?? preview.planner
+  const safetyOk = safety.ok === true ? 'ok' : safety.ok === false ? 'blocked' : ''
+  return [
+    planner ? `planner=${planner}` : null,
+    preview.plan_safety_policy ? `policy=${preview.plan_safety_policy}` : null,
+    safetyOk ? `safety=${safetyOk}` : null,
+    preview.fallback_reason ? `fallback=${preview.fallback_reason}` : null,
+    preview.rejected_plans?.length ? `rejected=${preview.rejected_plans.length}` : null,
+  ].filter((v): v is string => Boolean(v)).join(' | ')
+}
+
+function formatPlanPreviewFailure(
+  preview: PlanPreviewResponse | null | undefined,
+  reasons: string[] = [],
+  error?: string | null,
+): string {
+  const safety = formatPlanSafetySummary(preview)
+  const reason = reasons.slice(0, 3).join(' / ') || error || preview?.error || 'plan preview rejected'
+  return safety ? `${reason} (${safety})` : reason
 }
 
 function computeTransform(
@@ -178,6 +204,28 @@ function drawGoal(ctx: CanvasRenderingContext2D, path: PathPoint[], t: ViewTrans
   ctx.stroke()
 }
 
+function drawPendingGoal(
+  ctx: CanvasRenderingContext2D,
+  goal: { x: number; y: number } | null,
+  t: ViewTransform,
+) {
+  if (!goal) return
+  const [cx, cy] = worldToCanvas(goal.x, goal.y, t)
+  ctx.save()
+  ctx.strokeStyle = GOAL_COLOR
+  ctx.fillStyle = 'rgba(239, 68, 68, 0.18)'
+  ctx.lineWidth = 2
+  ctx.setLineDash([5, 4])
+  ctx.beginPath()
+  ctx.arc(cx, cy, 14, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.setLineDash([])
+  ctx.beginPath()
+  ctx.arc(cx, cy, 4, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+}
+
 function drawRobot(
   ctx: CanvasRenderingContext2D,
   rx: number,
@@ -230,6 +278,10 @@ export function PathView({ sseState, showToast }: PathViewProps) {
   const transformRef = useRef<ViewTransform>({ scale: 40, originX: 0, originY: 0 })
   const [hoverCoords, setHoverCoords] = useState<[number, number] | null>(null)
   const [trailLength, setTrailLength] = useState(0)
+  const [pendingGoal, setPendingGoal] = useState<{ x: number; y: number } | null>(null)
+  const [pendingGoalPreview, setPendingGoalPreview] = useState<PlanPreviewResponse | null>(null)
+  const [goalMaxSpeed, setGoalMaxSpeed] = useState(0.4)
+  const [goalAcceptanceRadius, setGoalAcceptanceRadius] = useState(0.45)
 
   const rawPath = sseState.globalPath?.points ?? []
   const path = rawPath.filter(
@@ -241,6 +293,28 @@ export function PathView({ sseState, showToast }: PathViewProps) {
   const robotY = typeof odom?.y === 'number' ? odom.y : 0
   const yaw    = typeof odom?.yaw === 'number' ? odom.yaw : 0
   const pathLength = path.length
+  const navigationStatus = sseState.navigationStatus
+  const activeCmdSource = navigationStatus?.control?.active_cmd_source ?? 'none'
+  const activeCmdBlocksGoal = activeCmdSource !== '' && activeCmdSource !== 'none'
+  const odomValid = odom != null && Number.isFinite(robotX) && Number.isFinite(robotY)
+  const canAcceptGoal =
+    navigationStatus?.readiness?.can_accept_goal ??
+    navigationStatus?.can_accept_goal ??
+    false
+  const goalBlockers = [
+    ...(navigationStatus?.readiness?.blockers ?? []),
+    ...(navigationStatus?.feedback?.blockers ?? []),
+    activeCmdBlocksGoal
+      ? `active command source: ${navigationStatus?.control?.active_source?.label ?? activeCmdSource}`
+      : null,
+    !odomValid ? 'no valid odometry' : null,
+  ].filter((v): v is string => Boolean(v))
+  const goalDisabledReason =
+    canAcceptGoal && !activeCmdBlocksGoal
+      ? ''
+      : goalBlockers.slice(0, 4).join(' / ') || 'navigation is not ready'
+  const canSendGoal = goalDisabledReason === ''
+  const pendingGoalPlanSummary = formatPlanSafetySummary(pendingGoalPreview)
 
   // Accumulate position trail
   useEffect(() => {
@@ -276,9 +350,10 @@ export function PathView({ sseState, showToast }: PathViewProps) {
     drawTrail(ctx, trailRef.current, t)
     drawPath(ctx, path, t)
     if (path.length > 0) drawGoal(ctx, path, t)
+    drawPendingGoal(ctx, pendingGoal, t)
     drawRobot(ctx, robotX, robotY, yaw, t)
     drawScaleBar(ctx, t, h)
-  }, [path, robotX, robotY, yaw])
+  }, [path, pendingGoal, robotX, robotY, yaw])
 
   // Resize canvas to match wrapper and re-render
   useEffect(() => {
@@ -303,8 +378,12 @@ export function PathView({ sseState, showToast }: PathViewProps) {
     render()
   }, [render])
 
-  // Click on canvas → send goal to that world position
+  // Click on canvas -> construct and preview a goal before sending it.
   const handleCanvasClick = useCallback(async (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canSendGoal) {
+      showToast(`Cannot send goal: ${goalDisabledReason}`, 'error')
+      return
+    }
     const canvas = canvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
@@ -312,12 +391,58 @@ export function PathView({ sseState, showToast }: PathViewProps) {
     const cy = (e.clientY - rect.top)  * (canvas.height / rect.height)
     const [wx, wy] = canvasToWorld(cx, cy, transformRef.current)
     try {
-      const res = await api.sendGoal(wx, wy)
-      showToast(api.formatCommandAck(res, `导航目标 (${wx.toFixed(2)}, ${wy.toFixed(2)})`), 'success')
+      const candidate = await api.constructGoalCandidate({
+        x: wx,
+        y: wy,
+        source: 'map_click',
+        target_type: 'map_point',
+        label: 'path_view_click',
+        acceptance_radius_m: goalAcceptanceRadius,
+        max_speed_mps: goalMaxSpeed,
+      })
+      if (!candidate.ok || candidate.preview?.feasible === false) {
+        const reason = formatPlanPreviewFailure(
+          candidate.preview,
+          candidate.reasons,
+          candidate.error,
+        )
+        showToast(`目标不可达: ${reason}`, 'error')
+        return
+      }
+      const target = candidate.target
+      const goalX = target?.x ?? wx
+      const goalY = target?.y ?? wy
+      setPendingGoal({ x: goalX, y: goalY })
+      setPendingGoalPreview(candidate.preview ?? null)
     } catch (e: unknown) {
-      showToast(api.formatCommandError(e, '发送目标失败'), 'error')
+      showToast(api.formatCommandError(e, 'Goal preview failed'), 'error')
     }
-  }, [showToast])
+  }, [canSendGoal, goalAcceptanceRadius, goalDisabledReason, goalMaxSpeed, showToast])
+
+  const handleConfirmGoal = useCallback(async () => {
+    if (!pendingGoal) return
+    if (!canSendGoal) {
+      showToast(`Cannot send goal: ${goalDisabledReason}`, 'error')
+      return
+    }
+    try {
+      const res = await api.sendGoal(pendingGoal.x, pendingGoal.y, {
+        source: 'map_click',
+        target_type: 'map_point',
+        label: 'path_view_click',
+        acceptance_radius_m: goalAcceptanceRadius,
+        max_speed_mps: goalMaxSpeed,
+      })
+      setPendingGoal(null)
+      setPendingGoalPreview(null)
+      showToast(
+        api.formatCommandAck(res, `Goal (${pendingGoal.x.toFixed(2)}, ${pendingGoal.y.toFixed(2)})`),
+        'success',
+      )
+    } catch (e: unknown) {
+      showToast(api.formatCommandError(e, 'Send goal failed'), 'error')
+    }
+  }, [canSendGoal, goalAcceptanceRadius, goalDisabledReason, goalMaxSpeed, pendingGoal, showToast])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
@@ -343,6 +468,30 @@ export function PathView({ sseState, showToast }: PathViewProps) {
         <span className={pathLength > 0 ? styles.badge : `${styles.badge} ${styles.badgeEmpty}`}>
           {pathLength > 0 ? `路径 ${pathLength} 点` : '无路径'}
         </span>
+        <label className={styles.goalControl}>
+          <span>Speed</span>
+          <select
+            className={styles.goalSelect}
+            value={goalMaxSpeed}
+            onChange={(e) => setGoalMaxSpeed(Number(e.target.value))}
+          >
+            {GOAL_SPEED_OPTIONS.map((speed) => (
+              <option key={speed} value={speed}>{speed.toFixed(2)} m/s</option>
+            ))}
+          </select>
+        </label>
+        <label className={styles.goalControl}>
+          <span>Radius</span>
+          <select
+            className={styles.goalSelect}
+            value={goalAcceptanceRadius}
+            onChange={(e) => setGoalAcceptanceRadius(Number(e.target.value))}
+          >
+            {GOAL_RADIUS_OPTIONS.map((radius) => (
+              <option key={radius} value={radius}>{radius.toFixed(2)} m</option>
+            ))}
+          </select>
+        </label>
         <button className={styles.btnGhost} onClick={handleClearTrail}>清除轨迹</button>
       </div>
 
@@ -359,7 +508,39 @@ export function PathView({ sseState, showToast }: PathViewProps) {
             {hoverCoords[0].toFixed(2)}, {hoverCoords[1].toFixed(2)} m
           </div>
         )}
-        <div className={styles.hint}>点击地图发送导航目标</div>
+        {pendingGoal && (
+          <div className={styles.goalPanel}>
+            <span className={styles.goalTitle}>目标预览</span>
+            <span className={styles.goalCoords}>
+              {pendingGoal.x.toFixed(2)}, {pendingGoal.y.toFixed(2)} m
+            </span>
+            {pendingGoalPlanSummary && (
+              <span className={styles.goalPlanSummary} title={pendingGoalPlanSummary}>
+                {pendingGoalPlanSummary}
+              </span>
+            )}
+            {goalDisabledReason && (
+              <span className={styles.goalReason} title={goalDisabledReason}>{goalDisabledReason}</span>
+            )}
+            <button
+              className={styles.goalConfirm}
+              onClick={handleConfirmGoal}
+              disabled={!canSendGoal}
+            >
+              发送
+            </button>
+            <button
+              className={styles.goalCancel}
+              onClick={() => {
+                setPendingGoal(null)
+                setPendingGoalPreview(null)
+              }}
+            >
+              取消
+            </button>
+          </div>
+        )}
+        <div className={styles.hint}>点击地图预览导航目标</div>
       </div>
 
       <div className={styles.statsRow}>

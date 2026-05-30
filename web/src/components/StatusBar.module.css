@@ -53,6 +53,8 @@
 
 .navActive { color: var(--accent); }
 .navFail   { color: var(--red); }
+.ready     { color: var(--accent); }
+.warn      { color: var(--warn); }
 
 .estop {
   font-family: var(--font-mono);

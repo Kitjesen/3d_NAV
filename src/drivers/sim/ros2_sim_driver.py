@@ -27,6 +27,7 @@ from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat, PointCloud2
 from core.registry import register
+from core.runtime_interface import FRAMES, TOPICS
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
@@ -68,18 +69,20 @@ class ROS2SimDriverModule(Module, layer=1):
         self,
         node_name: str = "lingtu_ros2_driver",
         spin_rate: float = 100.0,
-        odom_topic: str = "/nav/odometry",
-        cloud_topic: str = "/nav/registered_cloud",
-        image_topic: str = "/camera/color/image_raw",
-        depth_topic: str = "/camera/depth/image_raw",
-        info_topic: str = "/camera/color/camera_info",
-        cmd_vel_topic: str = "/nav/cmd_vel",
+        odom_topic: str = TOPICS.odometry,
+        cloud_topic: str = TOPICS.registered_cloud,
+        map_cloud_topic: str = TOPICS.map_cloud,
+        image_topic: str = TOPICS.camera_color,
+        depth_topic: str = TOPICS.camera_depth,
+        info_topic: str = TOPICS.camera_info,
+        cmd_vel_topic: str = TOPICS.cmd_vel,
         qos_depth: int = 10,
         # In real-robot nav mode, CameraBridgeModule (perception stack)
         # owns the camera/depth topics. Subscribing here AGAIN duplicates
         # the high-bandwidth depth stream and starves uvicorn of GIL.
         # Default off — turn on only for true MuJoCo simulation runs.
         enable_camera: bool = False,
+        latch_stop_signal: bool = True,
         **kw,
     ):
         super().__init__(**kw)
@@ -89,12 +92,14 @@ class ROS2SimDriverModule(Module, layer=1):
         self._spin_rate = spin_rate
         self._odom_topic = odom_topic
         self._cloud_topic = cloud_topic
+        self._map_cloud_topic = map_cloud_topic
         self._image_topic = image_topic
         self._depth_topic = depth_topic
         self._info_topic = info_topic
         self._cmd_vel_topic = cmd_vel_topic
         self._qos_depth = qos_depth
         self._enable_camera = enable_camera
+        self._latch_stop_signal = bool(latch_stop_signal)
 
         self._node = None
         self._executor = None
@@ -154,7 +159,10 @@ class ROS2SimDriverModule(Module, layer=1):
                 node, ROS2Odom, self._odom_topic, self._on_ros2_odom,
                 control_qos, callback_group=odom_group)
             self._create_subscription(
-                node, PointCloud2, self._cloud_topic, self._on_ros2_cloud,
+                node, PointCloud2, self._cloud_topic, self._on_ros2_registered_cloud,
+                sensor_qos, callback_group=cloud_group)
+            self._create_subscription(
+                node, PointCloud2, self._map_cloud_topic, self._on_ros2_map_cloud,
                 sensor_qos, callback_group=cloud_group)
 
             # Camera + depth — high bandwidth, only when explicitly enabled
@@ -285,7 +293,13 @@ class ROS2SimDriverModule(Module, layer=1):
         self.odometry.publish(odom)
 
     def _on_ros2_cloud(self, msg) -> None:
-        self._submit_cloud_worker(lambda: self._process_ros2_cloud(msg))
+        self._on_ros2_registered_cloud(msg)
+
+    def _on_ros2_registered_cloud(self, msg) -> None:
+        self._submit_cloud_worker(lambda: self._process_registered_cloud(msg))
+
+    def _on_ros2_map_cloud(self, msg) -> None:
+        self._submit_cloud_worker(lambda: self._process_map_cloud(msg))
 
     def _submit_cloud_worker(self, task) -> bool:
         if not self._running:
@@ -309,12 +323,12 @@ class ROS2SimDriverModule(Module, layer=1):
         self._cloud_worker_thread.start()
         return True
 
-    def _process_ros2_cloud(self, msg) -> None:
+    def _pointcloud_from_ros2(self, msg, *, default_frame: str) -> PointCloud2 | None:
         """Convert ROS2 sensor_msgs/PointCloud2 (XYZI, 16 bytes/pt) → Module PointCloud2."""
         try:
             n_pts = msg.width * msg.height
             if n_pts == 0:
-                return
+                return None
 
             raw = bytes(msg.data)
             step = msg.point_step
@@ -328,7 +342,7 @@ class ROS2SimDriverModule(Module, layer=1):
                 offsets = _parse_xyz_offsets(msg.fields)
                 if offsets is None:
                     logger.warning("ROS2SimDriverModule: cannot parse PointCloud2 fields")
-                    return
+                    return None
                 ox, oy, oz = offsets
                 pts = np.zeros((n_pts, 3), dtype=np.float32)
                 for i in range(n_pts):
@@ -342,17 +356,26 @@ class ROS2SimDriverModule(Module, layer=1):
             pts = pts[valid]
 
             if pts.shape[0] == 0:
-                return
+                return None
 
-            cloud = PointCloud2(
+            return PointCloud2(
                 points=pts,
-                frame_id=msg.header.frame_id or "body",
+                frame_id=msg.header.frame_id or default_frame,
                 ts=time.time(),
             )
-            self.lidar_cloud.publish(cloud)
-            self.map_cloud.publish(cloud)
         except Exception as e:
             logger.error("ROS2SimDriverModule: cloud conversion error: %s", e)
+            return None
+
+    def _process_registered_cloud(self, msg) -> None:
+        cloud = self._pointcloud_from_ros2(msg, default_frame=FRAMES.body)
+        if cloud is not None:
+            self.lidar_cloud.publish(cloud)
+
+    def _process_map_cloud(self, msg) -> None:
+        cloud = self._pointcloud_from_ros2(msg, default_frame=FRAMES.odom)
+        if cloud is not None:
+            self.map_cloud.publish(cloud)
 
     def _on_ros2_image(self, msg) -> None:
         """Convert ROS2 sensor_msgs/Image → Module Image."""
@@ -458,7 +481,7 @@ class ROS2SimDriverModule(Module, layer=1):
             self._cmd_vx = 0.0
             self._cmd_vy = 0.0
             self._cmd_wz = 0.0
-            self._stopped = True
+            self._stopped = self._latch_stop_signal
             self._publish_cmd_vel()
             return
         self._stopped = False

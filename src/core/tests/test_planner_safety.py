@@ -11,6 +11,7 @@ import pickle
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -367,7 +368,7 @@ class TestGlobalPlannerServiceCostmap(unittest.TestCase):
     """Test that GlobalPlannerService.update_map works for both backends."""
 
     def test_update_map_astar(self):
-        """A* backend accepts costmap via update_map."""
+        """A* overlays costmap obstacles without discarding static tomogram."""
         path = _make_tomogram_pickle(shape=(30, 30), resolution=0.2, center=(0, 0))
         svc = GlobalPlannerService(planner_name="astar", tomogram=path)
         svc.setup()
@@ -379,8 +380,8 @@ class TestGlobalPlannerServiceCostmap(unittest.TestCase):
 
         # Grid should be updated
         backend = svc._backend
-        self.assertEqual(backend._grid.shape, (20, 20))
-        self.assertGreaterEqual(backend._grid[10, 10], 100.0)
+        self.assertEqual(backend._grid.shape, (30, 30))
+        self.assertGreaterEqual(backend._grid[25, 25], 100.0)
 
     def test_update_map_pct_has_method(self):
         """PCT backend now has update_map method."""
@@ -389,9 +390,11 @@ class TestGlobalPlannerServiceCostmap(unittest.TestCase):
 
     def test_find_safe_goal_without_grid_returns_none(self):
         """If backend has no grid, _find_safe_goal returns None (passthrough)."""
-        svc = GlobalPlannerService(planner_name="astar", tomogram="")
-        svc.setup()
-        result = svc._find_safe_goal(np.array([1.0, 2.0, 0.0]))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.dict(os.environ, {"NAV_MAP_DIR": tmpdir}):
+                svc = GlobalPlannerService(planner_name="astar", tomogram="")
+                svc.setup()
+                result = svc._find_safe_goal(np.array([1.0, 2.0, 0.0]))
         self.assertIsNone(result)
 
     def test_find_safe_goal_out_of_bounds(self):
@@ -405,6 +408,23 @@ class TestGlobalPlannerServiceCostmap(unittest.TestCase):
         result = svc._find_safe_goal(np.array([100.0, 100.0, 0.0]), tolerance=1.0)
         # Should return None since no reachable free cell within tolerance
         self.assertIsNone(result)
+
+    def test_find_safe_goal_rejects_disconnected_free_goal(self):
+        """A free cell behind a wall is not a safe goal for the current start."""
+        svc = GlobalPlannerService(planner_name="astar", tomogram="")
+        svc.setup()
+
+        grid = np.zeros((20, 20), dtype=np.float32)
+        grid[10, :] = 100.0
+        svc.update_map(grid, resolution=1.0, origin=np.array([0.0, 0.0]))
+
+        safe = svc._find_safe_goal(
+            np.array([2.0, 15.0, 0.0]),
+            tolerance=2.0,
+            start=np.array([2.0, 2.0, 0.0]),
+        )
+
+        self.assertIsNone(safe)
 
 
 # ---------------------------------------------------------------------------

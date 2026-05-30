@@ -17,8 +17,11 @@ if TYPE_CHECKING:
 
 import yaml
 
+from .runtime_interface import LIDAR_EXTRINSICS
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_CONFIG = _REPO_ROOT / "config" / "robot_config.yaml"
+_DEFAULT_REAL_LIDAR = LIDAR_EXTRINSICS["real_mid360"]
 
 
 @dataclass
@@ -46,8 +49,8 @@ class DriverConfig:
     dog_host: str = "127.0.0.1"
     dog_port: int = 13145
     control_rate: float = 50.0
-    auto_enable: bool = True
-    auto_standup: bool = True
+    auto_enable: bool = False
+    auto_standup: bool = False
     reconnect_interval: float = 3.0
     slam_reset_interval: float = 5.0
 
@@ -130,17 +133,17 @@ class LidarConfig:
     offset_x/y/z + roll/pitch/yaw define the body→lidar static transform
     used by static_transform_publisher and C++ coordinate transforms.
     """
-    frame_id: str = "livox_frame"
+    frame_id: str = _DEFAULT_REAL_LIDAR.child
     publish_freq: float = 10.0
     # Network (Livox MID-360). These are consumed by the Livox driver JSON generator.
     lidar_ip: str = "192.168.1.115"
     host_ip: str = "192.168.1.5"
-    offset_x: float = -0.011
-    offset_y: float = -0.02329
-    offset_z: float = 0.04412
-    roll: float = 0.0
-    pitch: float = 0.0
-    yaw: float = 0.0
+    offset_x: float = _DEFAULT_REAL_LIDAR.x
+    offset_y: float = _DEFAULT_REAL_LIDAR.y
+    offset_z: float = _DEFAULT_REAL_LIDAR.z
+    roll: float = _DEFAULT_REAL_LIDAR.roll
+    pitch: float = _DEFAULT_REAL_LIDAR.pitch
+    yaw: float = _DEFAULT_REAL_LIDAR.yaw
     camera_offset_z: float = 0.0
 
 
@@ -381,3 +384,4 @@ def reset_config() -> None:
     """
     global _config
     _config = None
+

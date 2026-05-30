@@ -548,6 +548,19 @@ class CLIPEncoder:
             logger.debug("_encode_single_image failed: %s", e)
             return np.array([])
 
+    def encode_image(self, image: np.ndarray) -> np.ndarray:
+        """Encode a single image / object crop into one L2-normalised CLIP feature.
+
+        Public alias over ``_encode_single_image``. This is the method that
+        ``EncoderModule._on_image`` and ``PersonTracker`` Re-ID expect — without
+        it those callers silently fail through their ``try/except`` guards.
+
+        Contract: ``image`` is **BGR** (OpenCV default), matching
+        ``encode_image_crops`` and the perception pipeline. Returns shape
+        ``(D,)`` or an empty array when the model is unavailable.
+        """
+        return self._encode_single_image(image)
+
     def encode_three_source(
         self,
         rgb_frame: np.ndarray,

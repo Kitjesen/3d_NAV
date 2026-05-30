@@ -56,6 +56,21 @@ class TestWaypointTracker(unittest.TestCase):
         self.assertEqual(status.event, EV_PATH_COMPLETE)
         self.assertEqual(status.wp_index, 2)
 
+    def test_final_threshold_can_be_tighter_than_intermediate_threshold(self):
+        tracker = WaypointTracker(threshold=1.0, final_threshold=0.2)
+        wp0 = np.array([5.0, 0.0, 0.0])
+        wp1 = np.array([10.0, 0.0, 0.0])
+        tracker.reset([wp0, wp1], np.array([0.0, 0.0, 0.0]))
+
+        status = tracker.update(np.array([4.5, 0.0, 0.0]))
+        self.assertEqual(status.event, EV_WAYPOINT_REACHED)
+
+        status = tracker.update(np.array([9.7, 0.0, 0.0]))
+        self.assertIsNone(status.event)
+
+        status = tracker.update(np.array([9.9, 0.0, 0.0]))
+        self.assertEqual(status.event, EV_PATH_COMPLETE)
+
     def test_stuck_warn_at_half_timeout(self):
         """Not moving for >50% of timeout fires EV_STUCK_WARN once."""
         tracker = WaypointTracker(threshold=1.0, stuck_timeout=0.2, stuck_dist=0.15)
@@ -210,6 +225,15 @@ class TestGlobalPlannerService(unittest.TestCase):
         result = svc._downsample(path, goal)
         np.testing.assert_array_almost_equal(result[-1], goal)
 
+    def test_downsample_keeps_precise_goal_near_grid_center(self):
+        svc = GlobalPlannerService(downsample_dist=2.0)
+        path = [np.array([0.0, 0.0, 0.0]), np.array([0.95, 0.0, 0.0])]
+        goal = np.array([1.0, 0.0, 0.0])
+
+        result = svc._downsample(path, goal)
+
+        np.testing.assert_array_almost_equal(result[-1], goal)
+
     def test_downsample_spacing(self):
         """Consecutive points in downsampled path are >= downsample_dist apart
         (except possibly the last segment to the goal)."""
@@ -258,7 +282,7 @@ class _FakeNavCore:
 
 class TestPathFollowerModule(unittest.TestCase):
 
-    def test_nav_core_records_path_in_receipt_reference_frame(self):
+    def test_nav_core_keeps_fixed_frame_paths_in_world_reference(self):
         from base_autonomy.modules.path_follower_module import PathFollowerModule
 
         m = PathFollowerModule(backend="nav_core")
@@ -270,9 +294,11 @@ class TestPathFollowerModule(unittest.TestCase):
                 pose=Pose(
                     position=Vector3(10.0, -2.0, 0.0),
                     orientation=Quaternion.from_yaw(yaw),
-                )
+                ),
+                frame_id="map",
             )
         )
+        self.assertEqual(m._odom_frame_id, "map")
 
         path = Path(
             poses=[
@@ -285,12 +311,53 @@ class TestPathFollowerModule(unittest.TestCase):
 
         self.assertEqual(len(m._nc_path), 2)
         first, last = m._nc_path[0], m._nc_path[-1]
+        self.assertAlmostEqual(first.x, 10.0)
+        self.assertAlmostEqual(first.y, -2.0)
+        self.assertAlmostEqual(first.z, 0.5)
+        self.assertAlmostEqual(last.x, 10.0)
+        self.assertAlmostEqual(last.y, 1.0)
+        self.assertAlmostEqual(last.z, 1.5)
+        self.assertEqual(m._x_rec, 0.0)
+        self.assertEqual(m._y_rec, 0.0)
+        self.assertEqual(m._yaw_rec, 0.0)
+
+    def test_nav_core_records_body_frame_path_in_receipt_reference_frame(self):
+        from base_autonomy.modules.path_follower_module import PathFollowerModule
+
+        m = PathFollowerModule(backend="nav_core")
+        m._nc = _FakeNavCore
+
+        yaw = math.pi / 2.0
+        m._on_odom(
+            Odometry(
+                pose=Pose(
+                    position=Vector3(10.0, -2.0, 0.0),
+                    orientation=Quaternion.from_yaw(yaw),
+                ),
+                frame_id="map",
+            )
+        )
+
+        path = Path(
+            poses=[
+                PoseStamped(pose=Pose(position=Vector3(10.0, -2.0, 0.5))),
+                PoseStamped(pose=Pose(position=Vector3(10.0, 1.0, 1.5))),
+            ],
+            frame_id="base_link",
+        )
+        m._on_path(path)
+
+        self.assertEqual(len(m._nc_path), 2)
+        first, last = m._nc_path[0], m._nc_path[-1]
         self.assertAlmostEqual(first.x, 0.0)
         self.assertAlmostEqual(first.y, 0.0)
         self.assertAlmostEqual(first.z, 0.5)
         self.assertAlmostEqual(last.x, 3.0)
         self.assertAlmostEqual(last.y, 0.0)
         self.assertAlmostEqual(last.z, 1.5)
+        self.assertEqual(m._x_rec, 10.0)
+        self.assertEqual(m._y_rec, -2.0)
+        self.assertAlmostEqual(m._yaw_rec, yaw)
 
     def test_nav_core_publishes_zero_when_path_is_cleared(self):
         from base_autonomy.modules.path_follower_module import PathFollowerModule
@@ -323,6 +390,102 @@ class TestPathFollowerModule(unittest.TestCase):
         self.assertEqual(m._smooth_vx, 0.0)
         self.assertEqual(m._smooth_wz, 0.0)
         self.assertEqual(m._nc_path, [])
+        self.assertEqual(m._nc_state.vehicle_speed, 0.0)
+        self.assertEqual(m._nc_state.nav_fwd, 0)
+        self.assertEqual(m._nc_state.pathPointID, 0)
+
+    def test_nav_core_applies_local_planner_control_hint(self):
+        from base_autonomy.modules.path_follower_module import PathFollowerModule
+
+        class RecordingNavCore(_FakeNavCore):
+            last_slow_factor = None
+            last_safety_stop = None
+
+            @staticmethod
+            def compute_control(*args):
+                RecordingNavCore.last_slow_factor = args[5]
+                RecordingNavCore.last_safety_stop = args[6]
+                return _FakeNavCore.ControlOut(_FakeNavCore.Cmd(1.0, 0.0, 0.4))
+
+        m = PathFollowerModule(backend="nav_core")
+        m._nc = RecordingNavCore
+        m._nc_params = object()
+        m._nc_state = RecordingNavCore.PathFollowerState()
+        outputs = []
+        m.cmd_vel._add_callback(outputs.append)
+
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.0, 0.0, 0.0)), ts=1.0))
+        m._on_path(Path(
+            poses=[
+                PoseStamped(pose=Pose(position=Vector3(0.0, 0.0, 0.0))),
+                PoseStamped(pose=Pose(position=Vector3(2.0, 0.0, 0.0))),
+            ],
+            frame_id="map",
+        ))
+        m._on_control_hint({"slow_down": 2, "ts": time.time(), "reason": "test"})
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.1, 0.0, 0.0)), ts=1.1))
+
+        self.assertEqual(RecordingNavCore.last_slow_factor, 0.40)
+        self.assertEqual(RecordingNavCore.last_safety_stop, 0)
+        self.assertGreater(outputs[-1].linear.x, 0.0)
+
+        m._on_control_hint({
+            "near_field_stop": True,
+            "safety_stop": False,
+            "ts": time.time(),
+            "reason": "near_field_ignored",
+        })
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.2, 0.0, 0.0)), ts=1.2))
+
+        self.assertEqual(RecordingNavCore.last_safety_stop, 0)
+        self.assertFalse(m.health()["path_follower"]["control_hint"]["safety_stop"])
+        self.assertGreater(outputs[-1].linear.x, 0.0)
+
+        m._on_control_hint({
+            "near_field_stop": True,
+            "safety_stop": True,
+            "ts": time.time(),
+            "reason": "near_field",
+        })
+
+        self.assertEqual(outputs[-1].linear.x, 0.0)
+        self.assertEqual(outputs[-1].angular.z, 0.0)
+        self.assertTrue(m.health()["path_follower"]["control_hint"]["safety_stop"])
+
+    def test_nav_core_resets_path_reference_on_map_frame_jump(self):
+        from base_autonomy.modules.path_follower_module import PathFollowerModule
+
+        m = PathFollowerModule(backend="nav_core")
+        m._nc = _FakeNavCore
+        m._nc_params = object()
+        m._nc_state = _FakeNavCore.PathFollowerState()
+        outputs = []
+        m.cmd_vel._add_callback(outputs.append)
+
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.0, 0.0, 0.0))))
+        m._on_path(Path(
+            poses=[
+                PoseStamped(pose=Pose(position=Vector3(0.0, 0.0, 0.0))),
+                PoseStamped(pose=Pose(position=Vector3(2.0, 0.0, 0.0))),
+            ],
+            frame_id="map",
+        ))
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.1, 0.0, 0.0))))
+
+        self.assertGreater(outputs[-1].linear.x, 0.0)
+        m._nc_state.vehicle_speed = 2.0
+        m._nc_state.nav_fwd = 1
+        m._nc_state.pathPointID = 4
+
+        m._on_map_frame_jump({"dt_m": 1.0, "dyaw_deg": 20.0})
+
+        self.assertEqual(outputs[-1].linear.x, 0.0)
+        self.assertEqual(outputs[-1].linear.y, 0.0)
+        self.assertEqual(outputs[-1].angular.z, 0.0)
+        self.assertEqual(m._nc_path, [])
+        self.assertIsNone(m._path_points)
+        self.assertEqual(m._x_rec, m._robot_x)
+        self.assertEqual(m._y_rec, m._robot_y)
         self.assertEqual(m._nc_state.vehicle_speed, 0.0)
         self.assertEqual(m._nc_state.nav_fwd, 0)
         self.assertEqual(m._nc_state.pathPointID, 0)
@@ -463,6 +626,83 @@ class TestOccupancyGridModule(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertTrue(np.any(results[0]["grid"] == 100),
                         "Expected outside-clear-radius point to stay occupied")
+
+    def test_raycast_mode_publishes_exploration_unknown_free_occupied_grid(self):
+        """Raycast mode preserves unknown cells for real frontier exploration."""
+        m = self._make_module(
+            resolution=0.5,
+            map_radius=4.0,
+            robot_clear_radius=0.0,
+            inflation_radius=0.0,
+            raycast_free_space=True,
+            unknown_as_obstacle_for_costmap=True,
+            raycast_max_rays=100,
+        )
+        odom = Odometry(pose=Pose(position=Vector3(0, 0, 0),
+                                   orientation=Quaternion(0, 0, 0, 1)),
+                        frame_id="map")
+        m.odometry._deliver(odom)
+
+        pts = np.array([
+            [2.0, 0.0, 0.6],
+            [2.0, 1.0, 0.6],
+            [1.5, -1.0, 0.6],
+        ], dtype=np.float32)
+        cloud = PointCloud2.from_numpy(pts, frame_id="map")
+
+        costmaps = []
+        exploration = []
+        m.costmap._add_callback(lambda msg: costmaps.append(msg))
+        m.exploration_grid._add_callback(lambda msg: exploration.append(msg))
+        m.map_cloud._deliver(cloud)
+
+        self.assertEqual(len(costmaps), 1)
+        self.assertEqual(len(exploration), 1)
+        emap = exploration[0]
+        counts = emap["counts"]
+        self.assertGreater(counts["unknown"], 0)
+        self.assertGreater(counts["free"], 0)
+        self.assertGreater(counts["occupied"], 0)
+        self.assertTrue(np.any(emap["grid"] < 0), "Exploration grid must keep unknown cells")
+        self.assertTrue(np.any(emap["grid"] == 0), "Exploration grid must contain free cells")
+        self.assertTrue(np.any(emap["grid"] == 100), "Exploration grid must contain occupied cells")
+        self.assertFalse(np.any(costmaps[0]["grid"] < 0), "Navigation costmap must not contain unknown negatives")
+        self.assertEqual(emap["frame_id"], "map")
+        self.assertEqual(emap["accumulation"], "rolling_local_window")
+        self.assertEqual(emap["semantic"], "frontier_input_grid")
+        self.assertEqual(costmaps[0]["unknown_as_obstacle"], True)
+
+    def test_raycast_free_inflation_widens_observed_free_corridors(self):
+        def free_count(radius: float) -> int:
+            m = self._make_module(
+                resolution=0.5,
+                map_radius=4.0,
+                robot_clear_radius=0.0,
+                inflation_radius=0.0,
+                raycast_free_space=True,
+                unknown_as_obstacle_for_costmap=True,
+                raycast_max_rays=100,
+                raycast_free_inflation_radius=radius,
+            )
+            odom = Odometry(pose=Pose(position=Vector3(0, 0, 0),
+                                       orientation=Quaternion(0, 0, 0, 1)),
+                            frame_id="map")
+            m.odometry._deliver(odom)
+            pts = np.array([
+                [2.0, 0.0, 0.6],
+                [2.0, 1.0, 0.6],
+                [1.5, -1.0, 0.6],
+            ], dtype=np.float32)
+            cloud = PointCloud2.from_numpy(pts, frame_id="map")
+            exploration = []
+            m.exploration_grid._add_callback(lambda msg: exploration.append(msg))
+            m.map_cloud._deliver(cloud)
+            self.assertEqual(len(exploration), 1)
+            self.assertGreater(exploration[0]["counts"]["occupied"], 0)
+            self.assertGreater(exploration[0]["counts"]["unknown"], 0)
+            return int(exploration[0]["counts"]["free"])
+
+        self.assertGreater(free_count(0.5), free_count(0.0))
 
 
 # ---------------------------------------------------------------------------

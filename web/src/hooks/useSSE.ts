@@ -414,6 +414,14 @@ export function useSSE(url: string = '/api/v1/events') {
               case 'lease':
                 next.lease = (evt.data ?? evt) as never
                 break
+              case 'locations':
+                next.locations = (evt.data ?? evt) as never
+                break
+              case 'location': {
+                const data = evt.data as { locations?: unknown } | undefined
+                if (data?.locations) next.locations = data.locations as never
+                break
+              }
               case 'command_ack':
                 next.commandAck = (evt.data ?? evt) as never
                 break

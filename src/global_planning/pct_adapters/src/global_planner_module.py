@@ -1,11 +1,11 @@
-"""Planner backends — A* (dev/sim) and PCT C++ (S100P production).
+"""Planner backends: A* (dev/sim fallback) and native PCT.
 
-FROZEN — this module is stable and should not need changes.
+FROZEN: this module is stable and should not need changes.
 New planner backends (e.g. RRT*) should be registered in separate files
 via @register("planner_backend", "name"), not added here.
 
 Used by GlobalPlannerService (nav/global_planner_service.py) via Registry:
-    backend = get("planner_backend", "pct")    # S100P: ele_planner.so
+    backend = get("planner_backend", "pct")    # native ele_planner.so
     backend = get("planner_backend", "astar")  # dev/sim: pure Python fallback
 
 See docs/02-architecture/PLANNER_SELECTION.md for the selection rationale.
@@ -23,56 +23,21 @@ from __future__ import annotations
 import heapq
 import logging
 import os
-import sys
 from typing import List, Optional, Tuple
 
 import numpy as np
 
 from core.registry import register
+from global_planning.PCT_planner_runnable.runtime import load_tomogram_planner
 
 logger = logging.getLogger(__name__)
 
-# Paths needed by planner_wrapper.py and the C++ .so bindings.
-#
-# planner_wrapper.py uses:
-#   from lib import a_star, ele_planner, traj_opt   ← needs _PCT_PLANNER in sys.path
-#   from utils import *                              ← utils.py is in scripts/
-#
-# The .so files (ele_planner, a_star, traj_opt) are inside lib/, so lib/ must
-# also be on sys.path for Python to find them as extension modules.
-#
-# Platform auto-detection: if lib/{arch}/ exists with .so files, prefer that
-# over the default lib/ (which may contain a different architecture).
-_PCT_PLANNER = os.path.normpath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "PCT_planner", "planner")
-)
-_PCT_LIB_BASE = os.path.join(_PCT_PLANNER, "lib")
-
-def _resolve_pct_lib() -> str:
-    """Return the lib directory with .so files matching the current platform."""
-    import platform
-    arch = platform.machine().lower()
-    # Canonical mapping
-    arch_map = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
-    canonical = arch_map.get(arch, arch)
-    # Prefer platform-specific subdirectory if it has .so files
-    platform_dir = os.path.join(_PCT_LIB_BASE, canonical)
-    if os.path.isdir(platform_dir) and any(f.endswith(".so") for f in os.listdir(platform_dir)):
-        logger.info("PCT lib: using platform-specific %s/", canonical)
-        return platform_dir
-    # Fall back to default lib/ (original aarch64 .so files)
-    return _PCT_LIB_BASE
-
-_PCT_LIB = _resolve_pct_lib()
-_PCT_SCRIPTS = os.path.join(_PCT_PLANNER, "scripts")
-
-
 # ---------------------------------------------------------------------------
-# PCT backend — production quality, S100P only
+# PCT backend: native terrain-aware planner
 # ---------------------------------------------------------------------------
 
 @register("planner_backend", "pct",
-          description="C++ ele_planner via .so — 3D terrain-aware, S100P (aarch64) only")
+          description="C++ ele_planner via .so, 3D terrain-aware native PCT")
 class _PCTBackend:
     """Production planner: TomogramPlanner wrapping ele_planner.so + traj_opt.so.
 
@@ -81,7 +46,7 @@ class _PCTBackend:
       - GPMP trajectory optimisation (smooth, kinematically feasible)
       - Gradient-aware elevation planning
 
-    Requires aarch64 compiled .so files — not available on x86_64 dev machines.
+    Requires compiled native .so files matching the current Linux arch/Python ABI.
     On import failure logs a clear error and marks itself unavailable; all
     plan() calls then return [] so GlobalPlannerService raises RuntimeError
     and NavigationModule falls back to direct-goal mode.
@@ -97,6 +62,8 @@ class _PCTBackend:
         # 2D ground-floor grid for _find_safe_goal BFS (extracted from tomogram)
         self._grid: np.ndarray | None = None
         self._trav_3d: np.ndarray | None = None
+        self._elev_3d: np.ndarray | None = None
+        self._grid_is_projection: bool = False
         self._resolution: float = 0.2
         self._origin: np.ndarray = np.zeros(2)
         self._slice_h0: float = 0.0
@@ -115,47 +82,6 @@ class _PCTBackend:
         Sets self._available = True only when both the .so and the tomogram
         are successfully loaded.
         """
-        # sys.path setup required by planner_wrapper.py:
-        #   _PCT_PLANNER  → enables  `from lib import a_star, ele_planner, traj_opt`
-        #   _PCT_LIB      → Python finds the .so extension modules inside lib/
-        #   _PCT_SCRIPTS  → enables  `from utils import *`  (utils.py lives here)
-        for p in [_PCT_PLANNER, _PCT_LIB, _PCT_SCRIPTS]:
-            if p not in sys.path:
-                sys.path.insert(0, p)
-
-        # Pre-load internal shared libraries so the pybind11 modules can find
-        # them. Setting LD_LIBRARY_PATH after process start is too late for
-        # dlopen, so we use ctypes.CDLL with RTLD_GLOBAL instead.
-        import ctypes
-        for lib_name in [
-            "libcommon_smoothing.so",
-            "liba_star_search.so",
-            "libmap_manager.so",
-            "libgpmp_optimizer.so",
-            "libele_planner_lib.so",
-        ]:
-            lib_path = os.path.join(_PCT_LIB, lib_name)
-            if os.path.isfile(lib_path):
-                try:
-                    ctypes.CDLL(lib_path, mode=ctypes.RTLD_GLOBAL)
-                except OSError as e:
-                    logger.debug("PCT: preload %s failed: %s", lib_name, e)
-
-        try:
-            from planner_wrapper import TomogramPlanner  # type: ignore
-        except ImportError as e:
-            self._load_error = (
-                f"ele_planner.so not available ({e}). "
-                f"This is expected on x86_64 dev machines. "
-                f"Use planner='astar' for simulation/development."
-            )
-            logger.warning("PCT backend unavailable: %s", self._load_error)
-            return
-
-        # Resolve to absolute path before passing to loadTomogram().
-        # planner_wrapper.py resolves relative paths relative to its own script
-        # directory (PCT_planner/planner/scripts/), which would produce a wrong
-        # doubled path when a relative path is passed from outside.
         tomogram_path = os.path.abspath(tomogram_path)
 
         if not os.path.exists(tomogram_path):
@@ -168,32 +94,22 @@ class _PCTBackend:
             return
 
         try:
-            # TomogramPlanner.__init__ takes a cfg object, not a path.
-            # We use loadTomogram() which accepts a path string directly.
-            class _MinimalCfg:
-                class planner:
-                    use_quintic = True
-                    max_heading_rate = 10
-                    obstacle_thr = 49.9
-                class wrapper:
-                    tomo_dir = "/"
-                    pcd_dir = None
-
-            _MinimalCfg.planner.obstacle_thr = self._obstacle_thr
-            planner = TomogramPlanner(_MinimalCfg)
-            planner.loadTomogram(tomogram_path)
+            planner, runtime_paths = load_tomogram_planner(
+                tomogram_path,
+                obstacle_thr=self._obstacle_thr,
+            )
             self._planner = planner
             self._available = True
             logger.info(
-                "PCT ele_planner loaded: %s  map_dim=%s slices=%s",
+                "PCT ele_planner loaded: %s  lib_dir=%s map_dim=%s slices=%s",
                 tomogram_path,
+                runtime_paths.lib_dir,
                 getattr(planner, "map_dim", "?"),
                 getattr(planner, "n_slice", "?"),
             )
-            # Extract 2D ground-floor grid for _find_safe_goal BFS
             self._extract_grid(tomogram_path)
         except Exception as e:
-            self._load_error = f"TomogramPlanner.loadTomogram failed: {e}"
+            self._load_error = f"PCT runtime/loadTomogram failed: {e}"
             logger.exception("PCT backend failed to load tomogram: %s", tomogram_path)
 
     @property
@@ -218,22 +134,40 @@ class _PCTBackend:
             return
 
         tomo_data = raw.get("data")
+        grid_info = raw.get("grid_info") or {}
+        axis_order = str(grid_info.get("axis_order") or "")
         res = float(raw.get("resolution", 0.2))
         self._slice_h0 = float(raw.get("slice_h0", 0.0))
         self._slice_dh = float(raw.get("slice_dh", 0.5))
 
         if tomo_data is not None and hasattr(tomo_data, "ndim") and tomo_data.ndim == 4:
-            # data shape: (5, n_slices, H, W) — channel 0 = traversability
-            self._trav_3d = np.asarray(tomo_data[0], dtype=np.float32)
-            self._grid = np.asarray(self._trav_3d[0], dtype=np.float32)
-            center = np.array(raw.get("center", [0, 0])[:2], dtype=np.float64)
-            h, w = self._grid.shape
-            self._origin = center - np.array([w * res / 2, h * res / 2])
+            # data shape: (5, n_slices, H, W), channel 0 = traversability
+            trav_3d = np.asarray(tomo_data[0], dtype=np.float32)
+            transpose_xy = axis_order in {"builder_xy", "xy"} or (
+                not axis_order and "slice_h0" in raw and "slice_dh" in raw
+            )
+            if transpose_xy:
+                trav_3d = np.transpose(trav_3d, (0, 2, 1))
+            self._trav_3d = trav_3d
+            elev_3d = np.asarray(tomo_data[3], dtype=np.float32) if len(tomo_data) > 3 else None
+            if elev_3d is not None and transpose_xy:
+                elev_3d = np.transpose(elev_3d, (0, 2, 1))
+            self._elev_3d = elev_3d
+            self._grid = np.nanmin(self._trav_3d, axis=0).astype(np.float32)
+            self._grid_is_projection = True
+            if raw.get("origin") is not None:
+                self._origin = np.array(raw.get("origin", [0, 0])[:2], dtype=np.float64)
+            else:
+                center = np.array(raw.get("center", [0, 0])[:2], dtype=np.float64)
+                h, w = self._grid.shape
+                self._origin = center - np.array([w * res / 2, h * res / 2])
         else:
             grid = raw.get("grid", raw.get("traversability"))
             if grid is not None:
                 self._grid = np.asarray(grid, dtype=np.float32)
             self._trav_3d = None
+            self._elev_3d = None
+            self._grid_is_projection = False
             self._origin = np.array(raw.get("origin", [0, 0])[:2], dtype=np.float64)
 
         self._resolution = res
@@ -311,13 +245,13 @@ class _PCTBackend:
             goal:  world coords [x, y, z]
 
         Returns:
-            List of (x, y, z) tuples — empty list means planning failed.
+            List of (x, y, z) tuples; empty list means planning failed.
             Caller (GlobalPlannerService) raises RuntimeError on empty return.
         """
         if self._planner is None:
             logger.error(
-                "PCT planner unavailable (%s) — cannot plan. "
-                "Is this running on S100P with ele_planner.so compiled?",
+                "PCT planner unavailable (%s); cannot plan. "
+                "Is this running with native PCT .so files matching this arch/Python ABI?",
                 self._load_error,
             )
             return []
@@ -335,6 +269,16 @@ class _PCTBackend:
             goal_pos,
             float(goal[2]) if len(goal) > 2 else 0.0,
         )
+        if self._is_near_zero_route(start_pos, goal_pos):
+            logger.info(
+                "PCT native plan bypassed for near-zero route: start=%s goal=%s",
+                start,
+                goal,
+            )
+            return [
+                (float(start_pos[0]), float(start_pos[1]), float(start_h)),
+                (float(goal_pos[0]), float(goal_pos[1]), float(goal_h)),
+            ]
 
         try:
             result = self._planner.plan(start_pos, goal_pos, start_h, goal_h)
@@ -448,28 +392,58 @@ class _PCTBackend:
 
         return fallback
 
+    def _is_near_zero_route(self, start_pos: np.ndarray, goal_pos: np.ndarray) -> bool:
+        """Return True when the route is too short for the native PCT solver."""
+        tolerance = max(0.05, float(self._resolution or 0.0))
+        if float(np.linalg.norm(goal_pos - start_pos)) <= tolerance:
+            return True
+        planner = self._planner
+        if planner is None or not hasattr(planner, "pos2idx"):
+            return False
+        try:
+            start_idx = np.asarray(planner.pos2idx(start_pos), dtype=float)
+            goal_idx = np.asarray(planner.pos2idx(goal_pos), dtype=float)
+        except Exception:
+            return False
+        if start_idx.shape != goal_idx.shape or start_idx.size == 0:
+            return False
+        return bool(
+            np.array_equal(
+                np.rint(start_idx).astype(int),
+                np.rint(goal_idx).astype(int),
+            )
+        )
+
 
 # ---------------------------------------------------------------------------
-# A* backend — cross-platform fallback for dev/sim (not production)
+# A* backend: cross-platform fallback for dev/sim (not production)
 # ---------------------------------------------------------------------------
 
 @register("planner_backend", "astar",
-          description="Pure Python A* on tomogram ground-floor — dev/sim only, NOT for production")
+          description="Pure Python A* on tomogram ground-floor, dev/sim only, NOT for production")
 class _AStarBackend:
     """Cross-platform 2D A* for development machines and CI.
 
     Uses only the ground-floor traversability slice from the tomogram.
     No trajectory optimisation, no 3D terrain awareness.
 
-    This backend exists solely because ele_planner.so is aarch64-only.
-    Do NOT use in production (nav/explore profiles on S100P).
+    This backend exists as a deterministic development/simulation fallback when
+    native PCT libraries are unavailable or unsuitable for the current runtime.
     """
 
     def __init__(self, tomogram_path: str = "", obstacle_thr: float = 49.9):
         self._grid: np.ndarray | None = None
+        self._trav_3d: np.ndarray | None = None
+        self._elev_3d: np.ndarray | None = None
+        self._grid_is_projection: bool = False
+        self._static_grid: np.ndarray | None = None
+        self._costmap: np.ndarray | None = None
+        self._costmap_resolution = 0.2
+        self._costmap_origin = np.zeros(2)
         self._resolution = 0.2
         self._origin = np.zeros(2)
         self._obstacle_thr = obstacle_thr
+        self._last_plan_reached_goal = True
         if tomogram_path and os.path.exists(tomogram_path):
             self._load_tomogram(tomogram_path)
 
@@ -481,19 +455,42 @@ class _AStarBackend:
             logger.error("A* backend: unexpected tomogram format in %s", path)
             return
         tomo_data = raw.get("data")
+        grid_info = raw.get("grid_info") or {}
+        axis_order = str(grid_info.get("axis_order") or "")
         res = float(raw.get("resolution", 0.2))
         if tomo_data is not None and hasattr(tomo_data, "ndim") and tomo_data.ndim == 4:
-            # data shape: (5, n_slices, H, W) — channel 0 = traversability
-            self._grid = np.asarray(tomo_data[0, 0], dtype=np.float32)
-            center = np.array(raw.get("center", [0, 0])[:2], dtype=np.float64)
-            h, w = self._grid.shape
-            self._origin = center - np.array([w * res / 2, h * res / 2])
+            # data shape: (5, n_slices, H, W), channel 0 = traversability
+            trav_3d = np.asarray(tomo_data[0], dtype=np.float32)
+            elev_3d = np.asarray(tomo_data[3], dtype=np.float32) if tomo_data.shape[0] > 3 else None
+            transpose_xy = axis_order in {"builder_xy", "xy"} or (
+                not axis_order and "slice_h0" in raw and "slice_dh" in raw
+            )
+            if transpose_xy:
+                trav_3d = np.transpose(trav_3d, (0, 2, 1))
+                if elev_3d is not None:
+                    elev_3d = np.transpose(elev_3d, (0, 2, 1))
+            self._trav_3d = trav_3d
+            self._elev_3d = elev_3d
+            self._grid = np.nanmin(trav_3d, axis=0).astype(np.float32)
+            self._grid_is_projection = True
+            if raw.get("origin") is not None:
+                self._origin = np.array(raw.get("origin", [0, 0])[:2], dtype=np.float64)
+            else:
+                center = np.array(raw.get("center", [0, 0])[:2], dtype=np.float64)
+                h, w = self._grid.shape
+                self._origin = center - np.array([w * res / 2, h * res / 2])
+            self._slice_h0 = float(raw.get("slice_h0", 0.0))
+            self._slice_dh = float(raw.get("slice_dh", 0.5))
         else:
             self._grid = raw.get("grid", raw.get("traversability"))
             if self._grid is not None:
                 self._grid = np.asarray(self._grid, dtype=np.float32)
+            self._trav_3d = None
+            self._elev_3d = None
+            self._grid_is_projection = False
             self._origin = np.array(raw.get("origin", [0, 0])[:2], dtype=np.float64)
         self._resolution = res
+        self._static_grid = self._grid.copy() if self._grid is not None else None
         logger.info(
             "A* backend: loaded %s  grid=%s  res=%.3f",
             path,
@@ -503,11 +500,48 @@ class _AStarBackend:
 
     def update_map(self, grid: np.ndarray, resolution: float = 0.2,
                    origin: np.ndarray | None = None) -> None:
-        """Live costmap update — replaces the static pickle-loaded grid."""
-        self._grid = np.asarray(grid, dtype=np.float32)
-        self._resolution = resolution
+        """Live costmap update; replaces the static pickle-loaded grid."""
+        self._costmap = np.asarray(grid, dtype=np.float32)
+        self._costmap_resolution = resolution
         if origin is not None:
-            self._origin = np.array(origin[:2], dtype=np.float64)
+            self._costmap_origin = np.array(origin[:2], dtype=np.float64)
+        if self._static_grid is None:
+            self._grid = self._costmap
+            self._resolution = resolution
+            if origin is not None:
+                self._origin = np.array(origin[:2], dtype=np.float64)
+            return
+        self._merge_costmap()
+
+    def _merge_costmap(self) -> None:
+        if self._costmap is None or self._static_grid is None:
+            return
+        self._grid = self._static_grid.copy()
+
+        cm = self._costmap
+        cm_res = self._costmap_resolution
+        cm_ox, cm_oy = self._costmap_origin[0], self._costmap_origin[1]
+        g_res = self._resolution
+        g_ox, g_oy = self._origin[0], self._origin[1]
+        gh, gw = self._grid.shape
+
+        obs_rows, obs_cols = np.where(cm >= self._obstacle_thr)
+        if len(obs_rows) == 0:
+            return
+
+        world_x = cm_ox + obs_cols * cm_res
+        world_y = cm_oy + obs_rows * cm_res
+        grid_cols = np.round((world_x - g_ox) / g_res).astype(int)
+        grid_rows = np.round((world_y - g_oy) / g_res).astype(int)
+
+        mask = (grid_cols >= 0) & (grid_cols < gw) & (grid_rows >= 0) & (grid_rows < gh)
+        valid_rows = grid_rows[mask]
+        valid_cols = grid_cols[mask]
+        if len(valid_rows) > 0:
+            self._grid[valid_rows, valid_cols] = np.maximum(
+                self._grid[valid_rows, valid_cols],
+                cm[obs_rows[mask], obs_cols[mask]],
+            )
 
     def plan(self, start: np.ndarray, goal: np.ndarray) -> list:
         """Plan a 2D path on the ground-floor traversability grid.
@@ -518,6 +552,10 @@ class _AStarBackend:
         if self._grid is None:
             logger.warning("A* backend: no map loaded")
             return []
+        self._last_plan_reached_goal = True
+
+        if self._trav_3d is not None:
+            return self._plan_3d(start, goal)
 
         res = self._resolution
         nrows, ncols = self._grid.shape  # grid[row=y, col=x]
@@ -530,6 +568,9 @@ class _AStarBackend:
 
         def grid2world(col: int, row: int) -> tuple[float, float]:
             return (col * res + self._origin[0], row * res + self._origin[1])
+
+        def is_free(col: int, row: int) -> bool:
+            return 0 <= col < ncols and 0 <= row < nrows and self._grid[row, col] < self._obstacle_thr
 
         sc, sr = world2grid(float(start[0]), float(start[1]))
         gc, gr = world2grid(float(goal[0]),  float(goal[1]))
@@ -556,7 +597,9 @@ class _AStarBackend:
                 nc, nr = cc + dc, cr + dr
                 if not (0 <= nc < ncols and 0 <= nr < nrows):
                     continue
-                if self._grid[nr, nc] >= self._obstacle_thr:
+                if not is_free(nc, nr):
+                    continue
+                if dc and dr and (not is_free(cc + dc, cr) or not is_free(cc, cr + dr)):
                     continue
                 step = 1.414 if dc and dr else 1.0
                 ng = g + step
@@ -572,7 +615,7 @@ class _AStarBackend:
             )
             return []
 
-        # Reconstruct — walk came_from back to start, include start point
+        # Reconstruct by walking came_from back to start, include start point.
         path_cells: list[tuple[int, int]] = []
         cur = (gc, gr)
         while cur in came_from:
@@ -592,3 +635,220 @@ class _AStarBackend:
             result.append((float(goal[0]), float(goal[1]), gz))
 
         return result
+
+    def _plan_3d(self, start: np.ndarray, goal: np.ndarray) -> list:
+        trav = np.asarray(self._trav_3d, dtype=np.float32)
+        if trav.ndim != 3 or trav.shape[0] == 0:
+            return []
+
+        res = self._resolution
+        n_layers, nrows, ncols = trav.shape
+
+        def world2grid(wx: float, wy: float) -> tuple[int, int]:
+            col = int(round((wx - self._origin[0]) / res))
+            row = int(round((wy - self._origin[1]) / res))
+            return (max(0, min(col, ncols - 1)), max(0, min(row, nrows - 1)))
+
+        def grid2world(col: int, row: int) -> tuple[float, float]:
+            return (col * res + self._origin[0], row * res + self._origin[1])
+
+        def preferred_layer(z: float) -> int:
+            if self._slice_dh == 0:
+                return 0
+            return int(np.clip(round((float(z) - self._slice_h0) / self._slice_dh), 0, n_layers - 1))
+
+        def is_free(layer: int, col: int, row: int) -> bool:
+            if layer < 0 or col < 0 or row < 0 or layer >= n_layers or col >= ncols or row >= nrows:
+                return False
+            cost = float(trav[layer, row, col])
+            if (not np.isfinite(cost)) or cost >= self._obstacle_thr:
+                return False
+            if self._grid is not None:
+                overlay = float(self._grid[row, col])
+                if (not np.isfinite(overlay)) or overlay >= self._obstacle_thr:
+                    return False
+            return True
+
+        def nearest_free_layer(col: int, row: int, preferred: int) -> int | None:
+            for layer in sorted(range(n_layers), key=lambda idx: abs(idx - preferred)):
+                if is_free(layer, col, row):
+                    return layer
+            return None
+
+        def nearest_free_cell(col: int, row: int, preferred: int, max_radius: int = 8) -> tuple[int, int, int] | None:
+            layer = nearest_free_layer(col, row, preferred)
+            if layer is not None:
+                return (layer, row, col)
+            for radius in range(1, max_radius + 1):
+                candidates: list[tuple[float, int, int, int]] = []
+                for dr in range(-radius, radius + 1):
+                    for dc in range(-radius, radius + 1):
+                        if max(abs(dr), abs(dc)) != radius:
+                            continue
+                        nr, nc = row + dr, col + dc
+                        if nr < 0 or nc < 0 or nr >= nrows or nc >= ncols:
+                            continue
+                        cand_layer = nearest_free_layer(nc, nr, preferred)
+                        if cand_layer is None:
+                            continue
+                        dist = (dc * dc + dr * dr) ** 0.5 + abs(cand_layer - preferred) * 0.25
+                        candidates.append((dist, cand_layer, nr, nc))
+                if candidates:
+                    _, cand_layer, nr, nc = min(candidates, key=lambda item: item[0])
+                    return (cand_layer, nr, nc)
+            return None
+
+        sc, sr = world2grid(float(start[0]), float(start[1]))
+        gc, gr = world2grid(float(goal[0]), float(goal[1]))
+        start_pref = preferred_layer(float(start[2]) if len(start) > 2 else 0.0)
+        goal_pref = preferred_layer(float(goal[2]) if len(goal) > 2 else 0.0)
+        start_cell = nearest_free_cell(sc, sr, start_pref)
+        goal_cell = nearest_free_cell(gc, gr, goal_pref)
+        if start_cell is None or goal_cell is None:
+            logger.warning(
+                "A* 3D backend: start/goal column has no traversable layer start=(%d,%d) goal=(%d,%d)",
+                sc,
+                sr,
+                gc,
+                gr,
+            )
+            return []
+        if start_cell[1] != sr or start_cell[2] != sc or start_cell[0] != start_pref:
+            logger.info(
+                "A* 3D backend: snapped blocked start cell (%d,%d,%d) -> (%d,%d,%d)",
+                start_pref,
+                sr,
+                sc,
+                start_cell[0],
+                start_cell[1],
+                start_cell[2],
+            )
+        if goal_cell[1] != gr or goal_cell[2] != gc or goal_cell[0] != goal_pref:
+            logger.info(
+                "A* 3D backend: snapped blocked goal cell (%d,%d,%d) -> (%d,%d,%d)",
+                goal_pref,
+                gr,
+                gc,
+                goal_cell[0],
+                goal_cell[1],
+                goal_cell[2],
+            )
+        sl, sr, sc = start_cell
+        gl, gr, gc = goal_cell
+        if start_cell == goal_cell:
+            wx, wy = grid2world(gc, gr)
+            return [(wx, wy, self._cell_height(gl, gr, gc))]
+
+        def heuristic(layer: int, row: int, col: int) -> float:
+            dz = (gl - layer) * self._slice_dh
+            return ((gc - col) ** 2 + (gr - row) ** 2) ** 0.5 + abs(dz) / max(res, 1e-6)
+
+        neighbor_steps = [
+            (dl, dr, dc)
+            for dl in (-1, 0, 1)
+            for dr in (-1, 0, 1)
+            for dc in (-1, 0, 1)
+            if not (dl == 0 and dr == 0 and dc == 0)
+            and (dl == 0 or (dr == 0 and dc == 0))
+        ]
+        open_q = [(heuristic(*start_cell), 0.0, *start_cell)]
+        g_score: dict[tuple[int, int, int], float] = {start_cell: 0.0}
+        came_from: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+        best_cell = start_cell
+        best_score = heuristic(*start_cell)
+        reached_goal = False
+
+        while open_q:
+            _, g, layer, row, col = heapq.heappop(open_q)
+            cur = (layer, row, col)
+            if g > g_score.get(cur, float("inf")) + 1e-9:
+                continue
+            cur_score = heuristic(layer, row, col)
+            if cur_score < best_score:
+                best_score = cur_score
+                best_cell = cur
+            if cur == goal_cell:
+                reached_goal = True
+                break
+            for dl, dr, dc in neighbor_steps:
+                nl, nr, nc = layer + dl, row + dr, col + dc
+                if not is_free(nl, nc, nr):
+                    continue
+                if dc and dr and (not is_free(layer, col + dc, row) or not is_free(layer, col, row + dr)):
+                    continue
+                xy_step = ((dc * res) ** 2 + (dr * res) ** 2) ** 0.5
+                z_step = abs(dl * self._slice_dh)
+                step = max(((xy_step ** 2 + z_step ** 2) ** 0.5), res * 0.25)
+                ng = g + step
+                nxt = (nl, nr, nc)
+                if ng < g_score.get(nxt, float("inf")):
+                    g_score[nxt] = ng
+                    came_from[nxt] = cur
+                    heapq.heappush(open_q, (ng + heuristic(nl, nr, nc), ng, nl, nr, nc))
+
+        target_cell = goal_cell if reached_goal else best_cell
+        if not reached_goal:
+            start_score = heuristic(*start_cell)
+            if target_cell == start_cell or (start_score - best_score) < 2.0:
+                logger.warning(
+                    "A* 3D backend: no path start=(%d,%d,%d) goal=(%d,%d,%d) grid=%s",
+                    sl,
+                    sr,
+                    sc,
+                    gl,
+                    gr,
+                    gc,
+                    trav.shape,
+                )
+                return []
+            logger.warning(
+                "A* 3D backend: no complete path; returning partial traversability path "
+                "start=(%d,%d,%d) goal=(%d,%d,%d) partial=(%d,%d,%d)",
+                sl,
+                sr,
+                sc,
+                gl,
+                gr,
+                gc,
+                target_cell[0],
+                target_cell[1],
+                target_cell[2],
+            )
+        if target_cell not in came_from and target_cell != start_cell:
+            logger.warning(
+                "A* 3D backend: no path start=(%d,%d,%d) goal=(%d,%d,%d) grid=%s",
+                sl,
+                sr,
+                sc,
+                gl,
+                gr,
+                gc,
+                trav.shape,
+            )
+            return []
+
+        path_cells: list[tuple[int, int, int]] = []
+        cur = target_cell
+        while cur in came_from:
+            path_cells.append(cur)
+            cur = came_from[cur]
+        path_cells.append(start_cell)
+        path_cells.reverse()
+        self._last_plan_reached_goal = reached_goal
+
+        result = []
+        for layer, row, col in path_cells:
+            wx, wy = grid2world(col, row)
+            result.append((wx, wy, self._cell_height(layer, row, col)))
+        return result
+
+    def _cell_height(self, layer: int, row: int, col: int) -> float:
+        elev = getattr(self, "_elev_3d", None)
+        if elev is not None:
+            try:
+                height = float(elev[layer, row, col])
+                if np.isfinite(height):
+                    return height
+            except Exception:
+                pass
+        return float(getattr(self, "_slice_h0", 0.0) + layer * getattr(self, "_slice_dh", 0.5))

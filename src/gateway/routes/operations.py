@@ -12,6 +12,13 @@ import logging
 import time
 from typing import Any
 
+from core.runtime_policy import (
+    is_supported_slam_profile,
+    normalize_slam_profile,
+    slam_switch_plan,
+)
+from gateway.services.map_paths import map_dir_for
+from gateway.services.map_safety import safe_map_name
 from gateway.schemas import (
     BagStartRequest,
     BagOperationResponse,
@@ -53,18 +60,6 @@ _EXPLORER_UNAVAILABLE_DETAIL = {
     ),
 }
 
-_SLAM_PROFILE_ALIASES = {
-    "super-lio": "super_lio",
-    "superlio": "super_lio",
-    "super_lio_reloc": "super_lio_relocation",
-    "super-lio-reloc": "super_lio_relocation",
-    "superlio-reloc": "super_lio_relocation",
-    "super_lio_relocation": "super_lio_relocation",
-    "super-lio-relocation": "super_lio_relocation",
-    "superlio-relocation": "super_lio_relocation",
-    "relocation": "super_lio_relocation",
-}
-
 try:
     from fastapi import Request as FastAPIRequest
 except ImportError:  # FastAPI remains optional until routes are registered.
@@ -97,8 +92,7 @@ def _parse_since(since: str) -> float:
 
 
 def _normalize_slam_profile(profile: Any) -> str:
-    raw = str(profile or "").strip().lower()
-    return _SLAM_PROFILE_ALIASES.get(raw, raw)
+    return normalize_slam_profile(profile)
 
 
 def _body_mapping(body: Any) -> dict[str, Any]:
@@ -514,13 +508,7 @@ def register_operation_routes(app, gw) -> None:
         payload = _body_mapping(body)
         requested_profile = payload.get("profile", "")
         profile = _normalize_slam_profile(requested_profile)
-        if profile not in (
-            "fastlio2",
-            "localizer",
-            "super_lio",
-            "super_lio_relocation",
-            "stop",
-        ):
+        if not is_supported_slam_profile(profile, allow_stop=True):
             return _slam_operation_response(
                 False,
                 message=f"Unknown profile: {requested_profile}",
@@ -530,35 +518,15 @@ def register_operation_routes(app, gw) -> None:
             from core.service_manager import get_service_manager
 
             svc = get_service_manager()
-            if profile == "fastlio2":
-                svc.stop("localizer", "super_lio", "super_lio_relocation")
-                svc.ensure("slam", "slam_pgo")
-                ok = svc.wait_ready("slam", "slam_pgo", timeout=10.0)
-            elif profile == "localizer":
-                svc.stop("slam_pgo", "super_lio", "super_lio_relocation")
-                svc.ensure("slam", "localizer")
-                ok = svc.wait_ready("slam", "localizer", timeout=10.0)
-            elif profile == "super_lio":
-                svc.stop("slam", "slam_pgo", "localizer", "super_lio_relocation")
-                svc.ensure("lidar", "super_lio")
-                ok = svc.wait_ready("lidar", "super_lio", timeout=10.0)
-            elif profile == "super_lio_relocation":
-                svc.stop("slam", "slam_pgo", "localizer", "super_lio")
-                svc.ensure("lidar", "super_lio_relocation")
-                ok = svc.wait_ready(
-                    "lidar",
-                    "super_lio_relocation",
-                    timeout=10.0,
-                )
-            else:
-                svc.stop(
-                    "super_lio_relocation",
-                    "super_lio",
-                    "slam_pgo",
-                    "localizer",
-                    "slam",
-                )
-                ok = True
+            plan = slam_switch_plan(profile)
+            svc.stop(*plan.stop)
+            if plan.ensure:
+                svc.ensure(*plan.ensure)
+            ok = (
+                svc.wait_ready(*plan.wait_ready, timeout=10.0)
+                if plan.wait_ready
+                else True
+            )
             if ok:
                 gw._cached_slam_profile = "stopped" if profile == "stop" else profile
                 gw._slam_profile_ts = time.time()
@@ -633,7 +601,6 @@ def register_operation_routes(app, gw) -> None:
         },
     )
     async def slam_relocalize(body: SlamRelocalizeRequest):
-        import os
         import subprocess
 
         unsupported_response = _unsupported_saved_map_relocalization_response(gw)
@@ -651,13 +618,15 @@ def register_operation_routes(app, gw) -> None:
                 message="map_name required",
                 status_code=400,
             )
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-        pcd_path = os.path.join(map_dir, map_name, "map.pcd")
-        if not os.path.isfile(pcd_path):
-            alt = os.path.expanduser(f"~/data/inovxio/data/maps/{map_name}/map.pcd")
-            if os.path.isfile(alt):
-                pcd_path = alt
-        if not os.path.isfile(pcd_path):
+        name_error = safe_map_name(map_name)
+        if name_error is not None:
+            return _slam_operation_response(
+                False,
+                message=name_error,
+                status_code=400,
+            )
+        pcd_path = map_dir_for(map_name) / "map.pcd"
+        if not pcd_path.is_file():
             return _slam_operation_response(
                 False,
                 message=f"Map not found: {pcd_path}",

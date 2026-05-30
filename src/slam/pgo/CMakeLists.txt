@@ -46,6 +46,22 @@ add_executable(pgo_node src/pgo_node.cpp ${SRC_LIST})
 ament_target_dependencies(pgo_node rclcpp std_msgs sensor_msgs nav_msgs message_filters pcl_conversions tf2_ros geometry_msgs visualization_msgs interface GTSAM)
 target_link_libraries(pgo_node ${PCL_LIBRARIES} gtsam yaml-cpp)
 
+if(GTSAM_DIR)
+  get_filename_component(GTSAM_LIB_DIR "${GTSAM_DIR}/../.." ABSOLUTE)
+  find_library(GTSAM_METIS_LIBRARY
+    NAMES metis-gtsam libmetis-gtsam
+    PATHS "${GTSAM_LIB_DIR}"
+    NO_DEFAULT_PATH
+  )
+  if(GTSAM_METIS_LIBRARY)
+    target_link_libraries(pgo_node ${GTSAM_METIS_LIBRARY})
+  endif()
+  target_link_options(pgo_node PRIVATE "-Wl,--disable-new-dtags")
+  set_target_properties(pgo_node PROPERTIES
+    BUILD_RPATH "${GTSAM_LIB_DIR}"
+    INSTALL_RPATH "${GTSAM_LIB_DIR}"
+  )
+endif()
 
 install(TARGETS pgo_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})

@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# P0-04: 紧急停止反射
+# P0-05: emergency stop reflex.
 #
-# Verifies:
-#   1. SafetyRing publishes stop_cmd within 100 ms of trigger
-#   2. CmdVelMux output drops to zero (linear=0, angular=0) immediately
-#   3. watchdog log has a matching entry
-#
-# Run interactively — cmd_vel source should be teleop or visual_servo during
-# the test so we can observe the clamp.
+# Verifies the Gateway stop command is accepted and that the robot-reported
+# navigation speed settles to zero after the stop. This script uses current
+# Gateway contracts only: POST /api/v1/stop and GET /api/v1/state.
 
 set -e
 
@@ -16,36 +12,81 @@ mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$(date +%Y%m%d_%H%M%S)_p0_estop.log"
 exec > >(tee -a "$LOG") 2>&1
 
-echo "=== P0-04 E-stop reflex — $(date) ==="
+echo "=== P0-05 E-stop reflex - $(date) ==="
 
-# 1. Baseline — verify Gateway up
+STOP_ON_EXIT=0
+STOP_SENT=0
+
+stop_robot() {
+  curl -sf -X POST http://localhost:5050/api/v1/stop \
+    -H 'Content-Type: application/json' \
+    -d '{"request_id":"p0-estop-cleanup","client_id":"p0_estop"}' \
+    >/dev/null 2>&1 || true
+  STOP_SENT=1
+}
+
+cleanup_stop() {
+  if [[ "$STOP_ON_EXIT" == "1" && "$STOP_SENT" != "1" ]]; then
+    echo "Cleanup: sending stop command before exiting P0-05"
+    stop_robot
+  fi
+}
+
+trap cleanup_stop EXIT
+
+read_speed() {
+  curl -sf http://localhost:5050/api/v1/state 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+motion = d.get("navigation", {}).get("motion", {})
+value = motion.get("current_speed_mps")
+if value is None:
+    raise SystemExit(2)
+print(value)
+'
+}
+
 echo "[1/4] Baseline health"
-curl -sf http://localhost:5050/api/v1/health > /dev/null || { echo "FAIL: Gateway down"; exit 2; }
+curl -sf http://localhost:5050/api/v1/health > /dev/null || {
+  echo "FAIL: Gateway down"
+  exit 2
+}
 
-# 2. Arm a continuous cmd_vel source (teleop) so we can measure the clamp
-echo "[2/4] Please manually drive the robot (teleop joystick or API) so that"
-echo "      linear.x > 0.1 m/s is being published.  Press [Enter] when ready."
+echo "[2/4] Please manually drive the robot so reported speed is non-zero."
+echo "      Press [Enter] when ready to issue Gateway stop."
 read -r
+STOP_ON_EXIT=1
+PRE_STOP_SPEED="$(read_speed 2>/dev/null || echo "")"
+if [[ -z "$PRE_STOP_SPEED" ]]; then
+  echo "FAIL: cannot read pre-stop navigation.motion.current_speed_mps"
+  exit 3
+fi
+if [[ "$(python3 -c "print(abs(float('$PRE_STOP_SPEED')) >= 0.03)")" != "True" ]]; then
+  echo "FAIL: pre-stop speed is not non-zero enough for an estop test (speed=$PRE_STOP_SPEED)"
+  exit 4
+fi
+echo "  pre-stop speed: $PRE_STOP_SPEED m/s"
 
-# 3. Send E-stop level 2 (hard stop) and measure response time
-echo "[3/4] Sending E-stop (level=2) and measuring reflex latency ..."
+echo "[3/4] Sending stop command and measuring RPC latency ..."
 T0=$(date +%s%3N)
 curl -sf -X POST http://localhost:5050/api/v1/stop \
   -H 'Content-Type: application/json' \
-  -d '{"level":2}' | python3 -m json.tool
+  -d '{"request_id":"p0-estop","client_id":"p0_estop"}' \
+  | python3 -m json.tool
+STOP_SENT=1
+STOP_ON_EXIT=0
 T1=$(date +%s%3N)
 RTT=$((T1 - T0))
 echo "  stop RPC round-trip: ${RTT} ms"
 
-# 4. Poll cmd_vel until it's zero for 3 consecutive ticks (100 ms each)
-echo "[4/4] Waiting for cmd_vel → zero (deadline 1s) ..."
+echo "[4/4] Waiting for navigation speed -> zero (deadline 2s) ..."
 ZERO_TICKS=0
 DEADLINE=$((SECONDS + 2))
+LAST_SPEED="?"
 while [[ $SECONDS -lt $DEADLINE ]]; do
-  STATE="$(curl -sf http://localhost:5050/api/v1/safety/state 2>/dev/null || echo '{}')"
-  STOP_ACTIVE="$(echo "$STATE" | python3 -c 'import json,sys; d=json.load(sys.stdin) if sys.stdin.isatty()==False else {}; print(d.get("estop", False))' 2>/dev/null || echo "?")"
-  LINEAR="$(curl -sf http://localhost:5050/api/v1/cmd_vel 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin) if sys.stdin.isatty()==False else {}; print(d.get("linear",{}).get("x",1.0))' 2>/dev/null || echo "1.0")"
-  if [[ "$(python3 -c "print(abs($LINEAR) < 0.01)")" == "True" ]]; then
+  SPEED="$(read_speed 2>/dev/null || echo "1.0")"
+  LAST_SPEED="$SPEED"
+  if [[ "$(python3 -c "print(abs(float('$SPEED')) < 0.01)")" == "True" ]]; then
     ZERO_TICKS=$((ZERO_TICKS + 1))
     [[ "$ZERO_TICKS" -ge 3 ]] && break
   else
@@ -55,10 +96,10 @@ while [[ $SECONDS -lt $DEADLINE ]]; do
 done
 
 if [[ "$ZERO_TICKS" -lt 3 ]]; then
-  echo "FAIL: cmd_vel did not reach zero within 1s (linear still=$LINEAR)"
-  exit 3
+  echo "FAIL: reported navigation speed did not reach zero within 2s (speed=$LAST_SPEED)"
+  exit 5
 fi
 
 echo ""
-echo "=== PASS — E-stop reflex OK (rpc=${RTT}ms, cmd_vel zeroed within 1s) ==="
+echo "=== PASS - stop accepted (rpc=${RTT}ms), speed ${PRE_STOP_SPEED} -> zero ==="
 echo "Log: $LOG"

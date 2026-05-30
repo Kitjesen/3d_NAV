@@ -4,7 +4,15 @@ import {
   PanelLeftClose, PanelLeftOpen, Save, Trash2, StopCircle, Pencil, X,
   MapPinned, Cloud, Maximize2, Radio, Activity, LocateFixed, VideoOff,
 } from 'lucide-react'
-import type { SSEState, MapInfo, PathPoint, ToastKind, SlamProfile } from '../types'
+import type {
+  SSEState,
+  MapInfo,
+  PathPoint,
+  ToastKind,
+  SlamProfile,
+  LocationEntry,
+  PlanPreviewResponse,
+} from '../types'
 import * as api from '../services/api'
 import { useCamera } from '../hooks/useCamera'
 import { useBinaryCloud } from '../hooks/useBinaryCloud'
@@ -30,6 +38,8 @@ interface Layers {
 }
 
 const TRAIL_MAX = 300
+const GOAL_SPEED_OPTIONS = [0.25, 0.4, 0.6]
+const GOAL_RADIUS_OPTIONS = [0.25, 0.45, 0.8]
 
 const MAP_GROUPS: Array<{ label: string; filter: (m: MapInfo) => boolean }> = [
   { label: '语义地图', filter: m => m.has_pcd && m.has_tomogram },
@@ -51,6 +61,38 @@ function formatSaveMapSummary(r: api.SaveMapResult): string {
     `recovery=${recovery}`,
     warnings.length > 0 ? `warnings=${warnings.join('; ')}` : null,
   ].filter((v): v is string => Boolean(v)).join(' | ')
+}
+
+function formatPlanSafetySummary(preview: PlanPreviewResponse | null | undefined): string {
+  if (!preview) return ''
+  const safety = preview.path_safety ?? {}
+  const planner = preview.selected_planner ?? preview.planner
+  const safetyOk = safety.ok === true ? 'ok' : safety.ok === false ? 'blocked' : ''
+  const blocked = typeof safety.blocked_sample_count === 'number'
+    ? `blocked=${safety.blocked_sample_count}`
+    : null
+  const clearance = typeof safety.min_clearance_m === 'number'
+    ? `clearance=${safety.min_clearance_m.toFixed(2)}m`
+    : null
+  return [
+    planner ? `planner=${planner}` : null,
+    preview.plan_safety_policy ? `policy=${preview.plan_safety_policy}` : null,
+    safetyOk ? `safety=${safetyOk}` : null,
+    blocked,
+    clearance,
+    preview.fallback_reason ? `fallback=${preview.fallback_reason}` : null,
+    preview.rejected_plans?.length ? `rejected=${preview.rejected_plans.length}` : null,
+  ].filter((v): v is string => Boolean(v)).join(' | ')
+}
+
+function formatPlanPreviewFailure(
+  preview: PlanPreviewResponse | null | undefined,
+  reasons: string[] = [],
+  error?: string | null,
+): string {
+  const safety = formatPlanSafetySummary(preview)
+  const reason = reasons.slice(0, 3).join(' / ') || error || preview?.error || 'plan preview rejected'
+  return safety ? `${reason} (${safety})` : reason
 }
 
 function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
@@ -96,6 +138,13 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   // instead of the unhelpful (0, 0, 0).
   const [relocDirty, setRelocDirty] = useState(false)
   const [pendingGoal, setPendingGoal] = useState<{ x: number; y: number } | null>(null)
+  const [pendingGoalPreview, setPendingGoalPreview] = useState<PlanPreviewResponse | null>(null)
+  const [goalMaxSpeed, setGoalMaxSpeed] = useState(0.4)
+  const [goalAcceptanceRadius, setGoalAcceptanceRadius] = useState(0.45)
+  const [locationName, setLocationName] = useState('')
+  const [locationBusy, setLocationBusy] = useState<string | null>(null)
+  const [locationDeleteTarget, setLocationDeleteTarget] = useState<LocationEntry | null>(null)
+  const [locationsOverride, setLocationsOverride] = useState<LocationEntry[] | null>(null)
 
   // Map management modals
   const [mapContextMenu, setMapContextMenu] = useState<{ name: string; x: number; y: number } | null>(null)
@@ -153,6 +202,29 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const recoveryMethod = session?.recovery_method ?? '--'
   const relocalizeUnavailableMessage =
     `Backend ${localizationBackend} does not support saved-map relocalize; recovery=${recoveryMethod}`
+  const navigationStatus = sseState.navigationStatus
+  const activeCmdSource = navigationStatus?.control?.active_cmd_source ?? 'none'
+  const activeCmdBlocksGoal = activeCmdSource !== '' && activeCmdSource !== 'none'
+  const canAcceptGoal =
+    navigationStatus?.readiness?.can_accept_goal ??
+    navigationStatus?.can_accept_goal ??
+    false
+  const goalBlockers = [
+    ...(navigationStatus?.readiness?.blockers ?? []),
+    ...(navigationStatus?.feedback?.blockers ?? []),
+    activeCmdBlocksGoal
+      ? `当前控制源: ${navigationStatus?.control?.active_source?.label ?? activeCmdSource}`
+      : null,
+    !odomValid ? '无有效里程计' : null,
+  ].filter((v): v is string => Boolean(v))
+  const goalDisabledReason =
+    canAcceptGoal && !activeCmdBlocksGoal
+      ? ''
+      : goalBlockers.slice(0, 4).join(' · ') || '导航未 ready，暂不允许下发目标'
+  const canSendGoal = goalDisabledReason === ''
+  const pendingGoalPlanSummary = formatPlanSafetySummary(pendingGoalPreview)
+  const savedLocations = locationsOverride ?? sseState.locations?.locations ?? []
+  const normalizedLocationName = locationName.trim()
   // Legacy SSE map_cloud now carries only metadata (count/seq) — points
   // are streamed over /ws/cloud and live in `cloud.positions`.
 
@@ -165,6 +237,10 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   }, [])
 
   useEffect(() => { loadMaps() }, [loadMaps])
+
+  useEffect(() => {
+    setLocationsOverride(null)
+  }, [sseState.locations?.count, sseState.locations?.ts])
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -247,9 +323,33 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   }, [activeMapName, relocMap])
 
   // ── Handlers ──────────────────────────────────────────────────
-  const handlePendingGoal = useCallback((x: number, y: number) => {
-    setPendingGoal({ x, y })
-  }, [])
+  const handlePendingGoal = useCallback(async (x: number, y: number) => {
+    if (!canSendGoal) {
+      showToast(`不能下发目标: ${goalDisabledReason}`, 'error')
+      return
+    }
+    try {
+      const candidate = await api.constructGoalCandidate({
+        x,
+        y,
+        source: 'map_click',
+        target_type: 'map_point',
+        label: 'scene_click',
+        acceptance_radius_m: goalAcceptanceRadius,
+        max_speed_mps: goalMaxSpeed,
+      })
+      if (!candidate.ok || candidate.preview?.feasible === false) {
+        const reason = candidate.reasons.slice(0, 3).join(' / ') || candidate.error || '目标预检未通过'
+        showToast(`目标不可达: ${reason}`, 'error')
+        return
+      }
+      const target = candidate.target
+      setPendingGoal({ x: target?.x ?? x, y: target?.y ?? y })
+      setPendingGoalPreview(candidate.preview ?? null)
+    } catch (e: unknown) {
+      showToast(`目标预检失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    }
+  }, [canSendGoal, goalAcceptanceRadius, goalDisabledReason, goalMaxSpeed, showToast])
 
   const handleSceneRelocalize = useCallback(async (x: number, y: number) => {
     if (!savedMapRelocalizeSupported) {
@@ -275,15 +375,147 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
 
   const handleConfirmGoal = useCallback(async () => {
     if (!pendingGoal) return
+    if (!canSendGoal) {
+      showToast(`不能下发目标: ${goalDisabledReason}`, 'error')
+      return
+    }
     const { x, y } = pendingGoal
-    setPendingGoal(null)
     try {
-      const res = await api.sendGoal(x, y)
+      const res = await api.sendGoal(x, y, {
+        source: 'map_click',
+        target_type: 'map_point',
+        label: 'scene_click',
+        acceptance_radius_m: goalAcceptanceRadius,
+        max_speed_mps: goalMaxSpeed,
+      })
+      setPendingGoal(null)
+      setPendingGoalPreview(null)
       showToast(api.formatCommandAck(res, `目标 (${x.toFixed(2)}, ${y.toFixed(2)})`), 'success')
     } catch (e: unknown) {
       showToast(api.formatCommandError(e, '发送目标失败'), 'error')
     }
-  }, [pendingGoal, showToast])
+  }, [canSendGoal, goalAcceptanceRadius, goalDisabledReason, goalMaxSpeed, pendingGoal, showToast])
+
+  const handleSaveCurrentLocation = useCallback(async () => {
+    if (!odomValid) {
+      showToast('No valid odometry for saving a location', 'error')
+      return
+    }
+    if (!normalizedLocationName) {
+      showToast('Location name is required', 'error')
+      return
+    }
+    setLocationBusy('save')
+    try {
+      const res = await api.saveLocation({
+        name: normalizedLocationName,
+        x: robotX,
+        y: robotY,
+        z: 0,
+        yaw,
+        tags: ['web'],
+        source: 'web',
+      })
+      if (!res.ok) throw new Error(res.message || res.error || res.status)
+      setLocationsOverride(res.locations.locations)
+      setLocationName('')
+      showToast(`Saved location ${normalizedLocationName}`, 'success')
+    } catch (e: unknown) {
+      showToast(`Save location failed: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    } finally {
+      setLocationBusy(null)
+    }
+  }, [normalizedLocationName, odomValid, robotX, robotY, yaw, showToast])
+
+  const handleNavigateLocation = useCallback(async (loc: LocationEntry) => {
+    if (!canSendGoal) {
+      showToast(`Cannot send goal: ${goalDisabledReason}`, 'error')
+      return
+    }
+    setLocationBusy(`nav:${loc.name}`)
+    try {
+      const candidate = await api.constructGoalCandidate({
+        x: loc.x,
+        y: loc.y,
+        z: loc.z,
+        yaw: loc.yaw ?? undefined,
+        source: 'saved_location',
+        target_type: 'saved_location',
+        label: loc.name,
+        location_name: loc.name,
+        acceptance_radius_m: goalAcceptanceRadius,
+        max_speed_mps: goalMaxSpeed,
+      })
+      if (!candidate.ok || candidate.preview?.feasible === false) {
+        const reason = formatPlanPreviewFailure(
+          candidate.preview,
+          candidate.reasons,
+          candidate.error,
+        )
+        throw new Error(reason)
+      }
+      const target = candidate.target
+      const res = await api.sendGoal(target?.x ?? loc.x, target?.y ?? loc.y, {
+        z: target?.z ?? loc.z,
+        yaw: target?.yaw ?? loc.yaw ?? 0,
+        source: 'saved_location',
+        target_type: 'saved_location',
+        label: loc.name,
+        acceptance_radius_m: goalAcceptanceRadius,
+        max_speed_mps: goalMaxSpeed,
+        metadata: { location_name: loc.name },
+      })
+      showToast(api.formatCommandAck(res, `Goal ${loc.name}`), 'success')
+    } catch (e: unknown) {
+      showToast(`Location goal failed: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    } finally {
+      setLocationBusy(null)
+    }
+  }, [canSendGoal, goalAcceptanceRadius, goalDisabledReason, goalMaxSpeed, showToast])
+
+  const handleUpdateLocationToCurrent = useCallback(async (loc: LocationEntry) => {
+    if (!odomValid) {
+      showToast('No valid odometry for updating a location', 'error')
+      return
+    }
+    setLocationBusy(`update:${loc.name}`)
+    try {
+      const res = await api.updateLocation(loc.name, {
+        name: loc.name,
+        x: robotX,
+        y: robotY,
+        z: loc.z ?? 0,
+        yaw,
+        tags: loc.tags,
+        source: 'web',
+        metadata: { ...(loc.metadata ?? {}), updated_from: 'web_current_pose' },
+      })
+      if (!res.ok) throw new Error(res.message || res.error || res.status)
+      setLocationsOverride(res.locations.locations)
+      showToast(`Updated location ${loc.name}`, 'success')
+    } catch (e: unknown) {
+      showToast(`Update location failed: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    } finally {
+      setLocationBusy(null)
+    }
+  }, [odomValid, robotX, robotY, yaw, showToast])
+
+  const handleDeleteLocation = useCallback(async () => {
+    if (!locationDeleteTarget) return
+    const loc = locationDeleteTarget
+    setLocationDeleteTarget(null)
+    setLocationBusy(`delete:${loc.name}`)
+    try {
+      const res = await api.deleteLocation(loc.name)
+      if (!res.ok) throw new Error(res.message || res.error || res.status)
+      setLocationsOverride(res.locations.locations)
+      showToast(`Deleted location ${loc.name}`, 'success')
+    } catch (e: unknown) {
+      showToast(`Delete location failed: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    } finally {
+      setLocationBusy(null)
+    }
+  }, [locationDeleteTarget, showToast])
 
   const handleClearTrail = useCallback(() => {
     setTrail([])
@@ -324,12 +556,12 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     } catch { showToast('保存失败', 'error') }
   }
 
-  const handleActivate = async (name: string) => {
-    // Left click = select/activate only (highlight in list), no relocalization, no toast
-    try {
-      await api.activateMap(name)
-      loadMaps()
-    } catch { /* silent */ }
+  const handleActivate = (name: string) => {
+    if (maps.find(m => m.name === name)?.is_active) {
+      showToast(`当前已激活: ${name}`, 'info')
+      return
+    }
+    setLoadTarget(name)
   }
 
   const confirmLoadMap = async () => {
@@ -414,6 +646,15 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
       showToast(api.formatCommandAck(res, '停止指令'), 'info')
     } catch (e: unknown) {
       showToast(api.formatCommandError(e, '停止失败'), 'error')
+    }
+  }
+
+  const handleCancelNavigation = async () => {
+    try {
+      const res = await api.cancelNavigation('web_cancel')
+      showToast(api.formatCommandAck(res, 'Navigation cancel'), 'info')
+    } catch (e: unknown) {
+      showToast(api.formatCommandError(e, 'Cancel navigation failed'), 'error')
     }
   }
 
@@ -567,7 +808,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
                         setMapContextMenu({ name: m.name, x: rect.right + 4, y: rect.top })
                       }}
-                      title="左键选中 · 右键管理"
+                      title="左键加载确认 · 右键管理"
                     >
                       <span>{m.name}</span>
                       {m.has_tomogram && <span className={styles.mapBadge}>T</span>}
@@ -634,10 +875,57 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                 <span className={styles.goalConfirmCoords}>
                   ({pendingGoal.x.toFixed(2)}, {pendingGoal.y.toFixed(2)})
                 </span>
-                <button className={styles.goalConfirmBtn} onClick={handleConfirmGoal}>
+                <div className={styles.goalControlGroup}>
+                  <label className={styles.goalControl}>
+                    <span>Speed</span>
+                    <select
+                      className={styles.goalSelect}
+                      value={goalMaxSpeed}
+                      onChange={(e) => setGoalMaxSpeed(Number(e.target.value))}
+                    >
+                      {GOAL_SPEED_OPTIONS.map((speed) => (
+                        <option key={speed} value={speed}>{speed.toFixed(2)} m/s</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className={styles.goalControl}>
+                    <span>Radius</span>
+                    <select
+                      className={styles.goalSelect}
+                      value={goalAcceptanceRadius}
+                      onChange={(e) => setGoalAcceptanceRadius(Number(e.target.value))}
+                    >
+                      {GOAL_RADIUS_OPTIONS.map((radius) => (
+                        <option key={radius} value={radius}>{radius.toFixed(2)} m</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                {pendingGoalPlanSummary && (
+                  <span className={styles.goalPlanSummary} title={pendingGoalPlanSummary}>
+                    {pendingGoalPlanSummary}
+                  </span>
+                )}
+                {goalDisabledReason && (
+                  <span className={styles.goalConfirmReason} title={goalDisabledReason}>
+                    {goalDisabledReason}
+                  </span>
+                )}
+                <button
+                  className={styles.goalConfirmBtn}
+                  onClick={handleConfirmGoal}
+                  disabled={!canSendGoal}
+                  title={goalDisabledReason || '发送导航目标'}
+                >
                   <Navigation size={12} /> 发送
                 </button>
-                <button className={styles.goalCancelBtn} onClick={() => setPendingGoal(null)}>
+                <button
+                  className={styles.goalCancelBtn}
+                  onClick={() => {
+                    setPendingGoal(null)
+                    setPendingGoalPreview(null)
+                  }}
+                >
                   取消
                 </button>
               </div>
@@ -720,6 +1008,82 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                   {missionGoal ?? '无'}
                 </span>
               </div>
+            </div>
+          </div>
+
+          <div className={styles.statCard}>
+            <div className={styles.statCardTitle}>
+              <MapPinned size={11} style={{ marginRight: 4, verticalAlign: 'middle' }} />
+              Locations
+            </div>
+            <div className={styles.locationSaveRow}>
+              <input
+                className={styles.locationNameInput}
+                value={locationName}
+                onChange={e => setLocationName(e.target.value)}
+                placeholder="Name current pose"
+                maxLength={48}
+              />
+              <button
+                type="button"
+                className={styles.locationSaveBtn}
+                onClick={handleSaveCurrentLocation}
+                disabled={!odomValid || !normalizedLocationName || locationBusy !== null}
+                title={odomValid ? 'Save current robot pose' : 'No valid odometry'}
+              >
+                <Save size={12} />
+              </button>
+            </div>
+            <div className={styles.locationList}>
+              {savedLocations.length === 0 && (
+                <div className={styles.locationEmpty}>No saved locations</div>
+              )}
+              {savedLocations.slice(0, 8).map(loc => {
+                const navBusy = locationBusy === `nav:${loc.name}`
+                const updateBusy = locationBusy === `update:${loc.name}`
+                const deleteBusy = locationBusy === `delete:${loc.name}`
+                const disabled = locationBusy !== null
+                return (
+                  <div className={styles.locationItem} key={loc.name}>
+                    <button
+                      type="button"
+                      className={styles.locationMain}
+                      onClick={() => handleNavigateLocation(loc)}
+                      disabled={!canSendGoal || disabled}
+                      title={canSendGoal ? `Navigate to ${loc.name}` : goalDisabledReason}
+                    >
+                      <span className={styles.locationName}>{loc.name}</span>
+                      <span className={styles.locationCoords}>
+                        {loc.x.toFixed(2)}, {loc.y.toFixed(2)}
+                      </span>
+                      {loc.tags.length > 0 && (
+                        <span className={styles.locationTags}>{loc.tags.slice(0, 2).join(' / ')}</span>
+                      )}
+                    </button>
+                    <div className={styles.locationActions}>
+                      <button
+                        type="button"
+                        className={styles.locationIconBtn}
+                        onClick={() => handleUpdateLocationToCurrent(loc)}
+                        disabled={!odomValid || disabled}
+                        title={odomValid ? 'Update to current pose' : 'No valid odometry'}
+                      >
+                        {updateBusy ? <Activity size={12} /> : <Pencil size={12} />}
+                      </button>
+                      <button
+                        type="button"
+                        className={`${styles.locationIconBtn} ${styles.locationDangerBtn}`}
+                        onClick={() => setLocationDeleteTarget(loc)}
+                        disabled={disabled}
+                        title="Delete location"
+                      >
+                        {deleteBusy ? <Activity size={12} /> : <Trash2 size={12} />}
+                      </button>
+                    </div>
+                    {navBusy && <span className={styles.locationBusyLine} />}
+                  </div>
+                )
+              })}
             </div>
           </div>
 
@@ -833,6 +1197,15 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
             )}
           </div>
 
+          <button
+            className={styles.cancelNavBtn}
+            onClick={handleCancelNavigation}
+            disabled={!hasGoal}
+            title={hasGoal ? 'Cancel current navigation mission' : 'No active navigation mission'}
+          >
+            <X size={15} />
+            Cancel Nav
+          </button>
           <button className={styles.eStopBtn} onClick={handleStop}>
             <StopCircle size={16} />
             紧急停止
@@ -866,6 +1239,16 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
         danger
         onConfirm={handleDeleteMap}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      <ConfirmModal
+        open={locationDeleteTarget !== null}
+        title="Delete location"
+        message={`Delete location "${locationDeleteTarget?.name ?? ''}"?`}
+        confirmLabel="Delete"
+        danger
+        onConfirm={handleDeleteLocation}
+        onCancel={() => setLocationDeleteTarget(null)}
       />
 
       {/* Rename map */}

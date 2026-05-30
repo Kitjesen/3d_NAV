@@ -22,7 +22,7 @@ class _FakePlanner:
     is_ready = True
     has_map = True
 
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         midpoint = np.array([2.5, 0.0, 0.0])
         return [start.copy(), midpoint, goal.copy()], 1.0
 
@@ -31,12 +31,12 @@ class _FakePlanner:
 
 
 class _ExplodingPlanner(_FakePlanner):
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         raise AssertionError("planner should not run for an already-at-goal preview")
 
 
 class _SlowPlanner(_FakePlanner):
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         time.sleep(0.05)
         return super().plan(start, goal)
 
@@ -50,28 +50,50 @@ class _BrokenPlannerStatus:
     def has_map(self) -> bool:
         return True
 
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         raise AssertionError("planner should not run when status is unavailable")
 
 
 class _NonfinitePathPlanner(_FakePlanner):
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         return [start.copy(), np.array([np.nan, 1.0, 0.0])], 1.0
 
 
 class _NonfiniteTimingPlanner(_FakePlanner):
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         return [start.copy(), goal.copy()], float("nan")
 
 
 class _OverflowDistancePlanner(_FakePlanner):
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         return [start.copy(), np.array([1e308, 0.0, 0.0])], 1.0
 
 
 class _RuntimeErrorPlanner(_FakePlanner):
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         raise RuntimeError("planner returned empty path")
+
+
+class _ReportingFailurePlanner(_FakePlanner):
+    _planner_name = "pct"
+
+    @property
+    def last_plan_report(self):
+        return {
+            "selected_planner": "pct",
+            "fallback_reason": "pct path_safety failed",
+            "selected_path_safety": {"ok": False, "blocked_sample_count": 2},
+            "rejected_plans": [{"planner": "pct", "reason": "unsafe"}],
+            "policy": "reject",
+        }
+
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
+        raise RuntimeError("pct path_safety failed")
+
+
+class _EmptyPathPlanner(_FakePlanner):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
+        return [], 1.0
 
 
 class _GridBackend:
@@ -103,6 +125,54 @@ def test_navigation_goal_publishes_global_path_and_first_waypoint():
     assert len(waypoints) == 1
     assert waypoints[0].pose.position.x == 2.5
     assert states[-1]["state"] == "EXECUTING"
+
+
+@pytest.mark.parametrize(
+    ("planner", "reason"),
+    [
+        (_EmptyPathPlanner(), "planner returned empty path"),
+        (_NonfinitePathPlanner(), "planner returned a non-finite path point"),
+    ],
+)
+def test_navigation_rejects_invalid_planner_output_before_local_planning(planner, reason):
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._planner_svc = planner
+
+    paths: list[list[np.ndarray]] = []
+    waypoints: list[PoseStamped] = []
+    stops: list[Twist] = []
+    states: list[dict] = []
+    nav.global_path._add_callback(paths.append)
+    nav.waypoint._add_callback(waypoints.append)
+    nav.recovery_cmd_vel._add_callback(stops.append)
+    nav.mission_status._add_callback(states.append)
+
+    nav._robot_pos = np.array([0.0, 0.0, 0.0])
+    nav._on_goal(PoseStamped(Pose(5.0, 0.0, 0.0)))
+
+    assert paths == []
+    assert waypoints == []
+    assert len(stops) == 1
+    assert states[-1]["state"] == "FAILED"
+    assert reason in states[-1]["failure_reason"]
+
+
+def test_navigation_publishes_plan_report_when_planner_rejects_path():
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._planner_svc = _ReportingFailurePlanner()
+
+    reports: list[dict] = []
+    states: list[dict] = []
+    nav.adapter_status._add_callback(reports.append)
+    nav.mission_status._add_callback(states.append)
+
+    nav._robot_pos = np.array([0.0, 0.0, 0.0])
+    nav._on_goal(PoseStamped(Pose(5.0, 0.0, 0.0)))
+
+    assert reports[-1]["event"] == "global_plan_selection"
+    assert reports[-1]["fallback_reason"] == "pct path_safety failed"
+    assert reports[-1]["policy"] == "reject"
+    assert states[-1]["state"] == "FAILED"
 
 
 def test_navigation_plan_preview_does_not_mutate_mission_or_publish_ports():
@@ -190,6 +260,26 @@ def test_navigation_plan_preview_reports_planner_runtime_error_as_failure():
     assert preview["feasible"] is False
     assert preview["reasons"] == ["planning_failed"]
     assert "planner returned empty path" in preview["error"]
+    assert nav.global_path.msg_count == 0
+    assert nav.waypoint.msg_count == 0
+    assert nav.recovery_cmd_vel.msg_count == 0
+
+
+def test_navigation_plan_preview_exposes_plan_safety_failure_report():
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._planner_svc = _ReportingFailurePlanner()
+    nav._robot_pos = np.array([0.0, 0.0, 0.0])
+
+    preview = nav.preview_plan(5.0, 0.0, 0.0)
+
+    assert preview["ok"] is True
+    assert preview["feasible"] is False
+    assert preview["selected_planner"] == "pct"
+    assert preview["plan_safety_policy"] == "reject"
+    assert preview["fallback_reason"] == "pct path_safety failed"
+    assert preview["path_safety"]["ok"] is False
+    assert preview["path_safety"]["blocked_sample_count"] == 2
+    assert preview["rejected_plans"][0]["planner"] == "pct"
     assert nav.global_path.msg_count == 0
     assert nav.waypoint.msg_count == 0
     assert nav.recovery_cmd_vel.msg_count == 0

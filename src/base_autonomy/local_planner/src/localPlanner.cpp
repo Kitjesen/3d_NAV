@@ -375,6 +375,7 @@ private:
   double goalY_ = 0;
   double nearFieldStopDis_ = 0.5;  // Near-field emergency stop distance (m)
   bool nearFieldStopped_ = false;   // Track near-field stop state
+  int nearFieldClearPublishCount_ = 0;  // pathFollower requires repeated clear samples.
 
   // Grid Constants
   static const int pathNum_ = 343;
@@ -951,18 +952,27 @@ private:
           }
         }
 
-        if (nearFieldObstacle && !nearFieldStopped_) {
-          std_msgs::msg::Int8 stopMsg;
-          stopMsg.data = 2;  // Level 2: full stop
-          pubStop_->publish(stopMsg);
-          nearFieldStopped_ = true;
-          RCLCPP_WARN(get_logger(),
-                      "NEAR-FIELD ESTOP: obstacle within %.2fm!", nearFieldStopDis_);
-        } else if (!nearFieldObstacle && nearFieldStopped_) {
-          std_msgs::msg::Int8 stopMsg;
-          stopMsg.data = 0;  // Clear stop
-          pubStop_->publish(stopMsg);
-          nearFieldStopped_ = false;
+        if (nearFieldObstacle) {
+          nearFieldClearPublishCount_ = 0;
+          if (!nearFieldStopped_) {
+            std_msgs::msg::Int8 stopMsg;
+            stopMsg.data = 2;  // Level 2: full stop
+            pubStop_->publish(stopMsg);
+            nearFieldStopped_ = true;
+            RCLCPP_WARN(get_logger(),
+                        "NEAR-FIELD ESTOP: obstacle within %.2fm!", nearFieldStopDis_);
+          }
+        } else {
+          if (nearFieldStopped_) {
+            nearFieldStopped_ = false;
+            nearFieldClearPublishCount_ = 3;
+          }
+          if (nearFieldClearPublishCount_ > 0) {
+            std_msgs::msg::Int8 stopMsg;
+            stopMsg.data = 0;  // Clear stop
+            pubStop_->publish(stopMsg);
+            nearFieldClearPublishCount_--;
+          }
         }
       }
 

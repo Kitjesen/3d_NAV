@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -107,3 +108,305 @@ def test_no_repl_clean_gateway_shutdown_exits_zero(monkeypatch, tmp_path):
     assert gateway.run_server_called is True
     assert system.started is True
     assert system.stopped is True
+
+
+def test_external_simulation_profile_runs_relative_launcher(monkeypatch):
+    import subprocess
+
+    import cli.main as main_mod
+
+    captured = {}
+
+    def _fake_run(cmd, *, cwd, env, check):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        captured["check"] = check
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    monkeypatch.setattr(sys, "argv", ["lingtu.py", "sim_mujoco_live", "status"])
+
+    main_mod.main()
+
+    assert captured["cmd"] == [
+        "bash",
+        "sim/scripts/launch_mujoco_fastlio2_live.sh",
+        "status",
+    ]
+    assert (Path(captured["cwd"]) / "lingtu.py").exists()
+    assert captured["env"]["LINGTU_PROFILE"] == "sim_mujoco_live"
+    assert captured["env"]["LINGTU_RUNTIME_CONTRACT"] == "mujoco_fastlio2_live"
+    assert captured["check"] is False
+
+
+def test_product_task_endpoint_routes_to_mujoco_live_launcher(monkeypatch):
+    import subprocess
+
+    import cli.main as main_mod
+
+    captured = {}
+
+    def _fake_run(cmd, *, cwd, env, check):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        captured["check"] = check
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["lingtu.py", "explore", "--endpoint", "mujoco_live", "--record"],
+    )
+
+    main_mod.main()
+
+    assert captured["cmd"] == [
+        "bash",
+        "sim/scripts/launch_mujoco_fastlio2_live.sh",
+        "video",
+    ]
+    assert (Path(captured["cwd"]) / "lingtu.py").exists()
+    assert captured["env"]["LINGTU_PROFILE"] == "explore"
+    assert captured["env"]["LINGTU_ENDPOINT"] == "mujoco_live"
+    assert captured["env"]["LINGTU_DATA_SOURCE"] == "mujoco_fastlio2_live"
+    assert captured["env"]["LINGTU_RUNTIME_CONTRACT"] == "mujoco_fastlio2_live"
+    assert captured["check"] is False
+
+
+def test_tare_product_task_endpoint_record_routes_to_mujoco_live_video(monkeypatch):
+    import subprocess
+
+    import cli.main as main_mod
+
+    captured = {}
+
+    def _fake_run(cmd, *, cwd, env, check):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        captured["check"] = check
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["lingtu.py", "tare_explore", "--endpoint", "mujoco_live", "--record"],
+    )
+
+    main_mod.main()
+
+    assert captured["cmd"] == [
+        "bash",
+        "sim/scripts/launch_mujoco_fastlio2_live.sh",
+        "tare-video",
+    ]
+    assert (Path(captured["cwd"]) / "lingtu.py").exists()
+    assert captured["env"]["LINGTU_PROFILE"] == "tare_explore"
+    assert captured["env"]["LINGTU_ENDPOINT"] == "mujoco_live"
+    assert captured["env"]["LINGTU_DATA_SOURCE"] == "mujoco_fastlio2_live"
+    assert captured["env"]["LINGTU_RUNTIME_CONTRACT"] == "mujoco_fastlio2_live"
+    assert captured["check"] is False
+
+
+def test_endpoint_launcher_accepts_trailing_action_after_options(monkeypatch):
+    import subprocess
+
+    import cli.main as main_mod
+
+    captured = {}
+
+    def _fake_run(cmd, *, cwd, env, check):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        captured["check"] = check
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["lingtu.py", "explore", "--endpoint", "mujoco_live", "status"],
+    )
+
+    main_mod.main()
+
+    assert captured["cmd"] == [
+        "bash",
+        "sim/scripts/launch_mujoco_fastlio2_live.sh",
+        "status",
+    ]
+    assert captured["env"]["LINGTU_PROFILE"] == "explore"
+    assert captured["env"]["LINGTU_ENDPOINT"] == "mujoco_live"
+
+
+def test_mujoco_live_endpoint_accepts_visible_demo_action(monkeypatch):
+    import subprocess
+
+    import cli.main as main_mod
+
+    captured = {}
+
+    def _fake_run(cmd, *, cwd, env, check):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        captured["check"] = check
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["lingtu.py", "explore", "--endpoint", "mujoco_live", "demo"],
+    )
+
+    main_mod.main()
+
+    assert captured["cmd"] == [
+        "bash",
+        "sim/scripts/launch_mujoco_fastlio2_live.sh",
+        "demo",
+    ]
+    assert captured["env"]["LINGTU_PROFILE"] == "explore"
+    assert captured["env"]["LINGTU_ENDPOINT"] == "mujoco_live"
+
+
+def test_mujoco_live_endpoint_accepts_pct_moving_obstacle_action(monkeypatch):
+    import subprocess
+
+    import cli.main as main_mod
+
+    captured = {}
+
+    def _fake_run(cmd, *, cwd, env, check):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        captured["check"] = check
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["lingtu.py", "sim_mujoco_live", "pct-moving-obstacle"],
+    )
+
+    main_mod.main()
+
+    assert captured["cmd"] == [
+        "bash",
+        "sim/scripts/launch_mujoco_fastlio2_live.sh",
+        "pct-moving-obstacle",
+    ]
+    assert captured["env"]["LINGTU_PROFILE"] == "sim_mujoco_live"
+    assert captured["env"]["LINGTU_RUNTIME_CONTRACT"] == "mujoco_fastlio2_live"
+
+
+def test_mujoco_live_endpoint_accepts_inspection_video_action(monkeypatch):
+    import subprocess
+
+    import cli.main as main_mod
+
+    captured = {}
+
+    def _fake_run(cmd, *, cwd, env, check):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        captured["check"] = check
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["lingtu.py", "sim_mujoco_live", "inspection-moving-obstacle-video"],
+    )
+
+    main_mod.main()
+
+    assert captured["cmd"] == [
+        "bash",
+        "sim/scripts/launch_mujoco_fastlio2_live.sh",
+        "inspection-moving-obstacle-video",
+    ]
+    assert captured["env"]["LINGTU_PROFILE"] == "sim_mujoco_live"
+    assert captured["env"]["LINGTU_RUNTIME_CONTRACT"] == "mujoco_fastlio2_live"
+
+
+def test_tare_product_task_endpoint_routes_to_cmu_unity_launcher(monkeypatch):
+    import subprocess
+
+    import cli.main as main_mod
+
+    captured = {}
+
+    def _fake_run(cmd, *, cwd, env, check):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        captured["check"] = check
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["lingtu.py", "tare_explore", "--endpoint", "cmu_unity"],
+    )
+
+    main_mod.main()
+
+    assert captured["cmd"] == [
+        "bash",
+        "sim/scripts/launch_cmu_unity_lingtu_runtime.sh",
+        "gate",
+    ]
+    assert (Path(captured["cwd"]) / "lingtu.py").exists()
+    assert captured["env"]["LINGTU_PROFILE"] == "tare_explore"
+    assert captured["env"]["LINGTU_ENDPOINT"] == "cmu_unity"
+    assert captured["env"]["LINGTU_DATA_SOURCE"] == "cmu_unity_external"
+    assert captured["env"]["LINGTU_RUNTIME_CONTRACT"] == "cmu_unity_external"
+    assert captured["check"] is False
+
+
+def test_tare_product_task_endpoint_routes_to_mujoco_live_launcher(monkeypatch):
+    import subprocess
+
+    import cli.main as main_mod
+
+    captured = {}
+
+    def _fake_run(cmd, *, cwd, env, check):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        captured["check"] = check
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["lingtu.py", "tare_explore", "--endpoint", "mujoco_live"],
+    )
+
+    main_mod.main()
+
+    assert captured["cmd"] == [
+        "bash",
+        "sim/scripts/launch_mujoco_fastlio2_live.sh",
+        "tare",
+    ]
+    assert (Path(captured["cwd"]) / "lingtu.py").exists()
+    assert captured["env"]["LINGTU_PROFILE"] == "tare_explore"
+    assert captured["env"]["LINGTU_ENDPOINT"] == "mujoco_live"
+    assert captured["env"]["LINGTU_DATA_SOURCE"] == "mujoco_fastlio2_live"
+    assert captured["env"]["LINGTU_RUNTIME_CONTRACT"] == "mujoco_fastlio2_live"
+    assert captured["check"] is False

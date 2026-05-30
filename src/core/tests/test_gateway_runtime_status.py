@@ -520,6 +520,22 @@ def test_navigation_status_reports_mission_path_and_control_source():
                 },
             }
 
+    class FakeNavigation:
+        def get_navigation_status(self):
+            return json.dumps({
+                "plan_safety_policy": "reject",
+                "last_plan_report": {
+                    "selected_planner": "pct",
+                    "selected_path_safety": {
+                        "ok": False,
+                        "blocked_sample_count": 2,
+                    },
+                    "fallback_reason": "pct path_safety failed",
+                    "rejected_plans": [{"planner": "pct", "reason": "unsafe"}],
+                    "policy": "reject",
+                },
+            })
+
     gateway = GatewayModule()
     gateway._session_mode = "navigating"
     with gateway._state_lock:
@@ -556,7 +572,10 @@ def test_navigation_status_reports_mission_path_and_control_source():
             "confidence": 0.9,
             "icp_fitness": 0.03,
         }
-    gateway._all_modules = {"CmdVelMux": FakeMux()}
+    gateway._all_modules = {
+        "CmdVelMux": FakeMux(),
+        "NavigationModule": FakeNavigation(),
+    }
 
     payload = build_navigation_status(gateway)
     NavigationStatusResponse.model_validate(payload)
@@ -588,14 +607,61 @@ def test_navigation_status_reports_mission_path_and_control_source():
     assert payload["target"]["goal"]["x"] == 4.0
     assert payload["target"]["current_waypoint"]["y"] == 3.0
     assert payload["target"]["distance_to_goal_m"] == 5.0
-    assert payload["target"]["active_waypoint_distance_m"] == 1.25
+    assert payload["target"]["active_waypoint_distance_m"] == 1.414
     assert payload["target"]["remaining_waypoints"] == 3
     assert payload["motion"]["current_speed_mps"] == 0.5
     assert payload["motion"]["speed_policy"]["mode"] == "cautious"
     assert payload["motion"]["speed_policy"]["reason"] == "degeneracy=MILD"
     assert payload["feedback"]["next_action"] == "monitor_progress"
+    assert payload["diagnostics"]["plan_safety_policy"] == "reject"
+    assert payload["diagnostics"]["last_plan_report"]["selected_planner"] == "pct"
+    assert (
+        payload["diagnostics"]["last_plan_report"]["selected_path_safety"]["ok"]
+        is False
+    )
     assert payload["reason_codes"] == []
     assert payload["localization"]["degraded"] is False
+
+
+def test_navigation_status_uses_mission_plan_report_when_module_status_unavailable():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_navigation_status
+
+    class FakeMux:
+        def health(self):
+            return {
+                "active_source": "path_follower",
+                "sources": {
+                    "path_follower": {"active": True, "priority": 40},
+                },
+            }
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "y": 2.0}
+        gateway._mode = "autonomous"
+        gateway._mission = {
+            "state": "PLANNING",
+            "planning_frame_id": "map",
+            "odom_frame_id": "map",
+            "costmap_frame_id": "map",
+            "goal_frame_id": "map",
+            "plan_safety_policy": "fallback_astar",
+            "last_plan_report": {
+                "primary_planner": "pct",
+                "selected_planner": "astar",
+                "fallback_reason": "pct path_safety failed",
+                "rejected_plans": [{"planner": "pct", "reason": "unsafe"}],
+            },
+        }
+    gateway._all_modules = {"CmdVelMux": FakeMux()}
+
+    payload = build_navigation_status(gateway)
+
+    assert payload["diagnostics"]["plan_safety_policy"] == "fallback_astar"
+    assert payload["diagnostics"]["last_plan_report"]["primary_planner"] == "pct"
+    assert payload["diagnostics"]["last_plan_report"]["selected_planner"] == "astar"
 
 
 def test_navigation_status_blocks_goal_on_odometry_frame_mismatch():
@@ -809,6 +875,37 @@ def test_navigation_status_blocks_goal_when_session_is_not_navigating():
     assert "navigation_session_inactive" in payload["readiness"]["blockers"]
     assert payload["readiness"]["session_mode"] == "idle"
     assert payload["feedback"]["next_action"] == "resolve_blockers"
+
+
+def test_navigation_status_allows_exploring_session_for_external_tare():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_navigation_status
+
+    class FakeMux:
+        def health(self):
+            return {"active_source": "path_follower", "sources": {}}
+
+    gateway = GatewayModule()
+    gateway._session_mode = "exploring"
+    gateway._session_slam_profile = "none"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "y": 2.0}
+        gateway._mode = "autonomous"
+        gateway._mission = {"state": "IDLE"}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "pose_fresh": True,
+            "odom_age_ms": 100.0,
+        }
+    gateway._all_modules = {"CmdVelMux": FakeMux()}
+
+    payload = build_navigation_status(gateway)
+
+    assert payload["readiness"]["session_mode"] == "exploring"
+    assert "navigation_session_inactive" not in payload["reason_codes"]
+    assert "navigation_session_inactive" not in payload["readiness"]["blockers"]
 
 
 def test_navigation_status_finds_cmd_vel_mux_by_module_class_or_name():
@@ -1309,6 +1406,40 @@ def test_navigation_status_route_returns_stable_schema():
         "odometry_missing",
         "navigation_session_inactive",
     ]
+
+
+def test_navigation_status_routes_pass_fastapi_response_validation():
+    from fastapi.testclient import TestClient
+
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    gateway.setup()
+    with gateway._state_lock:
+        gateway._mission = {"state": "IDLE"}
+
+    client = TestClient(gateway._app)
+    for path in ("/api/v1/navigation/status", "/api/v1/navigation"):
+        response = client.get(path)
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["schema_version"] == 1
+        assert payload["state"] == "IDLE"
+        assert payload["frames"]["planning_frame_id"] == "map"
+        assert payload["target"] == {
+            "goal": None,
+            "current_waypoint": None,
+            "distance_to_goal_m": None,
+            "active_waypoint_distance_m": None,
+            "remaining_waypoints": None,
+        }
+        assert payload["motion"]["active_cmd_source"] == "unknown"
+        assert payload["feedback"]["next_action"] == "resolve_blockers"
+        assert payload["feedback"]["blockers"] == [
+            "odometry_missing",
+            "navigation_session_inactive",
+        ]
 
 
 def test_drift_watchdog_restores_idle_running_localization_services(monkeypatch):

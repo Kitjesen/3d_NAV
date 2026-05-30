@@ -1,5 +1,17 @@
 """NavigationModule — unified path planning + tracking + mission FSM.
 
+NAV COMPUTE CONTRACT (docs/architecture/NAVIGATION_COMPUTE_CONTRACT.md):
+  This module owns the L5 GLOBAL PLANNING layer (tomogram/saved_map -> global_path
+  + waypoint) and the L2 SAFETY GATING use of `costmap`.
+
+  `costmap` (= TraversabilityCostModule.fused_cost) is consumed ONLY for safety
+  gating, never to produce trajectories:
+    1. GlobalPlannerService.update_map() overlays live risk onto PCT/A* safe-goal
+       and path-safety checks.
+    2. Throttled replan trigger (PCT defaults OFF — it owns terrain cost via the
+       offline tomogram; A* dev/sim defaults ON).
+  Local trajectory generation is NOT done here — that is LocalPlannerModule (L2).
+
 Internal services (not Modules — no ports, just algorithm logic):
   - GlobalPlannerService  (nav/global_planner_service.py) — plan() + downsample
   - WaypointTracker       (nav/waypoint_tracker.py)       — arrival + stuck detection
@@ -65,14 +77,16 @@ class MissionState:
 
     # Legal state transitions. Any state → IDLE is always allowed (stop/cancel/reset).
     TRANSITIONS: dict[str, frozenset[str]] = {
-        "IDLE":       frozenset(["PLANNING", "PATROLLING", "FAILED", "CANCELLED"]),
-        "PLANNING":   frozenset(["EXECUTING", "FAILED", "IDLE", "CANCELLED"]),
-        "EXECUTING":  frozenset(["SUCCESS", "FAILED", "STUCK", "IDLE", "PLANNING", "CANCELLED"]),
+        "IDLE":       frozenset(["PLANNING", "PATROLLING", "EXECUTING", "FAILED", "CANCELLED"]),
+        "PLANNING":   frozenset(["EXECUTING", "PATROLLING", "FAILED", "IDLE", "CANCELLED"]),
+        "EXECUTING":  frozenset([
+            "SUCCESS", "FAILED", "STUCK", "IDLE", "PLANNING", "PATROLLING", "CANCELLED"
+        ]),
         "PATROLLING": frozenset(["EXECUTING", "SUCCESS", "FAILED", "STUCK", "IDLE", "PLANNING", "CANCELLED"]),
         "SUCCESS":    frozenset(["IDLE", "PLANNING", "PATROLLING"]),
-        "FAILED":     frozenset(["IDLE", "PLANNING", "PATROLLING"]),
-        "STUCK":      frozenset(["IDLE", "PLANNING", "CANCELLED"]),
-        "CANCELLED":  frozenset(["IDLE", "PLANNING", "PATROLLING"]),
+        "FAILED":     frozenset(["IDLE", "PLANNING", "PATROLLING", "EXECUTING"]),
+        "STUCK":      frozenset(["IDLE", "PLANNING", "EXECUTING", "CANCELLED"]),
+        "CANCELLED":  frozenset(["IDLE", "PLANNING", "PATROLLING", "EXECUTING"]),
     }
 
 
@@ -123,23 +137,69 @@ class NavigationModule(Module, layer=5):
         max_replan_count: int = 3,
         downsample_dist: float = 2.0,
         enable_ros2_bridge: bool = False,
+        final_waypoint_threshold: float | None = None,
         allow_direct_goal_fallback: bool = False,
+        direct_goal_fallback_on_planner_failure: bool = False,
+        external_strategy_path_control: bool = False,
+        external_strategy_start_tolerance_m: float = 1.5,
         goal_update_epsilon: float = 0.25,
+        safe_goal_tolerance: float = 4.0,
+        plan_safety_policy: str = "observe",
+        fallback_planner_name: str = "astar",
+        accept_partial_goal_progress: bool = False,
+        partial_goal_repeat_ignore_window_s: float = 5.0,
+        defer_empty_path_planning_failure: bool = False,
+        empty_path_retry_interval_s: float = 3.0,
+        empty_path_retry_timeout_s: float = 30.0,
+        replan_on_costmap_update: bool | None = None,
         **kw,
     ):
         super().__init__(**kw)
+        planner_key = str(planner or "").strip().lower()
         self._enable_ros2_bridge = enable_ros2_bridge
         self._allow_direct_goal_fallback = allow_direct_goal_fallback
+        self._direct_goal_fallback_on_planner_failure = direct_goal_fallback_on_planner_failure
+        self._external_strategy_path_control = external_strategy_path_control
+        self._external_strategy_start_tolerance_m = float(
+            external_strategy_start_tolerance_m
+        )
+        self._using_external_strategy_path = False
         self._goal_update_epsilon = goal_update_epsilon
+        self._safe_goal_tolerance = safe_goal_tolerance
+        self._accept_partial_goal_progress = accept_partial_goal_progress
+        self._partial_goal_repeat_ignore_window_s = max(
+            0.0,
+            float(partial_goal_repeat_ignore_window_s),
+        )
+        self._defer_empty_path_planning_failure = bool(
+            defer_empty_path_planning_failure
+        )
+        self._empty_path_retry_interval_s = max(
+            0.1,
+            float(empty_path_retry_interval_s),
+        )
+        self._empty_path_retry_timeout_s = max(
+            self._empty_path_retry_interval_s,
+            float(empty_path_retry_timeout_s),
+        )
+        if replan_on_costmap_update is None:
+            replan_on_costmap_update = planner_key != "pct"
+        self._replan_on_costmap_update = bool(replan_on_costmap_update)
+        self._direct_goal_fallback_status: dict[str, Any] | None = None
+        self._deferred_empty_path_first_ts: float = 0.0
+        self._deferred_empty_path_attempts: int = 0
 
         self._planner_svc = GlobalPlannerService(
             planner_name=planner,
             tomogram=tomogram,
             obstacle_thr=obstacle_thr,
             downsample_dist=downsample_dist,
+            plan_safety_policy=plan_safety_policy,
+            fallback_planner_name=fallback_planner_name,
         )
         self._tracker = WaypointTracker(
             threshold=waypoint_threshold,
+            final_threshold=final_waypoint_threshold,
             stuck_timeout=stuck_timeout,
             stuck_dist=stuck_dist_thre,
         )
@@ -147,12 +207,18 @@ class NavigationModule(Module, layer=5):
         # Mission FSM state
         self._state = MissionState.IDLE
         self._robot_pos = np.zeros(3)
+        self._robot_yaw = 0.0
         self._planning_frame_id = str(kw.get("planning_frame_id", PLANNING_FRAME_ID))
         self._odom_frame_id = "unknown"
         self._costmap_frame_id = "unknown"
         self._goal_frame_id: str | None = None
         self._reported_frame_mismatches: set[tuple[str, str]] = set()
         self._goal: np.ndarray | None = None
+        self._active_path_terminal_goal: np.ndarray | None = None
+        self._partial_progress_completed_goal: np.ndarray | None = None
+        self._partial_progress_completed_terminal: np.ndarray | None = None
+        self._partial_progress_completed_ts: float = 0.0
+        self._active_external_strategy_path: list[np.ndarray] = []
         self._replan_count = 0
         self._max_replan = max_replan_count
         self._failure_reason = ""
@@ -312,6 +378,17 @@ class NavigationModule(Module, layer=5):
                 "source": "localization_degeneracy",
                 "applied": self._speed_scale < 1.0,
             },
+            "plan_safety_policy": getattr(
+                self._planner_svc,
+                "_plan_safety_policy",
+                "observe",
+            ),
+            "replan_on_costmap_update": self._replan_on_costmap_update,
+            "last_plan_report": self._current_plan_report(),
+            "direct_goal_fallback": self._direct_goal_fallback_status,
+            "external_strategy_path_control": self._external_strategy_path_control,
+            "using_external_strategy_path": self._using_external_strategy_path,
+            "accept_partial_goal_progress": self._accept_partial_goal_progress,
             "degeneracy": self._degen_level,
             "failure_reason": self._failure_reason,
             "localization_paused": self._paused_for_localization,
@@ -385,6 +462,9 @@ class NavigationModule(Module, layer=5):
             "ts": time.time(),
         })
         self._tracker.clear()
+        self._active_path_terminal_goal = None
+        self._active_external_strategy_path = []
+        self._clear_partial_goal_progress()
         self._publish_motion_stop()
         self._set_state(MissionState.FAILED)
 
@@ -404,6 +484,10 @@ class NavigationModule(Module, layer=5):
         self._tracker.clear()
         self._goal = None
         self._goal_frame_id = None
+        self._active_path_terminal_goal = None
+        self._active_external_strategy_path = []
+        self._clear_partial_goal_progress()
+        self._clear_deferred_empty_path()
         self._publish_motion_stop()
         if self._state not in (
             MissionState.IDLE,
@@ -430,12 +514,17 @@ class NavigationModule(Module, layer=5):
             reason="new_goal",
             clear_goal=False,
         )
+        self._clear_partial_goal_progress()
+        self._clear_deferred_empty_path()
+        self._using_external_strategy_path = False
         self._goal = new_goal
         self._goal_frame_id = frame_id
         self._replan_count = 0
         self._plan()
 
     def _should_ignore_goal_update(self, new_goal: np.ndarray) -> bool:
+        if self._should_ignore_completed_partial_goal(new_goal):
+            return True
         if self._goal is None:
             return False
         if self._state not in (MissionState.PLANNING, MissionState.EXECUTING, MissionState.PATROLLING):
@@ -451,14 +540,81 @@ class NavigationModule(Module, layer=5):
         })
         return True
 
+    def _should_ignore_completed_partial_goal(self, new_goal: np.ndarray) -> bool:
+        if not self._accept_partial_goal_progress:
+            return False
+        if (
+            self._partial_progress_completed_goal is None
+            or self._partial_progress_completed_terminal is None
+        ):
+            return False
+        if self._partial_goal_repeat_ignore_window_s > 0.0:
+            age_s = time.time() - self._partial_progress_completed_ts
+            if age_s > self._partial_goal_repeat_ignore_window_s:
+                self._clear_partial_goal_progress()
+                return False
+        try:
+            goal_delta = float(np.linalg.norm(
+                np.asarray(new_goal[:2], dtype=float)
+                - np.asarray(self._partial_progress_completed_goal[:2], dtype=float)
+            ))
+            robot_terminal_delta = float(np.linalg.norm(
+                np.asarray(self._robot_pos[:2], dtype=float)
+                - np.asarray(self._partial_progress_completed_terminal[:2], dtype=float)
+            ))
+        except (TypeError, ValueError):
+            return False
+        if goal_delta > self._goal_update_epsilon:
+            return False
+        final_threshold = float(getattr(self._tracker, "_final_threshold", 0.0))
+        terminal_hold_radius = max(0.75, final_threshold * 2.0)
+        if robot_terminal_delta > terminal_hold_radius:
+            return False
+        self.adapter_status.publish({
+            "event": "partial_goal_repeat_ignored",
+            "goal": self._point_summary(new_goal),
+            "completed_goal": self._point_summary(
+                self._partial_progress_completed_goal
+            ),
+            "completed_terminal": self._point_summary(
+                self._partial_progress_completed_terminal
+            ),
+            "robot_terminal_delta_m": round(robot_terminal_delta, 3),
+            "ts": time.time(),
+        })
+        return True
+
     def _on_instruction(self, text: str) -> None:
         logger.info("NavigationModule received instruction: %s", text[:50])
 
     def _on_stop(self, level: int) -> None:
-        if level >= 1:
+        if level >= 2:
             self._tracker.clear()
             self._publish_motion_stop()
+            self._using_external_strategy_path = False
+            self._active_external_strategy_path = []
+            self._clear_partial_goal_progress()
             self._set_state(MissionState.IDLE)
+            self.adapter_status.publish({
+                "event": "safety_stop",
+                "level": int(level),
+                "action": "mission_cleared",
+                "ts": time.time(),
+            })
+        elif level == 1:
+            self.adapter_status.publish({
+                "event": "safety_soft_stop",
+                "level": int(level),
+                "action": "mission_held",
+                "ts": time.time(),
+            })
+        elif level <= 0:
+            self.adapter_status.publish({
+                "event": "safety_clear",
+                "level": int(level),
+                "action": "mission_retained",
+                "ts": time.time(),
+            })
 
     def _publish_motion_stop(self) -> None:
         self.clear_path.publish(True)
@@ -502,15 +658,29 @@ class NavigationModule(Module, layer=5):
         grid = data.get("grid")
         if grid is None:
             return
-        self._planner_svc.update_map(
-            grid,
-            resolution=data.get("resolution", 0.2),
-            origin=data.get("origin"),
-        )
+        if self._replan_on_costmap_update:
+            self._planner_svc.update_map(
+                grid,
+                resolution=data.get("resolution", 0.2),
+                origin=data.get("origin"),
+            )
         if (self._state in (MissionState.EXECUTING, MissionState.PATROLLING,
                             MissionState.FAILED)
                 and self._goal is not None
+                and not self._using_external_strategy_path
+                and self._replan_on_costmap_update
                 and time.time() - self._last_costmap_replan_time > 3.0):
+            self._last_costmap_replan_time = time.time()
+            self._plan()
+        elif (
+            self._state == MissionState.PLANNING
+            and self._deferred_empty_path_first_ts > 0.0
+            and self._goal is not None
+            and not self._using_external_strategy_path
+            and self._replan_on_costmap_update
+            and time.time() - self._last_costmap_replan_time
+            > self._empty_path_retry_interval_s
+        ):
             self._last_costmap_replan_time = time.time()
             self._plan()
 
@@ -525,6 +695,11 @@ class NavigationModule(Module, layer=5):
         self._patrol_index = 0
         self._goal = None
         self._goal_frame_id = None
+        self._active_path_terminal_goal = None
+        self._using_external_strategy_path = False
+        self._active_external_strategy_path = []
+        self._clear_partial_goal_progress()
+        self._clear_deferred_empty_path()
         self._failure_reason = f"cancelled: {msg}" if msg else "cancelled"
         self._publish_motion_stop()
         if self._state in (MissionState.IDLE, MissionState.CANCELLED) \
@@ -559,6 +734,7 @@ class NavigationModule(Module, layer=5):
             logger.warning(
                 "TF jump (Δt=%.2fm Δyaw=%.1f°) → forced replan",
                 dt_m, dyaw)
+            self._publish_motion_stop()
             self._tracker.clear()  # invalidate current waypoint tracking
             self._plan()
 
@@ -690,26 +866,32 @@ class NavigationModule(Module, layer=5):
     def _on_patrol_goals(self, goals: list) -> None:
         if not goals:
             return
-        self._patrol_goals.clear()
-        self._patrol_loop = False
+        parsed_goals: list[np.ndarray] = []
+        patrol_loop = False
         for g in goals:
             if isinstance(g, dict):
                 frame_id = str(g.get("frame_id") or self._planning_frame_id)
                 if frame_id != self._planning_frame_id:
-                    self._patrol_goals.clear()
                     self._reject_goal_frame(frame_id, source="patrol_goals")
                     return
-                self._patrol_goals.append(
+                parsed_goals.append(
                     np.array([g["x"], g["y"], g.get("z", 0.0)])
                 )
                 if g.get("loop"):
-                    self._patrol_loop = True
+                    patrol_loop = True
             elif isinstance(g, (list, tuple)) and len(g) >= 2:
-                self._patrol_goals.append(
+                parsed_goals.append(
                     np.array([g[0], g[1], g[2] if len(g) > 2 else 0.0])
                 )
-        if self._patrol_goals:
+        if parsed_goals:
+            if self._same_patrol_goals(parsed_goals, loop=patrol_loop):
+                return
+            self._patrol_goals = parsed_goals
+            self._patrol_loop = patrol_loop
             self._patrol_index = 0
+            if self._external_strategy_path_control:
+                self._start_external_strategy_path(parsed_goals)
+                return
             self._goal = self._patrol_goals[0]
             self._goal_frame_id = self._planning_frame_id
             self._replan_count = 0
@@ -719,6 +901,113 @@ class NavigationModule(Module, layer=5):
                 len(self._patrol_goals), self._patrol_loop,
             )
             self._plan()
+
+    def _start_external_strategy_path(self, goals: list[np.ndarray]) -> None:
+        """Execute an externally planned strategy path through LingTu tracking."""
+        try:
+            path = self._validate_planned_path(goals)
+            path = self._reanchor_external_strategy_path(path)
+        except RuntimeError as exc:
+            self._failure_reason = f"invalid external strategy path: {exc}"
+            self._tracker.clear()
+            self._publish_motion_stop()
+            self._set_state(MissionState.FAILED)
+            return
+        if len(path) < 2:
+            self.adapter_status.publish({
+                "event": "external_strategy_path_ignored",
+                "reason": "path_too_short",
+                "points": len(path),
+                "ts": time.time(),
+            })
+            return
+
+        self._using_external_strategy_path = True
+        self._clear_partial_goal_progress()
+        self._goal = np.asarray(path[-1][:3], dtype=float).copy()
+        self._goal_frame_id = self._planning_frame_id
+        self._active_path_terminal_goal = self._goal.copy()
+        self._active_external_strategy_path = [
+            np.asarray(point[:3], dtype=float).copy() for point in path
+        ]
+        self._failure_reason = ""
+        self._direct_goal_fallback_status = None
+        self._mission_start_time = time.time()
+        self._last_costmap_replan_time = time.time()
+        self._replan_count = 0
+
+        self._tracker.reset(path, self._robot_pos, self._robot_yaw)
+        self._tracker.update(self._robot_pos, self._robot_yaw)
+        if self._tracker.current_waypoint is None:
+            self.adapter_status.publish({
+                "event": "external_strategy_path_ignored",
+                "reason": "already_complete",
+                "points": len(path),
+                "ts": time.time(),
+            })
+            return
+
+        self.global_path.publish(path)
+        self._set_state(MissionState.EXECUTING)
+        self.adapter_status.publish({
+            "event": "external_strategy_path_control",
+            "points": len(path),
+            "goal": self._point_summary(self._goal),
+            "current_waypoint": self._point_summary(self._tracker.current_waypoint),
+            "ts": time.time(),
+        })
+        self._publish_waypoint()
+
+    def _reanchor_external_strategy_path(
+        self,
+        path: list[np.ndarray],
+    ) -> list[np.ndarray]:
+        """Return the forward path segment anchored near current odometry.
+
+        External strategy paths are generated by another ROS graph. Before
+        tracking them directly, require at least one path point near the
+        current robot pose and start tracking from that segment.
+        """
+        if len(path) < 2:
+            raise RuntimeError("path_too_short")
+        robot = np.asarray(self._robot_pos[:3], dtype=float)
+        if not np.all(np.isfinite(robot[:2])):
+            raise RuntimeError("missing_current_odometry")
+        distances = [
+            float(np.linalg.norm(np.asarray(point[:2], dtype=float) - robot[:2]))
+            for point in path
+        ]
+        nearest_index = min(range(len(distances)), key=distances.__getitem__)
+        nearest_distance = distances[nearest_index]
+        if nearest_distance > max(0.0, self._external_strategy_start_tolerance_m):
+            raise RuntimeError(
+                "path_not_anchored_near_current_odom "
+                f"(nearest={nearest_distance:.2f}m)"
+            )
+        anchored = [np.asarray(point[:3], dtype=float).copy() for point in path[nearest_index:]]
+        if len(anchored) < 2:
+            raise RuntimeError("path_has_no_forward_segment_after_odom_anchor")
+        if float(np.linalg.norm(anchored[0][:2] - robot[:2])) > 0.05:
+            anchored.insert(0, robot.copy())
+        return anchored
+
+    def _same_patrol_goals(self, goals: list[np.ndarray], *, loop: bool) -> bool:
+        if self._state not in (
+            MissionState.PLANNING,
+            MissionState.EXECUTING,
+            MissionState.PATROLLING,
+        ):
+            return False
+        if loop != self._patrol_loop or len(goals) != len(self._patrol_goals):
+            return False
+        if not goals:
+            return False
+        return all(
+            np.linalg.norm(
+                np.asarray(a[:3], dtype=float) - np.asarray(b[:3], dtype=float)
+            ) <= 0.05
+            for a, b in zip(goals, self._patrol_goals)
+        )
 
     def _on_odom(self, odom: Odometry) -> None:
         self._odom_frame_id = str(getattr(odom, "frame_id", "") or "unknown")
@@ -732,6 +1021,12 @@ class NavigationModule(Module, layer=5):
             odom.pose.position.y,
             odom.pose.position.z,
         ])
+        try:
+            yaw = float(odom.yaw)
+            if math.isfinite(yaw):
+                self._robot_yaw = yaw
+        except (AttributeError, TypeError, ValueError):
+            pass
 
         if self._paused_for_localization:
             return
@@ -739,12 +1034,46 @@ class NavigationModule(Module, layer=5):
         if self._state not in (MissionState.EXECUTING, MissionState.PATROLLING):
             return
 
-        status = self._tracker.update(self._robot_pos)
+        status = self._tracker.update(self._robot_pos, self._robot_yaw)
 
         if status.event == EV_PATH_COMPLETE:
+            if self._should_continue_after_partial_path():
+                self.adapter_status.publish({
+                    "event": "partial_path_complete_replan",
+                    "goal": self._point_summary(self._goal),
+                    "path_terminal_goal": self._point_summary(
+                        self._active_path_terminal_goal
+                    ),
+                    "distance_to_goal_m": self._distance_xy(
+                        self._robot_pos,
+                        self._goal,
+                    ),
+                    "ts": time.time(),
+                })
+                self._plan()
+                return
+            partial_status = self._partial_path_terminal_status()
+            if (
+                self._accept_partial_goal_progress
+                and partial_status.get("partial")
+            ):
+                self._record_partial_goal_progress_complete()
+                self.adapter_status.publish({
+                    "event": "partial_goal_progress_complete",
+                    "original_goal": self._point_summary(self._goal),
+                    "path_terminal_goal": self._point_summary(
+                        self._active_path_terminal_goal
+                    ),
+                    "terminal_gap_m": partial_status.get("terminal_gap_m"),
+                    "distance_to_goal_m": partial_status.get("robot_gap_m"),
+                    "selected_planner": partial_status.get("selected_planner"),
+                    "reason": partial_status.get("reason"),
+                    "ts": time.time(),
+                })
             if self._state == MissionState.PATROLLING and self._patrol_goals:
                 if self._advance_patrol():
                     return
+            self._publish_motion_stop()
             self._set_state(MissionState.SUCCESS)
 
         elif status.event == EV_WAYPOINT_REACHED:
@@ -766,6 +1095,26 @@ class NavigationModule(Module, layer=5):
                 self._replan_count += 1
                 # Try backup motion before replanning (back up briefly, then rotate)
                 self._execute_recovery_motion()
+                if self._using_external_strategy_path:
+                    self._tracker.pause()
+                    self._republish_external_strategy_path()
+                    logger.warning(
+                        "Stuck detected, recovery motion; retaining external "
+                        "strategy path (%d/%d)",
+                        self._replan_count,
+                        self._max_replan,
+                    )
+                    self.adapter_status.publish({
+                        "event": "external_strategy_path_stuck_recovery",
+                        "recovery_count": self._replan_count,
+                        "max_recovery_count": self._max_replan,
+                        "remaining_waypoints": max(
+                            0,
+                            self._tracker.path_length - self._tracker.wp_index,
+                        ),
+                        "ts": time.time(),
+                    })
+                    return
                 logger.warning(
                     "Stuck detected, recovery motion + replan (%d/%d)",
                     self._replan_count, self._max_replan,
@@ -861,6 +1210,7 @@ class NavigationModule(Module, layer=5):
         logger.info(
             "Recovery: strategy=%s, reason=%s", strat["strategy"], klass,
         )
+        self.clear_path.publish(True)
 
         step_hz = 10
 
@@ -974,6 +1324,11 @@ class NavigationModule(Module, layer=5):
             "distance_m": None,
             "plan_ms": None,
             "planner": getattr(planner, "_planner_name", None),
+            "selected_planner": None,
+            "plan_safety_policy": getattr(planner, "_plan_safety_policy", None),
+            "path_safety": None,
+            "fallback_reason": "",
+            "rejected_plans": [],
             "source": "navigation_preview",
             "reasons": [],
             "error": None,
@@ -1051,6 +1406,7 @@ class NavigationModule(Module, layer=5):
             logger.warning("NavigationModule: plan preview failed: %s", exc)
             result["reasons"] = ["planning_failed"]
             result["error"] = str(exc)
+            result.update(self._preview_plan_report_fields(planner))
             return result
 
         try:
@@ -1123,7 +1479,77 @@ class NavigationModule(Module, layer=5):
             "adjusted_goal": adjusted_goal,
             "reasons": ["goal_adjusted"] if adjusted_goal is not None else [],
         })
+        result.update(self._preview_plan_report_fields(planner))
         return result
+
+    @staticmethod
+    def _preview_plan_report_fields(planner: Any) -> dict[str, Any]:
+        """Expose planner safety/selection diagnostics without changing state."""
+        report = NavigationModule._planner_last_plan_report(planner)
+        selected = report.get("selected_planner") or getattr(
+            planner,
+            "_planner_name",
+            None,
+        )
+        return {
+            "planner": selected or getattr(planner, "_planner_name", None),
+            "selected_planner": selected,
+            "plan_safety_policy": (
+                report.get("policy")
+                or getattr(planner, "_plan_safety_policy", None)
+            ),
+            "path_safety": report.get("selected_path_safety"),
+            "fallback_reason": report.get("fallback_reason", ""),
+            "rejected_plans": list(report.get("rejected_plans") or []),
+        }
+
+    @staticmethod
+    def _planner_last_plan_report(planner: Any) -> dict[str, Any]:
+        report = getattr(planner, "last_plan_report", {}) or {}
+        if callable(report):
+            report = report()
+        if not isinstance(report, dict):
+            return {}
+        return dict(report)
+
+    def _current_plan_report(self) -> dict[str, Any]:
+        if self._using_external_strategy_path:
+            return {
+                "primary_planner": "tare_external",
+                "selected_planner": "external_strategy_path",
+                "fallback_used": False,
+                "path_safety_ok": None,
+                "external_strategy_path_control": True,
+                "points": len(self._active_external_strategy_path),
+            }
+        report = self._planner_last_plan_report(self._planner_svc)
+        if self._deferred_empty_path_first_ts > 0.0:
+            deferred_reason = str(
+                report.get("fallback_reason")
+                or self._failure_reason
+                or "empty path deferred"
+            )
+            sanitized = dict(report)
+            sanitized["fallback_reason"] = ""
+            sanitized["rejected_plans"] = []
+            sanitized["deferred_planning"] = {
+                "active": True,
+                "reason": deferred_reason,
+                "attempts": self._deferred_empty_path_attempts,
+                "waited_s": round(time.time() - self._deferred_empty_path_first_ts, 3),
+                "retry_interval_s": self._empty_path_retry_interval_s,
+                "retry_timeout_s": self._empty_path_retry_timeout_s,
+            }
+            return sanitized
+        return report
+
+    def _republish_external_strategy_path(self) -> None:
+        if self._active_external_strategy_path:
+            self.global_path.publish([
+                np.asarray(point[:3], dtype=float).copy()
+                for point in self._active_external_strategy_path
+            ])
+        self._publish_waypoint()
 
     def _preview_plan_with_timeout(
         self,
@@ -1160,9 +1586,23 @@ class NavigationModule(Module, layer=5):
             self._block_for_frame_mismatch(*frame_blocker)
             return
 
+        planned_state = (
+            MissionState.PATROLLING
+            if self._patrol_goals
+            and self._goal is not None
+            and self._state in (
+                MissionState.PATROLLING,
+                MissionState.PLANNING,
+                MissionState.FAILED,
+            )
+            else MissionState.EXECUTING
+        )
         self._set_state(MissionState.PLANNING)
         self._mission_start_time = time.time()
         self._last_costmap_replan_time = time.time()
+        self._direct_goal_fallback_status = None
+        self._using_external_strategy_path = False
+        self._active_external_strategy_path = []
 
         path = None
         if not self._planner_svc.is_ready:
@@ -1174,41 +1614,234 @@ class NavigationModule(Module, layer=5):
                 return
         else:
             try:
-                path, _ = self._planner_svc.plan(self._robot_pos, self._goal)
+                path, _ = self._planner_svc.plan(
+                    self._robot_pos,
+                    self._goal,
+                    safe_goal_tolerance=self._safe_goal_tolerance,
+                )
+                self._publish_plan_report()
             except Exception as exc:
+                self._publish_plan_report()
                 if self._should_use_direct_goal_fallback(exc):
                     path = self._direct_goal_path(reason=str(exc))
+                elif self._should_defer_empty_path_failure(exc):
+                    self._defer_empty_path_failure(str(exc), planned_state)
+                    return
                 else:
                     logger.error("Planning failed: %s", exc)
                     self._failure_reason = str(exc)
                     self._set_state(MissionState.FAILED)
                     return
 
+        try:
+            path = self._validate_planned_path(path)
+        except RuntimeError as exc:
+            if self._should_defer_empty_path_failure(exc):
+                self._defer_empty_path_failure(str(exc), planned_state)
+                return
+            logger.error("Planning failed: %s", exc)
+            self._failure_reason = str(exc)
+            self._tracker.clear()
+            self._publish_motion_stop()
+            self._set_state(MissionState.FAILED)
+            return
+
         self._failure_reason = ""
-        self._tracker.reset(path, self._robot_pos)
+        self._clear_deferred_empty_path()
+        self._active_path_terminal_goal = np.asarray(path[-1][:3], dtype=float).copy()
+        self._tracker.reset(path, self._robot_pos, self._robot_yaw)
         # Advance past any waypoints the robot is already at (e.g. the start)
-        self._tracker.update(self._robot_pos)
+        self._tracker.update(self._robot_pos, self._robot_yaw)
         self.global_path.publish(path)
-        self._set_state(MissionState.EXECUTING)
+        self._set_state(planned_state)
         self._publish_waypoint()
+
+    def _publish_plan_report(self) -> None:
+        report = self._planner_last_plan_report(self._planner_svc)
+        if not report:
+            return
+        selected = report.get("selected_planner")
+        rejected = report.get("rejected_plans") or []
+        planner_name = getattr(self._planner_svc, "_planner_name", selected)
+        if selected != planner_name or rejected:
+            payload = {
+                "event": "global_plan_selection",
+                "selected_planner": selected,
+                "fallback_reason": report.get("fallback_reason", ""),
+                "rejected_plans": rejected,
+                "policy": report.get("policy", ""),
+                "ts": time.time(),
+            }
+            self.adapter_status.publish(payload)
 
     def _should_use_direct_goal_fallback(self, exc: Exception) -> bool:
         if not self._allow_direct_goal_fallback:
             return False
-        return not self._planner_svc.has_map
+        if not self._planner_svc.has_map:
+            return True
+        if not self._direct_goal_fallback_on_planner_failure:
+            return False
+        text = str(exc).lower()
+        return "empty path" in text or "no path" in text
+
+    def _should_defer_empty_path_failure(self, exc: Exception) -> bool:
+        if not self._defer_empty_path_planning_failure:
+            return False
+        text = str(exc).lower()
+        return (
+            "empty path" in text
+            or "no path" in text
+            or "no reachable free cell" in text
+        )
+
+    def _clear_deferred_empty_path(self) -> None:
+        self._deferred_empty_path_first_ts = 0.0
+        self._deferred_empty_path_attempts = 0
+
+    def _defer_empty_path_failure(
+        self,
+        reason: str,
+        planned_state: str,
+    ) -> None:
+        now = time.time()
+        if self._deferred_empty_path_first_ts <= 0.0:
+            self._deferred_empty_path_first_ts = now
+            self._deferred_empty_path_attempts = 0
+        self._deferred_empty_path_attempts += 1
+        waited_s = now - self._deferred_empty_path_first_ts
+        if waited_s > self._empty_path_retry_timeout_s:
+            logger.error("Planning failed after deferred retries: %s", reason)
+            self._failure_reason = reason
+            self._tracker.clear()
+            self._publish_motion_stop()
+            self._clear_deferred_empty_path()
+            self._set_state(MissionState.FAILED)
+            return
+
+        self._failure_reason = ""
+        self._tracker.clear()
+        self._publish_motion_stop()
+        self.adapter_status.publish({
+            "event": "planning_deferred_empty_path",
+            "reason": reason,
+            "planned_state": planned_state,
+            "attempt": self._deferred_empty_path_attempts,
+            "waited_s": round(waited_s, 3),
+            "retry_interval_s": self._empty_path_retry_interval_s,
+            "retry_timeout_s": self._empty_path_retry_timeout_s,
+            "goal": self._point_summary(self._goal),
+            "ts": now,
+        })
+        self._set_state(MissionState.PLANNING)
 
     def _direct_goal_path(self, reason: str = "") -> list[np.ndarray]:
         logger.warning(
             "NavigationModule: using direct-goal fallback waypoint (reason=%s)",
             reason or "planner unavailable",
         )
-        self.adapter_status.publish({
-            "event": "direct_goal_fallback",
+        self._direct_goal_fallback_status = {
+            "used": True,
             "reason": reason or "planner unavailable",
             "goal": [float(self._goal[0]), float(self._goal[1]), float(self._goal[2])],
             "ts": time.time(),
+        }
+        self.adapter_status.publish({
+            "event": "direct_goal_fallback",
+            **self._direct_goal_fallback_status,
         })
         return [self._goal.copy()]
+
+    def _should_continue_after_partial_path(self) -> bool:
+        status = self._partial_path_terminal_status()
+        if not status.get("partial"):
+            return False
+        if self._accept_partial_goal_progress:
+            return False
+        return True
+
+    def _partial_path_terminal_status(self) -> dict[str, Any]:
+        if self._using_external_strategy_path:
+            return {"partial": False}
+        if self._goal is None or self._active_path_terminal_goal is None:
+            return {"partial": False}
+        try:
+            goal = np.asarray(self._goal[:2], dtype=float)
+            terminal = np.asarray(self._active_path_terminal_goal[:2], dtype=float)
+            robot = np.asarray(self._robot_pos[:2], dtype=float)
+        except (TypeError, ValueError):
+            return {"partial": False}
+        if not (
+            np.all(np.isfinite(goal))
+            and np.all(np.isfinite(terminal))
+            and np.all(np.isfinite(robot))
+        ):
+            return {"partial": False}
+        final_threshold = float(getattr(self._tracker, "_final_threshold", 0.0))
+        threshold = max(final_threshold, 0.05)
+        terminal_gap = float(np.linalg.norm(terminal - goal))
+        robot_gap = float(np.linalg.norm(robot - goal))
+        if terminal_gap <= threshold or robot_gap <= threshold:
+            return {
+                "partial": False,
+                "terminal_gap_m": round(terminal_gap, 3),
+                "robot_gap_m": round(robot_gap, 3),
+            }
+        report = self._planner_last_plan_report(self._planner_svc)
+        primary_replan = report.get("primary_replan")
+        partial = bool(primary_replan) or report.get("reached_goal") is False
+        reason = ""
+        if bool(primary_replan):
+            reason = "primary_replan"
+        elif report.get("reached_goal") is False:
+            reason = "planner_partial_path"
+        return {
+            "partial": partial,
+            "terminal_gap_m": round(terminal_gap, 3),
+            "robot_gap_m": round(robot_gap, 3),
+            "selected_planner": report.get("selected_planner"),
+            "reason": reason,
+        }
+
+    def _record_partial_goal_progress_complete(self) -> None:
+        if self._goal is None or self._active_path_terminal_goal is None:
+            return
+        self._partial_progress_completed_goal = np.asarray(
+            self._goal[:3], dtype=float
+        ).copy()
+        self._partial_progress_completed_terminal = np.asarray(
+            self._active_path_terminal_goal[:3], dtype=float
+        ).copy()
+        self._partial_progress_completed_ts = time.time()
+
+    def _clear_partial_goal_progress(self) -> None:
+        self._partial_progress_completed_goal = None
+        self._partial_progress_completed_terminal = None
+        self._partial_progress_completed_ts = 0.0
+
+    def _validate_planned_path(self, path: Any) -> list[np.ndarray]:
+        try:
+            points = list(path) if path is not None else []
+        except TypeError as exc:
+            raise RuntimeError("planner returned a non-iterable path") from exc
+        if not points:
+            raise RuntimeError("planner returned empty path")
+
+        validated: list[np.ndarray] = []
+        for point in points:
+            try:
+                arr = np.asarray(point, dtype=float).reshape(-1)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("planner returned an invalid path point") from exc
+            if arr.size < 2:
+                raise RuntimeError("planner returned a path point with fewer than 2 coordinates")
+            if not np.all(np.isfinite(arr)):
+                raise RuntimeError("planner returned a non-finite path point")
+            if arr.size < 3:
+                arr = np.pad(arr[:2], (0, 1), constant_values=0.0)
+            else:
+                arr = arr[:3].copy()
+            validated.append(arr)
+        return validated
 
     def _advance_patrol(self) -> bool:
         """Advance to next patrol goal. Returns True if more goals remain."""
@@ -1299,7 +1932,7 @@ class NavigationModule(Module, layer=5):
         """Get current navigation state, position, and mission progress."""
         pos = {"x": round(float(self._robot_pos[0]), 3),
                "y": round(float(self._robot_pos[1]), 3),
-               "yaw": 0.0}
+               "yaw": round(float(self._robot_yaw), 3)}
         goal = ({"x": round(float(self._goal[0]), 3),
                  "y": round(float(self._goal[1]), 3)}
                 if self._goal is not None else None)
@@ -1315,6 +1948,14 @@ class NavigationModule(Module, layer=5):
             "waypoint_index": self._tracker.wp_index,
             "replan_count": self._replan_count,
             "failure_reason": self._failure_reason,
+            "plan_safety_policy": getattr(
+                self._planner_svc,
+                "_plan_safety_policy",
+                "observe",
+            ),
+            "replan_on_costmap_update": self._replan_on_costmap_update,
+            "last_plan_report": self._current_plan_report(),
+            "direct_goal_fallback": self._direct_goal_fallback_status,
         })
 
     @skill
@@ -1338,16 +1979,26 @@ class NavigationModule(Module, layer=5):
         if self._ros2_node is not None:
             self._ros2_node.destroy_node()
             self._ros2_node = None
+        self._preview_executor.shutdown(wait=False, cancel_futures=True)
+        super().stop()
 
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["navigation"] = {
-            "planner": self._planner_svc._planner_name,
+            "planner": getattr(self._planner_svc, "_planner_name", None),
+            "plan_safety_policy": getattr(
+                self._planner_svc,
+                "_plan_safety_policy",
+                "observe",
+            ),
+            "last_plan_report": self._current_plan_report(),
             "state": self._state,
             "wp_index": self._tracker.wp_index,
             "wp_total": self._tracker.path_length,
             "replan_count": self._replan_count,
             "failure_reason": self._failure_reason,
+            "replan_on_costmap_update": self._replan_on_costmap_update,
+            "direct_goal_fallback": self._direct_goal_fallback_status,
             "patrol_index": self._patrol_index if self._patrol_goals else -1,
             "patrol_total": len(self._patrol_goals),
         }

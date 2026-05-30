@@ -92,7 +92,7 @@ public:
         // the full map. Call this when the robot is "kidnapped" or boots in
         // an unknown pose. On success, sets initial_guess so the tracking
         // timer picks up seamlessly.
-        m_bbs3d = std::make_shared<BBS3DGlobalLocalizer>();
+        m_bbs3d = std::make_shared<BBS3DGlobalLocalizer>(m_bbs3d_config);
         m_global_reloc_srv = this->create_service<std_srvs::srv::Trigger>(
             "global_relocalize",
             std::bind(&LocalizerNode::globalRelocCB, this,
@@ -156,7 +156,7 @@ public:
                     // Schedule an auto-bbs3d on boot if we had no last pose
                     // — fresh startup in unknown location shouldn't need a
                     // human click.  Delay 4 s to let Fast-LIO2 stabilize.
-                    if (!seeded_from_last_pose) {
+                    if (!seeded_from_last_pose && m_auto_global_relocalize_on_boot) {
                         std::thread([this]() {
                             std::this_thread::sleep_for(std::chrono::seconds(4));
                             if (m_bbs3d_running.exchange(true)) return;
@@ -227,6 +227,18 @@ public:
         m_localizer_config.refine_max_iteration = config["refine_max_iteration"].as<int>();
         m_localizer_config.refine_score_thresh = config["refine_score_thresh"].as<double>();
 
+        this->declare_parameter("rough_score_thresh", m_localizer_config.rough_score_thresh);
+        this->declare_parameter("refine_score_thresh", m_localizer_config.refine_score_thresh);
+        m_localizer_config.rough_score_thresh =
+            this->get_parameter("rough_score_thresh").as_double();
+        m_localizer_config.refine_score_thresh =
+            this->get_parameter("refine_score_thresh").as_double();
+        RCLCPP_INFO(
+            this->get_logger(),
+            "Localizer ICP score thresholds: rough=%.4f refine=%.4f",
+            m_localizer_config.rough_score_thresh,
+            m_localizer_config.refine_score_thresh);
+
         if (!ros_map_path.empty()) {
             m_config.static_map_path = ros_map_path;
             RCLCPP_INFO(this->get_logger(), "Override static map path: %s", m_config.static_map_path.c_str());
@@ -237,11 +249,29 @@ public:
         this->declare_parameter("initial_y", 0.0);
         this->declare_parameter("initial_z", 0.0);
         this->declare_parameter("initial_yaw", 0.0);
+        this->declare_parameter("auto_global_relocalize_on_boot", true);
+        this->declare_parameter("auto_global_relocalize_on_lost", true);
+        this->declare_parameter("bbs3d_min_level_res", m_bbs3d_config.min_level_res);
+        this->declare_parameter("bbs3d_max_level", m_bbs3d_config.max_level);
+        this->declare_parameter("bbs3d_num_threads", m_bbs3d_config.num_threads);
+        this->declare_parameter("bbs3d_timeout_ms", m_bbs3d_config.timeout_ms);
         
         m_config.initial_x = this->get_parameter("initial_x").as_double();
         m_config.initial_y = this->get_parameter("initial_y").as_double();
         m_config.initial_z = this->get_parameter("initial_z").as_double();
         m_config.initial_yaw = this->get_parameter("initial_yaw").as_double();
+        m_auto_global_relocalize_on_boot =
+            this->get_parameter("auto_global_relocalize_on_boot").as_bool();
+        m_auto_global_relocalize_on_lost =
+            this->get_parameter("auto_global_relocalize_on_lost").as_bool();
+        m_bbs3d_config.min_level_res =
+            this->get_parameter("bbs3d_min_level_res").as_double();
+        m_bbs3d_config.max_level =
+            static_cast<int>(this->get_parameter("bbs3d_max_level").as_int());
+        m_bbs3d_config.num_threads =
+            static_cast<int>(this->get_parameter("bbs3d_num_threads").as_int());
+        m_bbs3d_config.timeout_ms =
+            static_cast<int>(this->get_parameter("bbs3d_timeout_ms").as_int());
     }
     void timerCB()
     {
@@ -454,6 +484,7 @@ public:
     // short enough that a genuinely lost robot recovers within ~1 min.
     bool launchAutoBBS3D(const std::string& reason)
     {
+        if (!m_auto_global_relocalize_on_lost) return false;
         auto _now = std::chrono::steady_clock::now();
         auto _since = std::chrono::duration_cast<std::chrono::seconds>(
             _now - m_last_auto_reloc).count();
@@ -704,6 +735,7 @@ private:
     NodeState m_state;
 
     ICPConfig m_localizer_config;
+    BBS3DGlobalLocalizer::Config m_bbs3d_config;
     std::shared_ptr<ICPLocalizer> m_localizer;
     std::shared_ptr<BBS3DGlobalLocalizer> m_bbs3d;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr m_global_reloc_srv;
@@ -754,6 +786,8 @@ private:
     std::atomic<int> m_consec_lost{0};
     std::atomic<int> m_consec_locked{0};
     std::string m_published_health = "UNKNOWN";  // last value sent on m_health_pub
+    bool m_auto_global_relocalize_on_boot = true;
+    bool m_auto_global_relocalize_on_lost = true;
     std::chrono::steady_clock::time_point m_last_health_publish =
         std::chrono::steady_clock::now() - std::chrono::seconds(60);
     std::chrono::steady_clock::duration m_health_heartbeat_interval =

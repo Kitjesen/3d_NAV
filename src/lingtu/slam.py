@@ -12,6 +12,17 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def _default_map_dir() -> str:
+    """Resolve map dir: $NAV_MAP_DIR → existing ~/data/nova/maps → ~/data/lingtu/maps."""
+    env = os.environ.get("NAV_MAP_DIR")
+    if env:
+        return env
+    nova = os.path.expanduser("~/data/nova/maps")
+    if os.path.isdir(nova):
+        return nova
+    return os.path.expanduser("~/data/lingtu/maps")
+
+
 class SLAM:
     """SLAM / Localization — wraps SLAMModule + SlamBridgeModule.
 
@@ -84,12 +95,9 @@ class SLAM:
         return self._latest_cloud
 
     def save_map(self, name: str) -> bool:
-        """Save current SLAM map to ~/data/inovxio/data/maps/<name>/."""
+        """Save current SLAM map to the active map dir (<map_dir>/<name>/)."""
         import subprocess
-        map_dir = os.path.join(
-            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps")),
-            name,
-        )
+        map_dir = os.path.join(_default_map_dir(), name)
         os.makedirs(map_dir, exist_ok=True)
         pcd_path = os.path.join(map_dir, "map.pcd")
         try:
@@ -117,10 +125,7 @@ class SLAM:
                 os.path.dirname(__file__), "..", "global_planning",
                 "PCT_planner", "tomography", "scripts"))
             from build_tomogram import build_tomogram_from_pcd
-            map_dir = os.path.join(
-                os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps")),
-                name,
-            )
+            map_dir = os.path.join(_default_map_dir(), name)
             build_tomogram_from_pcd(
                 os.path.join(map_dir, "map.pcd"),
                 os.path.join(map_dir, "tomogram.pickle"),

@@ -229,7 +229,7 @@ def validate_navigation_blueprint(repo_root: Path) -> ValidationCheck:
     connections = set(system.connections)
     required = {
         ("MujocoDriverModule", "odometry", "NavigationModule", "odometry"),
-        ("MujocoDriverModule", "lidar_cloud", "OccupancyGridModule", "map_cloud"),
+        ("MujocoDriverModule", "map_cloud", "OccupancyGridModule", "map_cloud"),
         ("OccupancyGridModule", "costmap", "TraversabilityCostModule", "costmap"),
         ("TraversabilityCostModule", "fused_cost", "NavigationModule", "costmap"),
         ("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint"),

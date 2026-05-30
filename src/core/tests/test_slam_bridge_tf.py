@@ -45,6 +45,8 @@ def _make_holder() -> _TFHolder:
         SlamBridgeModule._maybe_apply_map_odom_to_points, h)
     h._maybe_apply_map_odom_to_odometry = _t.MethodType(
         SlamBridgeModule._maybe_apply_map_odom_to_odometry, h)
+    h._map_cloud_points_and_frame = _t.MethodType(
+        SlamBridgeModule._map_cloud_points_and_frame, h)
     return h
 
 
@@ -146,11 +148,32 @@ def test_maybe_points_applies_tf_when_bridge_detects_localizer_backend():
     h = _make_holder()
     h._cache_map_odom_tf(10.0, -5.0, 2.0, 0, 0, 0, 1)
     h._backend_profile = "bridge"
-    h._current_backend_profile = lambda: "localizer"
+    h._backend_detect_cache = "localizer"
     pts = np.array([[1, 1, 1]], dtype=np.float32)
 
     out = h._maybe_apply_map_odom_to_points(pts)
 
+    np.testing.assert_allclose(out, [[11, -4, 3]], atol=1e-5)
+
+
+def test_map_cloud_frame_preserves_odom_when_tf_not_applied():
+    h = _make_holder()
+    pts = np.array([[1, 1, 1]], dtype=np.float32)
+
+    out, frame_id = h._map_cloud_points_and_frame(pts, "odom")
+
+    assert out is pts
+    assert frame_id == "odom"
+
+
+def test_map_cloud_frame_becomes_map_when_localizer_tf_applies():
+    h = _make_holder()
+    h._cache_map_odom_tf(10.0, -5.0, 2.0, 0, 0, 0, 1)
+    pts = np.array([[1, 1, 1]], dtype=np.float32)
+
+    out, frame_id = h._map_cloud_points_and_frame(pts, "odom")
+
+    assert frame_id == "map"
     np.testing.assert_allclose(out, [[11, -4, 3]], atol=1e-5)
 
 

@@ -1,6 +1,7 @@
 import os
 import sys
 import pickle
+import math
 import numpy as np
 
 from utils import *
@@ -215,13 +216,115 @@ class TomogramPlanner(object):
         opt_init = np.concatenate([opt_init.transpose(1, 0), init_layer.reshape(-1, 1)], axis=-1)
         traj = np.concatenate([traj_raw, layers.reshape(-1, 1)], axis=-1)
         y_idx = (traj.shape[-1] - 1) // 2
-        traj_3d = np.stack([traj[:, 0], traj[:, y_idx], heights / self.resolution], axis=1)
-        print(f"[planner_wrapper] traj_grid first={traj_3d[0]}, last={traj_3d[-1]}, "
+        traj_grid_xy = np.stack([traj[:, 0], traj[:, y_idx]], axis=1)
+        print(f"[planner_wrapper] traj_grid_xy first={traj_grid_xy[0]}, last={traj_grid_xy[-1]}, "
               f"y_idx={y_idx}, traj_shape={traj.shape}", flush=True)
-        traj_3d = transTrajGrid2Map(self.map_dim, self.center, self.resolution, traj_3d)
+        traj_3d = self._optimized_traj_to_world(traj_grid_xy, heights)
         print(f"[planner_wrapper] traj_world first={traj_3d[0]}, last={traj_3d[-1]}", flush=True)
 
+        blocked = self._hard_obstacle_sample_count(traj_3d)
+        if blocked:
+            raw_world = self._raw_path_to_world(path)
+            raw_blocked = self._hard_obstacle_sample_count(raw_world)
+            if raw_world is not None and raw_blocked == 0:
+                print(
+                    f"[planner_wrapper] optimized trajectory crosses {blocked} hard-obstacle samples; "
+                    "returning raw A* path",
+                    flush=True,
+                )
+                return raw_world
+            print(
+                f"[planner_wrapper] optimized trajectory crosses {blocked} hard-obstacle samples; "
+                f"raw path blocked={raw_blocked}",
+                flush=True,
+            )
+
         return traj_3d
+
+    def _optimized_traj_to_world(self, xy_grid, heights):
+        """Convert optimizer XY grid coordinates while preserving true Z heights."""
+        xy_grid = np.asarray(xy_grid, dtype=np.float64)
+        heights = np.asarray(heights, dtype=np.float64).reshape(-1)
+        if xy_grid.ndim != 2 or xy_grid.shape[1] < 2 or xy_grid.shape[0] != heights.shape[0]:
+            raise ValueError(
+                f"invalid optimized trajectory shapes: xy={xy_grid.shape}, heights={heights.shape}"
+            )
+        world = np.empty((xy_grid.shape[0], 3), dtype=np.float64)
+        world[:, 0] = (xy_grid[:, 0] - self.map_dim[0] // 2) * self.resolution + self.center[0]
+        world[:, 1] = (xy_grid[:, 1] - self.map_dim[1] // 2) * self.resolution + self.center[1]
+        world[:, 2] = heights
+        return world
+
+    def _raw_path_to_world(self, path):
+        arr = np.asarray(path, dtype=np.float64)
+        if arr.ndim != 2 or arr.shape[1] < 3 or self.map_dim is None or self.center is None:
+            return None
+
+        # Native A* path is [slice, y_idx, x_idx]. Convert directly instead of
+        # using transTrajGrid2Map, whose third column expects height/resolution.
+        layers = np.clip(np.rint(arr[:, 0]).astype(np.int32), 0, max(self.n_slice - 1, 0))
+        rows = np.clip(np.rint(arr[:, 1]).astype(np.int32), 0, self.map_dim[1] - 1)
+        cols = np.clip(np.rint(arr[:, 2]).astype(np.int32), 0, self.map_dim[0] - 1)
+
+        xy = np.empty((arr.shape[0], 2), dtype=np.float64)
+        xy[:, 0] = (cols - self.map_dim[0] // 2) * self.resolution + self.center[0]
+        xy[:, 1] = (rows - self.map_dim[1] // 2) * self.resolution + self.center[1]
+
+        heights = np.empty(arr.shape[0], dtype=np.float64)
+        for idx, (layer, row, col) in enumerate(zip(layers, rows, cols)):
+            height = float("nan")
+            if self.layers_g is not None:
+                try:
+                    height = float(self.layers_g[layer, row, col])
+                except Exception:
+                    height = float("nan")
+            if not np.isfinite(height):
+                height = float(self.slice_h0 + layer * self.slice_dh)
+            heights[idx] = height
+
+        return np.column_stack((xy, heights))
+
+    def _hard_obstacle_sample_count(self, path_world):
+        if path_world is None or self.layers_t is None:
+            return 0
+        pts = np.asarray(path_world, dtype=np.float64)
+        if pts.ndim != 2 or pts.shape[0] == 0 or pts.shape[1] < 2:
+            return 0
+
+        step = max(float(self.resolution) * 0.5, 0.05)
+        blocked = 0
+        for start, end in zip(pts[:-1], pts[1:]):
+            dist = math.hypot(float(end[0] - start[0]), float(end[1] - start[1]))
+            steps = max(1, int(math.ceil(dist / step)))
+            for sample_idx in range(1, steps + 1):
+                alpha = sample_idx / steps
+                sample = start + (end - start) * alpha
+                if self._is_hard_obstacle_sample(sample):
+                    blocked += 1
+        if pts.shape[0] == 1 and self._is_hard_obstacle_sample(pts[0]):
+            blocked += 1
+        return blocked
+
+    def _is_hard_obstacle_sample(self, sample):
+        try:
+            idx = self.pos2idx(np.asarray(sample[:2], dtype=np.float64))
+            col = int(np.rint(idx[0]))
+            row = int(np.rint(idx[1]))
+            layer = int(np.rint(self.pos2slice(float(sample[2])))) if len(sample) > 2 else 0
+        except Exception:
+            return True
+
+        if (
+            layer < 0
+            or row < 0
+            or col < 0
+            or layer >= self.layers_t.shape[0]
+            or row >= self.layers_t.shape[1]
+            or col >= self.layers_t.shape[2]
+        ):
+            return True
+        cost = float(self.layers_t[layer, row, col])
+        return (not np.isfinite(cost)) or cost >= float(self.obstacle_thr)
     
     def pos2idx(self, pos):
         pos = pos - self.center

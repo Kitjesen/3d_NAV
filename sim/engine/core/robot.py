@@ -5,6 +5,8 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from core.runtime_interface import FRAMES
+
 
 THUNDER_V3_JOINT_NAMES = [
     "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint", "FR_foot_joint",
@@ -65,8 +67,8 @@ class RobotConfig:
     # Body names
     # Thunder v3 uses base_link as the root body. The LingTu runtime MJCF adds
     # a lidar_link body for the MID-360 sensor pose.
-    base_body_name: str = "base_link"
-    lidar_body_name: str = "lidar_link"
+    base_body_name: str = FRAMES.model_base
+    lidar_body_name: str = FRAMES.lidar
 
     # Current Thunder v3 runtime MJCF has one actuator per leg/wheel joint.
     leg_act_offset: int = 0
