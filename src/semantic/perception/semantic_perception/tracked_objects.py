@@ -9,7 +9,7 @@ live in core.msgs.scene for cross-module sharing. This file keeps TrackedObject
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 

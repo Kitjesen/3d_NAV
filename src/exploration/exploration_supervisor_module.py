@@ -134,6 +134,15 @@ class ExplorationSupervisorModule(Module, layer=5):
         self._mode = mode
         self._reason = reason
         self.supervisor_state.publish({
+            "configured_backend": (
+                self._last_stats.get("configured_backend", "tare")
+                if self._last_stats else "tare"),
+            "backend": (
+                self._last_stats.get("backend", "tare")
+                if self._last_stats else "tare"),
+            "degraded": mode in (MODE_DEGRADED, MODE_FALLBACK),
+            "degraded_reason": (
+                reason if mode in (MODE_DEGRADED, MODE_FALLBACK) else ""),
             "mode": mode,
             "reason": reason,
             "waypoint_age_s": wp_age,
@@ -219,6 +228,16 @@ class ExplorationSupervisorModule(Module, layer=5):
             if self._last_stats_ts > 0 else None
         )
         return json.dumps({
+            "configured_backend": (
+                self._last_stats.get("configured_backend", "tare")
+                if self._last_stats else "tare"),
+            "backend": (
+                self._last_stats.get("backend", "tare")
+                if self._last_stats else "tare"),
+            "degraded": self._mode in (MODE_DEGRADED, MODE_FALLBACK),
+            "degraded_reason": (
+                self._reason
+                if self._mode in (MODE_DEGRADED, MODE_FALLBACK) else ""),
             "mode": self._mode,
             "reason": self._reason,
             "ready_fired": self._ready_fired,

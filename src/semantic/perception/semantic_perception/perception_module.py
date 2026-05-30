@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
 from core import In, Module, Out
+from core.backend_status import BackendStatus, require_backend
 from core.config import get_config
 from core.msgs.geometry import Vector3
 from core.msgs.nav import Odometry
@@ -33,10 +35,117 @@ from core.msgs.semantic import (
     SceneGraph,
 )
 from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat
+from core.registry import get, list_plugins, register
 from core.runtime_interface import map_frame_id
 
 logger = logging.getLogger(__name__)
 PERCEPTION_MAP_FRAME_ID = map_frame_id()
+
+
+_PERCEPTION_DETECTOR_BACKENDS = ("yoloe", "yolo_world", "bpu", "sim_scene")
+_PERCEPTION_ENCODER_BACKENDS = ("clip", "mobileclip")
+
+
+@register("perception_detector", "yoloe", description="YOLO-E open-vocabulary instance detector")
+class _YOLOEDetectorProvider:
+    label = "YOLOEDetector"
+
+    @staticmethod
+    def create(module):
+        from semantic.perception.semantic_perception.yoloe_detector import YOLOEDetector
+
+        return YOLOEDetector(
+            model_size=module._detector_model_size,
+            confidence=module._confidence_threshold,
+            iou_threshold=module._detector_iou_threshold,
+            device=module._detector_device,
+            max_detections=module._detector_max_detections,
+        )
+
+
+@register("perception_detector", "yolo_world", description="YOLO-World open-vocabulary detector")
+class _YOLOWorldDetectorProvider:
+    label = "YOLOWorldDetector"
+
+    @staticmethod
+    def create(module):
+        from semantic.perception.semantic_perception.yolo_world_detector import (
+            YOLOWorldDetector,
+        )
+
+        return YOLOWorldDetector(
+            model_size=module._detector_model_size,
+            confidence=module._confidence_threshold,
+            iou_threshold=module._detector_iou_threshold,
+            device=module._detector_device,
+        )
+
+
+@register("perception_detector", "bpu", description="D-Robotics Nash BPU detector")
+class _BPUDetectorProvider:
+    label = "BPUDetector"
+
+    @staticmethod
+    def create(module):
+        from semantic.perception.semantic_perception.bpu_detector import BPUDetector
+
+        return BPUDetector(
+            model_path=module._detector_model_path,
+            confidence=module._confidence_threshold,
+            iou_threshold=module._detector_iou_threshold,
+            max_detections=module._detector_max_detections,
+            min_box_size_px=module._detector_min_box_size_px,
+        )
+
+
+@register("perception_detector", "sim_scene", description="Simulation scene observer")
+class _SimSceneDetectorProvider:
+    label = "SimSceneObserver"
+
+    @staticmethod
+    def create(module):
+        from semantic.perception.semantic_perception.sim_scene_observer import (
+            SimSceneObserver,
+        )
+
+        observer = SimSceneObserver(world=module._world)
+        module._sim_scene_observer = observer
+        return observer
+
+
+@register("perception_encoder", "clip", description="CLIP image/text encoder")
+class _CLIPEncoderProvider:
+    label = "CLIPEncoder"
+
+    @staticmethod
+    def create(_module):
+        from semantic.perception.semantic_perception.clip_encoder import CLIPEncoder
+
+        return CLIPEncoder()
+
+
+@register("perception_encoder", "mobileclip", description="MobileCLIP text encoder")
+class _MobileCLIPEncoderProvider:
+    label = "MobileCLIPEncoder"
+
+    @staticmethod
+    def create(_module):
+        from semantic.perception.semantic_perception.mobileclip_encoder import (
+            MobileCLIPEncoder,
+        )
+
+        return MobileCLIPEncoder()
+
+
+@register("perception_tracker", "bpu", description="BPU detector track-id adapter")
+class _BPUTrackerProvider:
+    label = "BPUTracker"
+
+    @staticmethod
+    def create(module):
+        from semantic.perception.semantic_perception.bpu_tracker import BPUTracker
+
+        return BPUTracker(module._detector, tracker_type="botsort")
 
 
 class PerceptionModule(Module, layer=3):
@@ -57,7 +166,7 @@ class PerceptionModule(Module, layer=3):
 
     # -- output ports --
     scene_graph: Out[SceneGraph]
-    detections_3d: Out[list]  # List[CoreDetection3D]
+    detections_3d: Out[list]  # list[CoreDetection3D]
 
     # Backends that api/factory.py's PerceptionFactory supports natively.
     # All others (yoloe, bpu, sim_scene) fall back to the direct-import path.
@@ -88,8 +197,12 @@ class PerceptionModule(Module, layer=3):
         **kw: Any,
     ) -> None:
         super().__init__(**kw)
+        require_backend("perception_detector", detector_type, _PERCEPTION_DETECTOR_BACKENDS)
+        require_backend("perception_encoder", encoder_type, _PERCEPTION_ENCODER_BACKENDS)
         self._detector_type = detector_type
         self._encoder_type = encoder_type
+        self._detector_status = BackendStatus.configured_as(detector_type)
+        self._encoder_status = BackendStatus.configured_as(encoder_type)
         self._merge_distance = merge_distance
         self._confidence_threshold = confidence_threshold
         self._max_depth = max_depth
@@ -124,6 +237,7 @@ class PerceptionModule(Module, layer=3):
         self._latest_intrinsics: Any | None = None
         self._latest_odom_matrix: np.ndarray | None = None
         self._latest_core_detections: list[CoreDetection3D] = []
+        self._backend_lock = threading.RLock()
 
     # == Lifecycle =============================================================
 
@@ -215,11 +329,16 @@ class PerceptionModule(Module, layer=3):
 
             # Detector via factory
             self._detector = PerceptionFactory.create_detector(self._detector_type, cfg)
+            self._detector_status.use(self._detector_type, degraded=False)
             logger.info("Detector %r created via factory", self._detector_type)
 
             # Encoder via factory (only "clip" supported; fall back to mobileclip otherwise)
             enc_type = self._encoder_type if self._encoder_type in self._FACTORY_ENCODERS else "clip"
             self._clip_encoder = PerceptionFactory.create_encoder(enc_type, cfg)
+            self._encoder_status.use(
+                enc_type,
+                reason="factory encoder fallback" if enc_type != self._encoder_type else "",
+            )
             logger.info("Encoder %r created via factory", enc_type)
 
         except Exception as e:
@@ -324,10 +443,11 @@ class PerceptionModule(Module, layer=3):
             # Correct transform chain: T_camera_world = T_body_world @ T_body_camera
             tf_camera_world = tf_body_world @ self._T_body_camera
 
-        try:
-            self._process_frame(img, tf_camera_world)
-        except Exception as e:
-            logger.error("Frame processing error (frame=%d): %s", self._frame_count, e)
+        with self._backend_lock:
+            try:
+                self._process_frame(img, tf_camera_world)
+            except Exception as e:
+                logger.error("Frame processing error (frame=%d): %s", self._frame_count, e)
 
     # == Core pipeline =========================================================
 
@@ -387,52 +507,24 @@ class PerceptionModule(Module, layer=3):
     def _init_detector(self):
         """Lazy-import detector backend."""
         try:
-            if self._detector_type == "yoloe":
-                from semantic.perception.semantic_perception.yoloe_detector import YOLOEDetector
-                det = YOLOEDetector(
-                    model_size=self._detector_model_size,
-                    confidence=self._confidence_threshold,
-                    iou_threshold=self._detector_iou_threshold,
-                    device=self._detector_device,
-                    max_detections=self._detector_max_detections,
-                )
-                det.load_model()
-                logger.info("YOLOEDetector loaded")
-                return det
-            elif self._detector_type == "yolo_world":
-                from semantic.perception.semantic_perception.yolo_world_detector import (
-                    YOLOWorldDetector,
-                )
-                det = YOLOWorldDetector(
-                    model_size=self._detector_model_size,
-                    confidence=self._confidence_threshold,
-                    iou_threshold=self._detector_iou_threshold,
-                    device=self._detector_device,
-                )
-                det.load_model()
-                logger.info("YOLOWorldDetector loaded")
-                return det
-            elif self._detector_type == "bpu":
-                from semantic.perception.semantic_perception.bpu_detector import BPUDetector
-                det = BPUDetector(
-                    model_path=self._detector_model_path,
-                    confidence=self._confidence_threshold,
-                    iou_threshold=self._detector_iou_threshold,
-                    max_detections=self._detector_max_detections,
-                    min_box_size_px=self._detector_min_box_size_px,
-                )
-                det.load_model()
-                logger.info("BPUDetector loaded")
-                return det
-            elif self._detector_type == "sim_scene":
-                from semantic.perception.semantic_perception.sim_scene_observer import (
-                    SimSceneObserver,
-                )
-                self._sim_scene_observer = SimSceneObserver(world=self._world)
-                logger.info("SimSceneObserver loaded (world=%s)", self._world or "")
-                return self._sim_scene_observer
+            provider = get("perception_detector", self._detector_type)
+            det = provider.create(self)
+            load_model = getattr(det, "load_model", None)
+            if callable(load_model):
+                load_model()
+            logger.info("%s loaded", getattr(provider, "label", self._detector_type))
+            self._detector_status.use(self._detector_type, degraded=False)
+            return det
+        except KeyError:
+            logger.warning(
+                "Unknown detector %r. Available: %s",
+                self._detector_type,
+                list_plugins("perception_detector"),
+            )
+            self._detector_status.use("unavailable", reason="backend not registered")
         except (ImportError, Exception) as e:
             logger.warning("Detector %r unavailable: %s", self._detector_type, e)
+            self._detector_status.use("unavailable", reason=str(e))
         return None
 
     def _init_detector_tracker(self):
@@ -440,9 +532,8 @@ class PerceptionModule(Module, layer=3):
         if self._detector_type != "bpu" or self._detector is None:
             return None
         try:
-            from semantic.perception.semantic_perception.bpu_tracker import BPUTracker
-
-            tracker = BPUTracker(self._detector, tracker_type="botsort")
+            provider = get("perception_tracker", "bpu")
+            tracker = provider.create(self)
             logger.info("BPUTracker loaded: BPU detector outputs will include track_id")
             return tracker
         except Exception as e:
@@ -454,24 +545,136 @@ class PerceptionModule(Module, layer=3):
     def _init_clip_encoder(self):
         """Lazy-import encoder backend based on encoder_type."""
         try:
-            if self._encoder_type == "clip":
-                from semantic.perception.semantic_perception.clip_encoder import CLIPEncoder
-                enc = CLIPEncoder()
-                enc.load_model()
-                logger.info("CLIPEncoder loaded")
-                return enc
-            else:
-                # Default: MobileCLIP (USS-Nav style text-only, fast)
-                from semantic.perception.semantic_perception.mobileclip_encoder import (
-                    MobileCLIPEncoder,
-                )
-                enc = MobileCLIPEncoder()
-                enc.load_model()
-                logger.info("MobileCLIPEncoder loaded")
-                return enc
+            provider = get("perception_encoder", self._encoder_type)
+            enc = provider.create(self)
+            load_model = getattr(enc, "load_model", None)
+            if callable(load_model):
+                load_model()
+            logger.info("%s loaded", getattr(provider, "label", self._encoder_type))
+            self._encoder_status.use(self._encoder_type, degraded=False)
+            return enc
+        except KeyError:
+            logger.warning(
+                "Unknown encoder %r. Available: %s",
+                self._encoder_type,
+                list_plugins("perception_encoder"),
+            )
+            self._encoder_status.use("unavailable", reason="backend not registered")
         except (ImportError, Exception) as e:
             logger.warning("Encoder %r unavailable: %s", self._encoder_type, e)
+            self._encoder_status.use("unavailable", reason=str(e))
         return None
+
+    def reconfigure_backend(
+        self,
+        category: str,
+        backend: str,
+        **config: Any,
+    ) -> dict[str, Any]:
+        if category == "detector":
+            return self._reconfigure_detector(backend, **config)
+        if category == "encoder":
+            return self._reconfigure_encoder(backend, **config)
+        return super().reconfigure_backend(category, backend, **config)
+
+    def _reconfigure_detector(self, backend: str, **_config: Any) -> dict[str, Any]:
+        try:
+            get("perception_detector", backend)
+        except KeyError:
+            return {
+                "ok": False,
+                "category": "detector",
+                "requested_backend": backend,
+                "reason": "unknown_backend",
+                "available": list_plugins("perception_detector"),
+            }
+
+        with self._backend_lock:
+            previous_backend = self._detector_type
+            previous_detector = self._detector
+            previous_tracker = self._detector_tracker
+            previous_observer = self._sim_scene_observer
+            previous_status = self._detector_status
+            self._detector_type = backend
+            self._detector_status = BackendStatus.configured_as(backend)
+            self._sim_scene_observer = None
+            try:
+                detector = self._init_detector()
+                if detector is None:
+                    raise RuntimeError(
+                        self._detector_status.degraded_reason or "detector unavailable"
+                    )
+                tracker = self._init_detector_tracker()
+            except Exception as exc:
+                self._detector_type = previous_backend
+                self._detector = previous_detector
+                self._detector_tracker = previous_tracker
+                self._sim_scene_observer = previous_observer
+                self._detector_status = previous_status
+                return {
+                    "ok": False,
+                    "category": "detector",
+                    "requested_backend": backend,
+                    "reason": "backend_reconfigure_failed",
+                    "error": str(exc),
+                }
+            self._detector = detector
+            self._detector_tracker = tracker
+            self._detector_status.configured = backend
+            self._detector_status.use(backend, degraded=False)
+            return {
+                "ok": True,
+                "category": "detector",
+                "previous_backend": previous_backend,
+                "backend": backend,
+                "degraded": False,
+            }
+
+    def _reconfigure_encoder(self, backend: str, **_config: Any) -> dict[str, Any]:
+        try:
+            get("perception_encoder", backend)
+        except KeyError:
+            return {
+                "ok": False,
+                "category": "encoder",
+                "requested_backend": backend,
+                "reason": "unknown_backend",
+                "available": list_plugins("perception_encoder"),
+            }
+
+        with self._backend_lock:
+            previous_backend = self._encoder_type
+            previous_encoder = self._clip_encoder
+            previous_status = self._encoder_status
+            self._encoder_type = backend
+            self._encoder_status = BackendStatus.configured_as(backend)
+            try:
+                encoder = self._init_clip_encoder()
+                if encoder is None:
+                    raise RuntimeError(
+                        self._encoder_status.degraded_reason or "encoder unavailable"
+                    )
+            except Exception as exc:
+                self._encoder_type = previous_backend
+                self._clip_encoder = previous_encoder
+                self._encoder_status = previous_status
+                return {
+                    "ok": False,
+                    "category": "encoder",
+                    "requested_backend": backend,
+                    "reason": "backend_reconfigure_failed",
+                    "error": str(exc),
+                }
+            self._clip_encoder = encoder
+            self._encoder_status.configured = backend
+            self._encoder_status.use(backend, degraded=False)
+            return {
+                "ok": True,
+                "category": "encoder",
+                "previous_backend": previous_backend,
+                "backend": backend,
+                "degraded": False,
+            }
 
     def _run_detector(self, bgr: np.ndarray) -> list:
         """Run detector, return Detection2D list."""
@@ -780,6 +983,8 @@ class PerceptionModule(Module, layer=3):
         info["detector_tracker_ready"] = self._detector_tracker is not None
         info["encoder_ready"] = self._clip_encoder is not None
         info["tracker_ready"] = self._tracker is not None
+        info["detector"] = self._detector_status.as_health_fields()
+        info["encoder"] = self._encoder_status.as_health_fields()
         tracked = 0
         if self._tracker is not None:
             try:

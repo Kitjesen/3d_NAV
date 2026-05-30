@@ -38,6 +38,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from base_autonomy.modules._nav_core_loader import nav_core_build_hint, try_import_nav_core
+from core.backend_status import BackendStatus, require_backend
 from core.module import Module
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 from core.msgs.nav import Odometry, Path
@@ -324,6 +325,12 @@ def _score_paths_numpy(
     return clear_per_group_score
 
 
+_AVAILABLE_LOCAL_PLANNER_BACKENDS = ("nanobind", "cmu", "cmu_py", "simple")
+
+
+@register("local_planner", "simple", description="Explicit straight-line local planner for tests only")
+@register("local_planner", "cmu_py", description="Pure-Python CMU local planner scorer")
+@register("local_planner", "nanobind", description="C++ LocalPlannerCore via nanobind")
 @register("local_planner", "cmu", description="CMU-style C++ local planner (NativeModule)")
 class LocalPlannerModule(Module, layer=2):
     """Local path planning — obstacle avoidance + path scoring.
@@ -351,6 +358,8 @@ class LocalPlannerModule(Module, layer=2):
 
     def __init__(self, backend: str = "cmu", **kw):
         super().__init__(**kw)
+        require_backend("local_planner", backend, _AVAILABLE_LOCAL_PLANNER_BACKENDS)
+        self._backend_status = BackendStatus.configured_as(backend)
         self._backend = backend
         self._node = None
         self._robot_pos = np.zeros(3)
@@ -454,11 +463,15 @@ class LocalPlannerModule(Module, layer=2):
         """C++ LocalPlannerCore via nanobind — full CMU scoring in-process, zero ROS2."""
         _nav_core = try_import_nav_core(("LocalPlannerParams", "LocalPlannerCore"))
         if _nav_core is None:
-            raise RuntimeError(
-                f"LocalPlannerModule [nanobind]: compatible _nav_core not found. "
-                f"Build the C++ backend or explicitly choose backend='cmu_py' / 'simple'.\n"
-                f"  To build: {nav_core_build_hint()}"
+            logger.warning(
+                "LocalPlannerModule [nanobind]: compatible _nav_core not found; "
+                "falling back to cmu_py scorer. To restore the C++ backend: %s",
+                nav_core_build_hint(),
             )
+            self._backend_status.use("cmu_py", reason="compatible _nav_core missing")
+            self._backend = "cmu_py"
+            self._setup_cmu_py()
+            return
         try:
             params = _nav_core.LocalPlannerParams()
             try:
@@ -1100,14 +1113,17 @@ class LocalPlannerModule(Module, layer=2):
         core_paths_loaded = False
         if self._core is not None and hasattr(self._core, "paths_loaded"):
             core_paths_loaded = bool(self._core.paths_loaded())
+        cmu_py_ready = self._backend == "cmu_py" and self._path_data is not None
+        native_running = (
+            self._node is not None
+            and getattr(self._node, "_process", None) is not None
+        )
         info["local_planner"] = {
-            "backend":       self._backend,
+            **self._backend_status.as_health_fields(),
             "paths_loaded":  self._path_data is not None or core_paths_loaded,
             "terrain_pts":   (self._terrain_points.shape[0]
                               if self._terrain_points is not None else 0),
-            "running":       (self._core is not None) or
-                             (self._node is not None
-                              and getattr(self._node, "_process", None) is not None),
+            "running":       (self._core is not None) or native_running or cmu_py_ready,
             "direct_track_fallback_enabled": self._allow_direct_track_fallback,
             "min_trackable_local_path_m": round(self._min_trackable_local_path_xy, 3),
             "last_direct_track_fallback_age_ms": (

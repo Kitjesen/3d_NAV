@@ -113,10 +113,16 @@ def _apply_required_safety_stop_wires(
     *,
     driver_module: str,
 ) -> None:
-    for spec in (
+    required = [
         WireSpec("SafetyRingModule", "stop_cmd", driver_module, "stop_signal"),
         WireSpec("SafetyRingModule", "stop_cmd", "NavigationModule", "stop_signal"),
-    ):
+    ]
+    if "GeofenceManagerModule" in names:
+        required.extend([
+            WireSpec("GeofenceManagerModule", "stop_cmd", driver_module, "stop_signal"),
+            WireSpec("GeofenceManagerModule", "stop_cmd", "NavigationModule", "stop_signal"),
+        ])
+    for spec in required:
         _require_wire(bp, names, spec)
 
 

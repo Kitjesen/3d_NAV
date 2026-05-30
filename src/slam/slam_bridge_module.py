@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 
+from core.backend_status import BackendStatus
 from core.module import Module, skill
 from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
 from core.msgs.gnss import GnssFixType, GnssOdom
@@ -76,6 +77,19 @@ def _env_float(name: str, default: float) -> float:
         return float(os.environ.get(name, str(default)))
     except (TypeError, ValueError):
         return default
+
+
+def _normalize_quat(qx: float, qy: float, qz: float, qw: float) -> tuple[float, float, float, float]:
+    """Normalize a quaternion in-place. Returns (qx, qy, qz, qw).
+
+    The rotation-matrix formulas downstream assume a unit quaternion; a
+    non-unit input (numeric drift upstream) would scale the rotation matrix
+    and corrupt subsequent composed transforms.
+    """
+    qn = (qx * qx + qy * qy + qz * qz + qw * qw) ** 0.5
+    if qn > 1e-9:
+        return qx / qn, qy / qn, qz / qn, qw / qn
+    return qx, qy, qz, qw
 
 
 @register("slam_bridge", "default", description="DDS SLAM → Python Module bridge")
@@ -181,6 +195,18 @@ class SlamBridgeModule(Module, layer=1):
         ))
         self._last_localizer_odom_loss_recovery_ts: float = 0.0
         self._localizer_odom_loss_recovery_inflight: bool = False
+
+        # map->odom TF cache + freshness gate. The localizer emits a fresh
+        # map->odom TF on every relocalize tick; if that stream stalls (node
+        # crash, ICP divergence) the last TF goes stale and lifting odom with
+        # it silently reports a frozen-but-confident map pose. Gate the apply
+        # path on TF age so a stale TF is ignored rather than trusted.
+        self._T_map_odom = None
+        self._T_map_odom_mono: float = 0.0
+        self._map_odom_tf_ttl_s: float = float(kw.get(
+            "map_odom_tf_ttl_s",
+            _env_float("LINGTU_MAP_ODOM_TF_TTL_S", 5.0),
+        ))
         self._restart_recovery_lock = threading.Lock()
         self._localizer_odom_loss_recovery_start_mono: float = 0.0
         self._localizer_odom_loss_recovery_start_wall: float = 0.0
@@ -1184,6 +1210,34 @@ class SlamBridgeModule(Module, layer=1):
         """Expose backend capabilities for Gateway/session consumers."""
         return slam_backend_contract(profile or self._backend_profile or "bridge")
 
+    def _backend_health_fields(
+        self,
+        *,
+        profile: str | None = None,
+        contract: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        configured = str(self._backend_profile or "bridge").strip().lower() or "bridge"
+        if configured == "bridge":
+            configured_backend = "bridge"
+        else:
+            configured_backend = str(self._backend_contract(configured)["backend"])
+        effective_contract = contract or self._backend_contract(
+            profile or self._current_backend_profile()
+        )
+        effective_backend = str(effective_contract["backend"])
+        status = BackendStatus.configured_as(configured_backend)
+        if configured_backend == "bridge":
+            status.use(effective_backend, degraded=False)
+        elif effective_backend != configured_backend:
+            status.use(
+                effective_backend,
+                reason=(
+                    f"effective backend '{effective_backend}' differs from "
+                    f"configured backend '{configured_backend}'"
+                ),
+            )
+        return status.as_health_fields()
+
     def _localizer_health_topic_fresh(self, now: float) -> bool:
         return (
             self._localizer_health_ts > 0.0
@@ -1545,10 +1599,28 @@ class SlamBridgeModule(Module, layer=1):
             ).strip().lower()
         return backend in MAP_ODOM_TF_BACKENDS
 
+    def _map_odom_tf_fresh(self) -> bool:
+        """True if the cached map->odom TF is recent enough to trust.
+
+        A TTL <= 0 disables the gate (always fresh). A cached TF older than
+        the TTL is treated as stale: lifting odom with a frozen TF would
+        report a confident-but-wrong map pose, so callers fall back to the
+        untransformed odom-frame pose instead.
+        """
+        ttl = getattr(self, "_map_odom_tf_ttl_s", 0.0)
+        if ttl <= 0.0:
+            return True
+        stamped = getattr(self, "_T_map_odom_mono", 0.0)
+        if stamped <= 0.0:
+            return False
+        return (_time.monotonic() - stamped) <= ttl
+
     def _maybe_apply_map_odom_to_points(self, xyz: np.ndarray) -> np.ndarray:
         if getattr(self, "_T_map_odom", None) is None:
             return xyz
         if not self._should_apply_map_odom_tf():
+            return xyz
+        if not self._map_odom_tf_fresh():
             return xyz
         return self._apply_map_odom_to_points(xyz)
 
@@ -1566,6 +1638,8 @@ class SlamBridgeModule(Module, layer=1):
         if odom.frame_id != topic_default_frame_id(TOPICS.odometry):
             return odom
         if not self._should_apply_map_odom_tf():
+            return odom
+        if not self._map_odom_tf_fresh():
             return odom
         return self._apply_map_odom_to_odometry(odom)
 
@@ -1590,6 +1664,7 @@ class SlamBridgeModule(Module, layer=1):
         # Convert odom quat → 3x3, multiply, convert back to quat.
         q = odom.pose.orientation
         qx, qy, qz, qw = float(q.x), float(q.y), float(q.z), float(q.w)
+        qx, qy, qz, qw = _normalize_quat(qx, qy, qz, qw)
         xx, yy, zz = qx * qx, qy * qy, qz * qz
         xy, xz, yz = qx * qy, qx * qz, qy * qz
         wx, wy, wzz = qw * qx, qw * qy, qw * qz
@@ -1653,6 +1728,7 @@ class SlamBridgeModule(Module, layer=1):
         Hand-rolling this 60-line check at the consumer (here, SlamBridge)
         is therefore the *only* canonical option."""
         import numpy as _np
+        qx, qy, qz, qw = _normalize_quat(qx, qy, qz, qw)
         xx, yy, zz = qx * qx, qy * qy, qz * qz
         xy, xz, yz = qx * qy, qx * qz, qy * qz
         wx, wy, wz = qw * qx, qw * qy, qw * qz
@@ -1698,6 +1774,7 @@ class SlamBridgeModule(Module, layer=1):
                     logger.debug("map_frame_jump_event publish failed: %s", e)
 
         self._T_map_odom = T
+        self._T_map_odom_mono = _time.monotonic()
         configured = str(getattr(self, "_backend_profile", "bridge") or "bridge").strip().lower()
         cached = str(
             getattr(self, "_backend_detect_cache", configured or "bridge") or "bridge"
@@ -2509,6 +2586,7 @@ class SlamBridgeModule(Module, layer=1):
             )
 
             self.localization_status.publish({
+                **self._backend_health_fields(contract=contract),
                 "state": self._loc_state,
                 "odom_age_ms": round(odom_age * 1000, 1),
                 "odom_timeout_ms": round(effective_odom_timeout * 1000, 1),
@@ -2517,7 +2595,6 @@ class SlamBridgeModule(Module, layer=1):
                 "confidence": round(confidence, 2),
                 "ts": now,
                 "mono_ts": now_mono,
-                "backend": contract["backend"],
                 "health_source": health_source,
                 "pose_fresh": pose_fresh,
                 "map_cloud_fresh": map_cloud_fresh,
@@ -2624,7 +2701,10 @@ class SlamBridgeModule(Module, layer=1):
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
         now_mono = _time.monotonic()
+        profile = self._current_backend_profile()
+        contract = self._backend_contract(profile)
         info["localization"] = {
+            **self._backend_health_fields(profile=profile, contract=contract),
             "state": self._loc_state,
             "odom_age_ms": round(self._odom_age_s(mono_now=now_mono) * 1000, 1) if self._last_odom_time else -1,
             "cloud_age_ms": round(self._cloud_age_s(mono_now=now_mono) * 1000, 1) if self._last_cloud_time else -1,

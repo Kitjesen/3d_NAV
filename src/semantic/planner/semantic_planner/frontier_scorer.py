@@ -24,7 +24,7 @@ import math
 import time as _time_mod
 from collections import deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Set, Tuple
 
 import numpy as np
 import yaml

@@ -6,7 +6,6 @@
 
 import logging
 import time
-from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -40,7 +39,7 @@ class InstanceTracker(TrackerAPI):
         # 追踪参数
         self.merge_distance = config.merge_distance if config else 0.5
         self.iou_threshold = config.iou_threshold if config else 0.5
-        self.max_age = 30  # 最大丢失帧数
+        self.max_age = float(self.config.metadata.get("max_age_sec", 3.0))
         self.min_hits = 3  # 最小命中次数
         self.ema_alpha = 0.3  # EMA平滑系数
 
@@ -255,9 +254,12 @@ class InstanceTracker(TrackerAPI):
             self.iou_threshold = config["iou_threshold"]
             logger.info(f"Updated iou_threshold: {self.iou_threshold}")
 
-        if "max_age" in config:
-            self.max_age = config["max_age"]
-            logger.info(f"Updated max_age: {self.max_age}")
+        if "max_age_sec" in config:
+            self.max_age = float(config["max_age_sec"])
+            logger.info(f"Updated max_age_sec: {self.max_age}")
+        elif "max_age" in config:
+            self.max_age = float(config["max_age"])
+            logger.info(f"Updated max_age_sec: {self.max_age}")
 
         if "min_hits" in config:
             self.min_hits = config["min_hits"]

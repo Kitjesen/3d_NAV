@@ -21,6 +21,16 @@ def _payload(response_or_payload):
     return response_or_payload
 
 
+def test_algorithm_benchmark_dimos_required_gates_match_core_constant():
+    from core.algorithm_gates import DIMOS_BENCHMARK_REQUIRED_GATES
+    from gateway.routes.diagnostics import ALGORITHM_PRODUCT_PROFILES
+
+    dimos = ALGORITHM_PRODUCT_PROFILES["dimos_benchmark"]
+
+    assert tuple(dimos["required_gate_sequence"]) == tuple(DIMOS_BENCHMARK_REQUIRED_GATES)
+    assert dimos["required_gate_sequence"][0] == "gateway_runtime_acceptance"
+
+
 def _write_active_same_source_tomogram(map_root):
     active_dir = map_root / "active"
     active_dir.mkdir(parents=True)
@@ -145,6 +155,18 @@ def test_diagnostics_plugin_catalog_route_exposes_active_backend_status():
                 },
             }
 
+    class FakeNavigation:
+        def health(self):
+            return {
+                "planner_backend": {
+                    "configured_backend": "pct",
+                    "backend": "astar",
+                    "fallback_backend": "astar",
+                    "degraded": True,
+                    "degraded_reason": "pct path_safety failed",
+                }
+            }
+
     class BrokenModule:
         def health(self):
             raise RuntimeError("health failed")
@@ -154,6 +176,7 @@ def test_diagnostics_plugin_catalog_route_exposes_active_backend_status():
         {
             "LocalPlannerModule": FakeLocalPlanner(),
             "VectorMemoryModule": FakeVectorMemory(),
+            "NavigationModule": FakeNavigation(),
             "BrokenModule": BrokenModule(),
         }
     )
@@ -163,6 +186,7 @@ def test_diagnostics_plugin_catalog_route_exposes_active_backend_status():
     active = payload["active"]
     local = active["modules"]["LocalPlannerModule"]["backends"]["local_planner"]
     vector = active["modules"]["VectorMemoryModule"]["backends"]["encoder_backend"]
+    planner = active["modules"]["NavigationModule"]["backends"]["planner_backend"]
     broken = active["modules"]["BrokenModule"]
     assert active["schema_version"] == 1
     assert local["configured_backend"] == "nanobind"
@@ -171,7 +195,100 @@ def test_diagnostics_plugin_catalog_route_exposes_active_backend_status():
     assert "compatible _nav_core missing" in local["degraded_reason"]
     assert vector["configured_backend"] == "auto"
     assert vector["backend"] == "lexical_hash"
+    assert planner["configured_backend"] == "pct"
+    assert planner["backend"] == "astar"
+    assert planner["degraded"] is True
     assert broken["error"] == "health failed"
+
+
+def test_gateway_runtime_backend_switch_rejects_motion_backend_when_navigation_busy():
+    from gateway.gateway_module import GatewayModule
+
+    class BusyNavigation:
+        def health(self):
+            return {"state": "EXECUTING"}
+
+    gateway = GatewayModule()
+    gateway.on_system_modules({"NavigationModule": BusyNavigation()})
+
+    result = gateway.reconfigure_backend("local_planner", "nav_core")
+
+    assert result["ok"] is False
+    assert result["reason"] == "motion_backend_switch_requires_idle"
+
+
+def test_gateway_runtime_backend_switch_dispatches_when_navigation_idle():
+    from gateway.gateway_module import GatewayModule
+
+    class IdleNavigation:
+        def health(self):
+            return {"state": "IDLE"}
+
+    class SwitchableModule:
+        def reconfigure_backend(self, category, backend, **config):
+            return {
+                "ok": True,
+                "category": category,
+                "backend": backend,
+                "config": config,
+            }
+
+    gateway = GatewayModule()
+    gateway.on_system_modules(
+        {
+            "NavigationModule": IdleNavigation(),
+            "PerceptionModule": SwitchableModule(),
+        }
+    )
+
+    result = gateway.reconfigure_backend("detector", "mock_detector", threshold=0.4)
+
+    assert result["ok"] is True
+    assert result["category"] == "detector"
+    assert result["backend"] == "mock_detector"
+    assert result["config"] == {"threshold": 0.4}
+
+
+def test_mcp_backend_switch_tool_uses_gateway_guard():
+    from gateway.mcp_server import MCPServerModule
+
+    class Gateway:
+        def reconfigure_backend(self, category, backend, **config):
+            return {
+                "ok": False,
+                "category": category,
+                "requested_backend": backend,
+                "reason": "motion_backend_switch_requires_idle",
+                "config": config,
+            }
+
+    mcp = MCPServerModule()
+    mcp.on_system_modules({"MCPServerModule": mcp, "GatewayModule": Gateway()})
+
+    payload = json.loads(
+        mcp.switch_backend("local_planner", "nav_core", '{"force": false}')
+    )
+
+    assert payload["ok"] is False
+    assert payload["reason"] == "motion_backend_switch_requires_idle"
+    assert payload["config"] == {"force": False}
+
+
+def test_mcp_backend_switch_tool_guards_motion_without_gateway_module():
+    from gateway.mcp_server import MCPServerModule
+
+    class BusyNavigation:
+        def health(self):
+            return {"state": "EXECUTING"}
+
+    mcp = MCPServerModule()
+    mcp.on_system_modules({"MCPServerModule": mcp, "NavigationModule": BusyNavigation()})
+
+    payload = json.loads(mcp.switch_backend("slam", "fastlio2"))
+
+    assert payload["ok"] is False
+    assert payload["reason"] == "motion_backend_switch_requires_idle"
+    assert payload["navigation_state"] == "EXECUTING"
 
 
 def test_localization_status_covers_product_states():
@@ -856,6 +973,31 @@ def test_drift_watchdog_classifies_nan_odom_as_diverged():
         "z": 0.0,
         "vx": 0.0,
     })[0] is True
+
+
+def test_gateway_quarantines_non_finite_odometry_before_publication():
+    from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
+    from core.msgs.nav import Odometry
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    events = []
+    gateway.push_event = events.append
+    previous = {"x": 1.0, "y": 2.0, "z": 0.0, "yaw": 0.0}
+    with gateway._state_lock:
+        gateway._odom = dict(previous)
+
+    gateway._on_odometry(Odometry(
+        pose=Pose(
+            position=Vector3(float("nan"), 0.0, 0.0),
+            orientation=Quaternion(),
+        ),
+        twist=Twist(linear=Vector3(0.0, 0.0, 0.0)),
+    ))
+
+    assert gateway._odom == previous
+    assert [event.get("type") for event in events] == []
+    assert gateway._last_invalid_odometry["reason"] == "non_finite_odometry"
 
 
 def test_navigation_status_reports_current_runtime_boundary(monkeypatch):

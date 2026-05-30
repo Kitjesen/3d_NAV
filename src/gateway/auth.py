@@ -8,7 +8,8 @@ https://github.com/encode/starlette/issues/1012 and related).
 
 Security model:
   - API key set via ``LINGTU_API_KEY`` env var or ``robot_config.yaml``
-  - If no key configured → auth disabled (dev/testing mode, pass-through)
+  - If no key configured, auth is disabled by default (dev/testing mode)
+  - If ``require_key=True`` and no key is configured, protected paths fail closed
   - Protected: ``/api/*``, ``/ws/*``, ``/mcp``
   - Public: ``/``, ``/docs``, ``/redoc``, ``/openapi.json``, static assets,
     ``/api/v1/auth/login``, ``/api/v1/auth/check``
@@ -51,8 +52,8 @@ def _get_configured_key() -> str | None:
         key = cfg.raw.get("gateway", {}).get("api_key")
         if key:
             return str(key)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("_get_configured_key: failed to read api_key from config: %s", e)
     return None
 
 
@@ -60,12 +61,19 @@ class APIKeyMiddleware:
     """Pure ASGI middleware for API key authentication.
 
     Works with both HTTP and WebSocket scopes. When auth is disabled (no
-    configured key), every request passes through unchanged.
+    configured key), every request passes through unchanged unless
+    ``require_key`` is set.
     """
 
-    def __init__(self, app, api_key: str | None = None):
+    def __init__(
+        self,
+        app,
+        api_key: str | None = None,
+        require_key: bool = False,
+    ):
         self.app = app
         self._key = api_key or _get_configured_key()
+        self._require_key = bool(require_key)
         if self._key:
             self._key_hash: str | None = hashlib.sha256(
                 self._key.encode()
@@ -83,10 +91,6 @@ class APIKeyMiddleware:
         if scope["type"] not in ("http", "websocket"):
             return await self.app(scope, receive, send)
 
-        # Auth disabled → everything passes.
-        if self._key_hash is None:
-            return await self.app(scope, receive, send)
-
         path = scope.get("path", "")
 
         # Public paths (exact match).
@@ -101,6 +105,13 @@ class APIKeyMiddleware:
         # Static dashboard assets: files with an extension, not under /api.
         last_segment = path.rsplit("/", 1)[-1] if path else ""
         if "." in last_segment and not path.startswith("/api"):
+            return await self.app(scope, receive, send)
+
+        # Auth disabled by default; fail closed for protected paths only when
+        # the caller explicitly requires an API key.
+        if self._key_hash is None:
+            if self._require_key:
+                return await self._reject(scope, send, 401, "API key required")
             return await self.app(scope, receive, send)
 
         # Extract API key from headers / query / cookies.

@@ -109,8 +109,17 @@ class TestSemanticPlannerInit:
         mod = SemanticPlannerModule(
             fast_path_threshold=0.9,
             decomposer="rules",
+            llm_backend="mock",
         )
         assert mod._fast_threshold == 0.9
+        assert mod._llm_backend == "mock"
+
+    def test_goal_resolver_uses_selected_llm_backend(self):
+        mod = _make_module(llm_backend="mock")
+        try:
+            assert mod._goal_resolver._primary.config.backend == "mock"
+        finally:
+            mod.stop()
 
     def test_setup_does_not_crash(self):
         mod = _make_module()
@@ -153,6 +162,30 @@ class TestSemanticPlannerStateUpdate:
         dets = [Detection3D(id="99", label="box", position=Vector3(1, 1, 0))]
         # _on_detections accepts a list — just verify it does not crash
         self.mod._on_detections(dets)
+
+    def test_scene_graph_does_not_republish_same_goal(self):
+        class _Result:
+            confidence = 1.0
+            position = [1.0, 2.0, 0.0]
+            frame_id = "map"
+
+        class _Resolver:
+            def maybe_reload_kg(self):
+                pass
+
+            def fast_resolve(self, instruction, sg_json):
+                return _Result()
+
+        self.mod._goal_resolver = _Resolver()
+        self.mod._current_instruction = "go to chair"
+        goals = []
+        self.mod.goal_pose._add_callback(goals.append)
+
+        sg = _make_scene_graph(["chair"])
+        self.mod._on_scene_graph(sg)
+        self.mod._on_scene_graph(sg)
+
+        assert len(goals) == 1
 
 
 # ---------------------------------------------------------------------------

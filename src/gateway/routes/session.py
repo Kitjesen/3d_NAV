@@ -24,7 +24,7 @@ from gateway.schemas import (
 )
 from gateway.services.map_paths import nav_map_root
 from gateway.services.map_safety import safe_map_name
-from nav.services.nav_services.same_source_map_artifacts import (
+from core.same_source_map_artifacts import (
     validate_saved_map_artifact_dir,
 )
 

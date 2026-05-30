@@ -1262,6 +1262,21 @@ class TestSafetyRingModule(unittest.TestCase):
         self.assertIn(2, stop_cmds,
                       f"Expected stop_cmd=2 for odom timeout, got {stop_cmds}")
 
+    def test_safety_ring_times_out_without_new_callbacks(self):
+        """The watchdog must fail closed even when no input callback fires."""
+        m = SafetyRingModule(odom_timeout_ms=40, cmd_vel_timeout_ms=40)
+        stops = []
+        m.stop_cmd._add_callback(stops.append)
+        m.setup()
+        m.start()
+        try:
+            m._on_odom(self._make_odom())
+            stops.clear()
+            time.sleep(0.09)
+            self.assertIn(2, stops)
+        finally:
+            m.stop()
+
     def test_initial_state_without_odom_is_stop(self):
         """Before the first odom sample, safety must fail closed."""
         m = self._make_module(odom_timeout_ms=500.0)

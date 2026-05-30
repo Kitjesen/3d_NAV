@@ -458,7 +458,7 @@ def collect_product_field_check(
     map_gate = None
     resolved_map_dir = map_dir or _active_map_artifact_dir()
     if resolved_map_dir:
-        from nav.services.nav_services.same_source_map_artifacts import (
+        from core.same_source_map_artifacts import (
             validate_saved_map_artifact_dir,
         )
         from core.runtime_validation_gates import runtime_validation_gates

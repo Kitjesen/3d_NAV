@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.module import Module, skill
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
@@ -34,6 +34,24 @@ from core.stream import In, Out
 logger = logging.getLogger(__name__)
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
+_MOTION_BACKEND_CATEGORIES = {
+    "planner",
+    "local_planner",
+    "path_follower",
+    "terrain",
+    "slam",
+}
+_BACKEND_RECONFIGURE_TARGETS = {
+    "detector": ("PerceptionModule",),
+    "encoder": ("PerceptionModule",),
+    "llm": ("LLMModule",),
+    "llm_client": ("LLMModule",),
+    "planner": ("NavigationModule",),
+    "local_planner": ("LocalPlannerModule",),
+    "path_follower": ("PathFollowerModule",),
+    "terrain": ("TerrainModule",),
+    "slam": ("SlamBridgeModule", "SLAMModule", "SlamModule"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -80,10 +98,17 @@ class MCPServerModule(Module, layer=6):
     instruction: Out[str]
     mode_cmd:    Out[str]
 
-    def __init__(self, port: int = 8090, host: str = "0.0.0.0", **kw):
+    def __init__(
+        self,
+        port: int = 8090,
+        host: str = "0.0.0.0",
+        require_api_key: bool | None = None,
+        **kw,
+    ):
         super().__init__(**kw)
         self._port = port
         self._host = host
+        self._require_api_key = require_api_key
         self._server_thread: threading.Thread | None = None
 
         # Cached telemetry (written by subscriptions)
@@ -98,6 +123,7 @@ class MCPServerModule(Module, layer=6):
         # Populated by on_system_modules() — all @skill across all modules
         self._tool_registry: dict[str, Any] = {}   # func_name → bound method
         self._tool_list:     list[dict] = []        # MCP tool descriptors
+        self._all_modules: dict[str, Any] = {}
 
         # Memory / perception module references (for built-in query tools)
         self._tagged_locations_mod = None
@@ -118,6 +144,7 @@ class MCPServerModule(Module, layer=6):
         """
         self._tool_registry = {}
         self._tool_list = []
+        self._all_modules = modules
 
         # Grab module references for built-in tools
         self._tagged_locations_mod = modules.get("TaggedLocationsModule")
@@ -378,6 +405,64 @@ class MCPServerModule(Module, layer=6):
             self.stop_cmd.publish(2)
         return json.dumps({"mode": mode})
 
+    @skill
+    def switch_backend(self, category: str, backend: str, config_json: str = "{}") -> str:
+        """Switch a low-risk runtime backend; motion backends require navigation IDLE."""
+        try:
+            config = json.loads(config_json or "{}")
+        except json.JSONDecodeError as exc:
+            return json.dumps({
+                "ok": False,
+                "category": category,
+                "requested_backend": backend,
+                "reason": "invalid_config_json",
+                "error": str(exc),
+            })
+        if not isinstance(config, dict):
+            return json.dumps({
+                "ok": False,
+                "category": category,
+                "requested_backend": backend,
+                "reason": "invalid_config_json",
+            })
+        gateway = self._all_modules.get("GatewayModule")
+        if gateway is not None and hasattr(gateway, "reconfigure_backend"):
+            result = gateway.reconfigure_backend(category, backend, **config)
+            return json.dumps(result, default=str)
+        result = self.reconfigure_backend(category, backend, **config)
+        return json.dumps(result, default=str)
+
+    def reconfigure_backend(
+        self,
+        category: str,
+        backend: str,
+        **config: Any,
+    ) -> dict[str, Any]:
+        if category in _MOTION_BACKEND_CATEGORIES:
+            nav = self._all_modules.get("NavigationModule")
+            state = ""
+            if nav is not None and hasattr(nav, "health"):
+                try:
+                    state = str((nav.health() or {}).get("state", "")).upper()
+                except Exception:
+                    state = "UNKNOWN"
+            if state != "IDLE":
+                return {
+                    "ok": False,
+                    "category": category,
+                    "requested_backend": backend,
+                    "reason": "motion_backend_switch_requires_idle",
+                    "navigation_state": state or "UNKNOWN",
+                }
+
+        for module_name in _BACKEND_RECONFIGURE_TARGETS.get(category, ()):
+            module = self._all_modules.get(module_name)
+            reconfigure = getattr(module, "reconfigure_backend", None)
+            if callable(reconfigure):
+                return reconfigure(category, backend, **config)
+
+        return super().reconfigure_backend(category, backend, **config)
+
     # -- FastAPI + MCP JSON-RPC endpoint -----------------------------------
 
     def _run_server(self) -> None:
@@ -393,6 +478,13 @@ class MCPServerModule(Module, layer=6):
         app = FastAPI(title="LingTu MCP Server")
         app.add_middleware(CORSMiddleware, allow_origins=["*"],
                            allow_methods=["*"], allow_headers=["*"])
+        from gateway.auth import APIKeyMiddleware
+        require_key = (
+            self._require_api_key
+            if self._require_api_key is not None
+            else self._host not in {"127.0.0.1", "localhost", "::1"}
+        )
+        app.add_middleware(APIKeyMiddleware, require_key=require_key)
         mcp = self
 
         @app.post("/mcp")

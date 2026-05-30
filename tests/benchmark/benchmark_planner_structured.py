@@ -24,7 +24,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import numpy as np
+IMPORT_ERROR: str | None = None
+try:
+    import numpy as np
+except Exception as exc:  # pragma: no cover - exercised by shell environments.
+    np = None  # type: ignore[assignment]
+    IMPORT_ERROR = f"missing dependency: numpy ({exc})"
 
 # ---- sys.path setup (mirrors src/core/tests/conftest.py) ----
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,15 +39,21 @@ for _p in [str(_REPO_ROOT), str(_SRC)]:
         sys.path.insert(0, _p)
 
 # ---- imports after path setup ----
-from nav.global_planner_service import GlobalPlannerService
-from nav.plan_safety import evaluate_backend_path_safety
-from sim.engine.scenarios.large_terrain_assets import (
-    build_large_terrain_assets,
-    LargeTerrainAssets,
-)
+from core.efficiency_status import benchmark_claim_metadata
+from core.efficiency_status import classify_benchmark_error
+if IMPORT_ERROR is None:
+    try:
+        from nav.global_planner_service import GlobalPlannerService
+        from nav.plan_safety import evaluate_backend_path_safety
+        from sim.engine.scenarios.large_terrain_assets import (
+            build_large_terrain_assets,
+            LargeTerrainAssets,
+        )
+    except Exception as exc:  # pragma: no cover - environment dependent.
+        IMPORT_ERROR = f"missing benchmark dependency: {exc}"
 
 PLATFORM_ASSUMPTION = (
-    "server-side benchmark; S100P aarch64 budget tracked separately"
+    "synthetic planner regression benchmark; not S100P real-robot performance"
 )
 SCHEMA_VERSION = 1
 
@@ -177,9 +188,12 @@ def _path_distance(path: list[np.ndarray]) -> float:
 
 
 def _result_base(planner: str) -> dict[str, Any]:
+    metadata = benchmark_claim_metadata(generated_at=time.time())
     return {
         "schema_version": SCHEMA_VERSION,
         "planner": planner,
+        "ok": True,
+        "status": "pass",
         "selected_backend": "",
         "fallback_used": False,
         "direct_goal_fallback_used": False,
@@ -189,6 +203,7 @@ def _result_base(planner: str) -> dict[str, Any]:
         "path_safety_score": 0.0,
         "map_artifact_gate_ok": True,
         "platform_assumption": PLATFORM_ASSUMPTION,
+        **metadata,
     }
 
 
@@ -219,6 +234,9 @@ def benchmark_planner(
     try:
         svc.setup()
     except Exception as exc:
+        status = classify_benchmark_error(str(exc))
+        result["ok"] = False
+        result["status"] = status
         result["error"] = f"setup failed: {exc}"
         result["map_artifact_gate_ok"] = False
         return result
@@ -249,6 +267,9 @@ def benchmark_planner(
         result["latency_ms"] = round(elapsed_ms, 3)
     except Exception as exc:
         result["selected_backend"] = selected_backend_name
+        status = classify_benchmark_error(str(exc))
+        result["ok"] = False
+        result["status"] = status
         result["error"] = f"plan failed: {exc}"
         result["latency_ms"] = round(
             (time.perf_counter() - start_time) * 1000.0, 3
@@ -343,23 +364,76 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def write_import_skip_report(
+    *,
+    json_out: Path,
+    planners: list[str],
+    routes: list[str],
+    error: str,
+) -> int:
+    generated_at = time.time()
+    result = {
+        "schema_version": SCHEMA_VERSION,
+        "planner": "all",
+        "ok": False,
+        "status": "skip",
+        "selected_backend": "",
+        "fallback_used": False,
+        "direct_goal_fallback_used": False,
+        "latency_ms": 0.0,
+        "path_length_m": 0.0,
+        "waypoint_count": 0,
+        "path_safety_score": 0.0,
+        "map_artifact_gate_ok": False,
+        "platform_assumption": PLATFORM_ASSUMPTION,
+        **benchmark_claim_metadata(generated_at=generated_at),
+        "error": error,
+    }
+    report = {
+        "schema_version": SCHEMA_VERSION,
+        **benchmark_claim_metadata(generated_at=generated_at),
+        "planners": planners,
+        "routes": routes,
+        "results": [result],
+        "status_counts": {"pass": 0, "skip": 1, "fail": 0},
+    }
+    json_out.parent.mkdir(parents=True, exist_ok=True)
+    json_out.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main() -> int:
     args = build_parser().parse_args()
+    generated_at = time.time()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    json_out = args.json_out or output_dir / "report.json"
 
-    # ---- Build synthetic map fixture ----
-    assets = _build_fixture(output_dir)
-    fixture_dir = output_dir / "fixture"
-
-    # ---- Parse planners and routes ----
     planner_names = [
         p.strip().lower()
         for p in args.planners.split(",")
         if p.strip()
     ]
     route_names = [r.strip() for r in args.routes.split(",") if r.strip()]
+
+    if IMPORT_ERROR is not None:
+        return write_import_skip_report(
+            json_out=json_out,
+            planners=planner_names,
+            routes=route_names,
+            error=IMPORT_ERROR,
+        )
+
+    # ---- Build synthetic map fixture ----
+    assets = _build_fixture(output_dir)
+    fixture_dir = output_dir / "fixture"
+
+    # ---- Parse planners and routes ----
     routes = _resolve_routes(assets, route_names)
 
     if not routes:
@@ -383,13 +457,18 @@ def main() -> int:
     # ---- Build report ----
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
+        **benchmark_claim_metadata(generated_at=generated_at),
         "planners": planner_names,
         "routes": route_names,
         "results": results,
+        "status_counts": {
+            "pass": sum(1 for item in results if item.get("status") == "pass"),
+            "skip": sum(1 for item in results if item.get("status") == "skip"),
+            "fail": sum(1 for item in results if item.get("status") == "fail"),
+        },
     }
 
     # ---- Write output ----
-    json_out = args.json_out or output_dir / "report.json"
     json_out.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -404,9 +483,10 @@ def main() -> int:
 
         shutil.rmtree(fixture_dir)
 
-    # Exit non-zero if any benchmark had an unexpected error
+    # Exit non-zero only for failures. Skips are explicit non-passing results
+    # for optional unavailable backends.
     for r in results:
-        if r.get("error"):
+        if r.get("status") == "fail":
             return 1
     return 0
 

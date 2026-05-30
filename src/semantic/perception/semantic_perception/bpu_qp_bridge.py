@@ -19,7 +19,6 @@ BPU → qp_perception 桥接层
 
 import logging
 import time
-from typing import List, Optional
 
 import numpy as np
 
@@ -117,7 +116,7 @@ class FusionMOTWrapper:
         self._reid = reid_extractor
 
     def update(self, detections, timestamp: float):
-        """Tracker 协议: detections → List[Track]。"""
+        """Tracker 协议: detections → list[Track]。"""
         from qp_perception.types import BoundingBox, Track
 
         if not detections:
@@ -207,7 +206,7 @@ class BPUDetectorAdapter:
             self._prompt = ""  # 不过滤
 
     def detect(self, frame: object, timestamp: float):
-        """qp_perception Detector 协议: frame → List[Detection]。"""
+        """qp_perception Detector 协议: frame → list[Detection]。"""
         from qp_perception.types import BoundingBox, Detection
 
         if not isinstance(frame, np.ndarray):
@@ -255,7 +254,7 @@ class PerceptionPipeline:
             timestamp: 时间戳 (None=自动)
 
         Returns:
-            (tracks: List[Track], target: TargetObservation | None)
+            (tracks: list[Track], target: TargetObservation | None)
         """
         if timestamp is None:
             timestamp = time.time()

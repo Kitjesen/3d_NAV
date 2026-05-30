@@ -29,7 +29,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -310,17 +310,13 @@ class AgentLoop:
         # records one audit entry with result_summary (either the short tool
         # output or `VALIDATION_ERROR: ...`).
         self._tool_call_audit: list[dict[str, Any]] = []
-        self._tool_schemas: dict[str, dict[str, Any]] = {
-            "navigate_to":        {"required": ["x", "y"]},
-            "navigate_to_object": {"required": ["label"]},
-            "detect_object":      {"required": ["label"]},
-            "query_memory":       {"required": ["query"]},
-            "tag_location":       {"required": ["name"]},
-            "say":                {"required": ["message"]},
-            "done":               {"required": []},
-            "describe_scene":     {"required": []},
-            "assess_situation":   {"required": []},
-        }
+        # Auto-generated from _BUILTIN_TOOLS + _LEGACY_HANDLER_TOOLS to keep
+        # required-field schemas in sync with tool definitions (P0.3/P2.2).
+        self._tool_schemas: dict[str, dict[str, Any]] = {}
+        for _tool in _BUILTIN_TOOLS + _LEGACY_HANDLER_TOOLS:
+            _fn = _tool["function"]
+            _params = _fn.get("parameters", {})
+            self._tool_schemas[_fn["name"]] = {"required": _params.get("required", [])}
         self._known_tool_names: set[str] = {
             t["function"]["name"] for t in self._tools
         } | set(self._handlers.keys())
@@ -611,4 +607,3 @@ class AgentLoop:
             return f"VLM tool error: {e}"
 
         return f"Unknown VLM tool: {name}"
-

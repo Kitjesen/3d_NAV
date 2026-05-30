@@ -18,15 +18,21 @@ FAR Planner 集成测试 — terrain_analysis + FAR Planner 联调
 用法: python tests/integration/test_far_planner.py
 """
 
+import os
 import paramiko
 import time
 import json
 import sys
 import math
+import unittest
 
-ROBOT = "192.168.66.190"
-USER = "sunrise"
-PASS = "sunrise"
+ROBOT = os.environ.get("S100P_HOST", "192.168.66.190")
+USER = os.environ.get("S100P_USER", "sunrise")
+PASS = os.environ.get("S100P_PASSWORD", "sunrise")
+
+_SKIP_REASON = None
+if not os.environ.get("S100P_HOST"):
+    _SKIP_REASON = "S100P_HOST not set — skipping real-hardware integration test"
 NAV_WS = "/home/sunrise/data/SLAM/navigation"
 SETUP = f"source /opt/ros/humble/setup.bash && source {NAV_WS}/install/setup.bash"
 PATHS_DIR = f"{NAV_WS}/install/local_planner/share/local_planner/paths"
@@ -57,17 +63,39 @@ def kill_procs(ssh, names):
     time.sleep(1)
 
 
-def main():
-    ssh = ssh_connect()
-    print("SSH connected to", ROBOT)
+class FarPlannerIntegrationTest(unittest.TestCase):
+    """FAR Planner integration tests against real S100P hardware."""
 
-    results = []
+    S100P_HOST = ROBOT
+    S100P_USER = USER
+    S100P_PASS = PASS
 
-    def check(name, passed, detail=""):
-        status = "PASS" if passed else "FAIL"
-        results.append({"name": name, "pass": passed})
-        mark = "\033[32mPASS\033[0m" if passed else "\033[31mFAIL\033[0m"
+    def setUp(self):
+        self.ssh = None
+        self.results = []
+
+    def tearDown(self):
+        if self.ssh:
+            self.ssh.close()
+
+    def _check(self, name, passed, detail=""):
+        self.results.append({"name": name, "pass": passed})
+        mark = "PASS" if passed else "FAIL"
         print(f"  [{mark}] {name}  {detail}")
+        self.assertTrue(passed, msg=f"{name}: {detail}")
+
+    @unittest.skipIf(_SKIP_REASON, _SKIP_REASON)
+    def test_far_planner_pipeline(self):
+        self.ssh = ssh_connect()
+        print("SSH connected to", ROBOT)
+
+        results = []
+
+        def check(name, passed, detail=""):
+            status = "PASS" if passed else "FAIL"
+            results.append({"name": name, "pass": passed})
+            mark = "\033[32mPASS\033[0m" if passed else "\033[31mFAIL\033[0m"
+            print(f"  [{mark}] {name}  {detail}")
 
     # 清理残留
     kill_procs(ssh, ["far_planner", "goal_pose_to_point", "far_test_harness"])
@@ -412,15 +440,14 @@ if __name__ == '__main__':
         kill_procs(ssh, ["far_planner", "terrainAnalysis", "far_test_harness"])
         ssh.close()
 
-    # 汇总
+    # 汇总 — convert to unittest assertions
     passed = sum(1 for r in results if r['pass'])
     total = len(results)
     print(f"\n{'='*50}")
     print(f"FAR Planner 集成测试: {passed}/{total} PASS")
     print(f"{'='*50}")
-
-    return 0 if passed == total else 1
+    self.assertEqual(passed, total, f"{passed}/{total} tests passed")
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    unittest.main()

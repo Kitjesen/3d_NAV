@@ -224,6 +224,35 @@ class TestNavChainGlobalPlannerEfficiency:
         assert report.get("rejected_plans") == []
         assert report.get("reached_goal") is True
 
+    def test_navigation_health_exposes_planner_backend_status(self):
+        """Navigation health exposes configured/effective global planner backend."""
+        nav = NavigationModule(planner="pct", enable_ros2_bridge=False)
+
+        status = nav.health()["planner_backend"]
+
+        assert status["configured_backend"] == "pct"
+        assert "backend" in status
+        assert "fallback_backend" in status
+        assert "degraded" in status
+        assert "degraded_reason" in status
+
+    def test_navigation_reload_planner_tomogram_delegates_to_planner_service(self):
+        """Map activation reloads tomogram through NavigationModule public API."""
+        nav = NavigationModule(enable_ros2_bridge=False)
+        calls = []
+
+        class Planner:
+            def reload_tomogram(self, path):
+                calls.append(path)
+                return {"ok": True, "backend": "astar", "mode": "tomogram"}
+
+        nav._planner_svc = Planner()
+
+        result = nav.reload_planner_tomogram("maps/demo/tomogram.pickle")
+
+        assert result["ok"] is True
+        assert calls == ["maps/demo/tomogram.pickle"]
+
     def test_chain_global_planner_publishes_adapter_status_when_selected_differs(self):
         """When selected_planner differs from planner_name, adapter_status fires."""
         nav = NavigationModule(enable_ros2_bridge=False)

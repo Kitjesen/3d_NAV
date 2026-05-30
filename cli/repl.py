@@ -189,7 +189,12 @@ class LingTuREPL(cmd.Cmd):
             name = resp.get("active", "?")
             tomogram = resp.get("tomogram", "")
             nav = self._get_module("NavigationModule")
-            if nav and tomogram and os.path.exists(tomogram) and hasattr(nav, "_planner_backend"):
+            if (
+                nav
+                and tomogram
+                and os.path.exists(tomogram)
+                and hasattr(nav, "reload_planner_tomogram")
+            ):
                 self._reload_planner_tomogram(nav, tomogram, name)
             else:
                 print(f"  Active map: {T.green(name)}")
@@ -210,17 +215,15 @@ class LingTuREPL(cmd.Cmd):
 
     def _reload_planner_tomogram(self, nav, tomogram: str, name: str) -> None:
         """Hot-reload the planner's tomogram after map switch."""
-        pb = nav._planner_backend
-        if hasattr(pb, "_load_tomogram"):
-            pb._load_tomogram(tomogram)
-            print(f"  Active map: {T.green(name)} (tomogram hot-reloaded)")
-        elif hasattr(pb, "update_map"):
-            import pickle
-            with open(tomogram, "rb") as f:
-                data = pickle.load(f)
-            if "grid" in data:
-                pb.update_map(data["grid"], data.get("resolution", 0.2))
-            print(f"  Active map: {T.green(name)} (costmap reloaded)")
+        reload_planner_tomogram = getattr(nav, "reload_planner_tomogram", None)
+        if callable(reload_planner_tomogram):
+            result = reload_planner_tomogram(tomogram)
+            if result.get("ok"):
+                mode = result.get("mode", "tomogram")
+                suffix = "costmap reloaded" if mode == "costmap" else "tomogram hot-reloaded"
+                print(f"  Active map: {T.green(name)} ({suffix})")
+            else:
+                print(f"  Active map: {T.green(name)} (restart required to apply new tomogram)")
         else:
             print(f"  Active map: {T.green(name)} (restart required to apply new tomogram)")
 

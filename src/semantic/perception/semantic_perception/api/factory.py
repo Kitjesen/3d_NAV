@@ -4,7 +4,8 @@ Semantic Perception API - 工厂类
 用于创建各种感知组件的实例
 """
 
-from typing import Optional
+
+from core.registry import get, list_plugins, register
 
 from .detector_api import DetectorAPI
 from .encoder_api import EncoderAPI
@@ -12,6 +13,33 @@ from .exceptions import ConfigurationError
 from .perception_api import PerceptionAPI
 from .tracker_api import TrackerAPI
 from .types import PerceptionConfig
+
+
+@register("perception_factory_detector", "yolo_world", description="YOLO-World DetectorAPI adapter")
+class _YOLOWorldFactoryProvider:
+    @staticmethod
+    def create(config: PerceptionConfig | None) -> DetectorAPI:
+        from ..impl.yolo_world_detector import YOLOWorldDetector
+
+        return YOLOWorldDetector(config)
+
+
+@register("perception_factory_encoder", "clip", description="CLIP EncoderAPI adapter")
+class _CLIPFactoryProvider:
+    @staticmethod
+    def create(config: PerceptionConfig | None) -> EncoderAPI:
+        from ..impl.clip_encoder import CLIPEncoder
+
+        return CLIPEncoder(config)
+
+
+@register("perception_factory_tracker", "instance", description="Instance TrackerAPI adapter")
+class _InstanceTrackerFactoryProvider:
+    @staticmethod
+    def create(config: PerceptionConfig | None) -> TrackerAPI:
+        from ..impl.instance_tracker import InstanceTracker
+
+        return InstanceTracker(config)
 
 
 class PerceptionFactory:
@@ -90,19 +118,14 @@ class PerceptionFactory:
             >>> detector.set_classes(["chair", "table", "person"])
             >>> detections = detector.detect(image)
         """
-        if detector_type == "yolo_world":
-            from ..impl.yolo_world_detector import YOLOWorldDetector
-            return YOLOWorldDetector(config)
-        elif detector_type == "grounding_dino":
-            raise ConfigurationError(
-                "GroundingDINO not supported on BPU hardware. "
-                "Use 'yolo_world' instead."
-            )
-        else:
+        try:
+            provider = get("perception_factory_detector", detector_type)
+            return provider.create(config)
+        except KeyError:
             raise ConfigurationError(
                 f"Unknown detector type: {detector_type}. "
-                f"Supported types: yolo_world, grounding_dino"
-            )
+                f"Supported types: {', '.join(PerceptionFactory.get_available_detectors())}"
+            ) from None
 
     @staticmethod
     def create_encoder(
@@ -130,19 +153,14 @@ class PerceptionFactory:
             >>> text_feat = encoder.encode_text("a red chair")
             >>> similarity = encoder.compute_similarity(image_feat, text_feat)
         """
-        if encoder_type == "clip":
-            from ..impl.clip_encoder import CLIPEncoder
-            return CLIPEncoder(config)
-        elif encoder_type == "blip":
-            raise ConfigurationError(
-                "BLIP not supported on BPU hardware. "
-                "Use 'clip' instead."
-            )
-        else:
+        try:
+            provider = get("perception_factory_encoder", encoder_type)
+            return provider.create(config)
+        except KeyError:
             raise ConfigurationError(
                 f"Unknown encoder type: {encoder_type}. "
-                f"Supported types: clip, blip"
-            )
+                f"Supported types: {', '.join(PerceptionFactory.get_available_encoders())}"
+            ) from None
 
     @staticmethod
     def create_tracker(
@@ -167,14 +185,14 @@ class PerceptionFactory:
             >>> tracker = PerceptionFactory.create_tracker("instance")
             >>> tracked = tracker.update(detections_3d)
         """
-        if tracker_type == "instance":
-            from ..impl.instance_tracker import InstanceTracker
-            return InstanceTracker(config)
-        else:
+        try:
+            provider = get("perception_factory_tracker", tracker_type)
+            return provider.create(config)
+        except KeyError:
             raise ConfigurationError(
                 f"Unknown tracker type: {tracker_type}. "
-                f"Supported types: instance"
-            )
+                f"Supported types: {', '.join(PerceptionFactory.get_available_trackers())}"
+            ) from None
 
     @staticmethod
     def create_from_config(config: PerceptionConfig) -> PerceptionAPI:
@@ -210,7 +228,7 @@ class PerceptionFactory:
         Returns:
             检测器类型列表
         """
-        return ["yolo_world"]
+        return list_plugins("perception_factory_detector")
 
     @staticmethod
     def get_available_encoders() -> list:
@@ -220,7 +238,7 @@ class PerceptionFactory:
         Returns:
             编码器类型列表
         """
-        return ["clip"]
+        return list_plugins("perception_factory_encoder")
 
     @staticmethod
     def get_available_trackers() -> list:
@@ -230,4 +248,4 @@ class PerceptionFactory:
         Returns:
             追踪器类型列表
         """
-        return ["instance"]
+        return list_plugins("perception_factory_tracker")

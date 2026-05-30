@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class FrameResult:
     """Output of a single perception frame."""
-    detections_3d: list         # List[Detection3D] from projection
+    detections_3d: list         # list[Detection3D] from projection
     scene_graph_json: str       # JSON string from tracker
     n_objects: int = 0          # number of tracked objects
     timestamp: float = 0.0

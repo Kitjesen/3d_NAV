@@ -18,7 +18,7 @@ import logging
 import math
 import threading
 import time
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 

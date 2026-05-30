@@ -32,7 +32,7 @@ import math
 import os
 import threading
 import time
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -230,16 +230,16 @@ class ReconstructionModule(Module, layer=3):
         self._depth_scale: float      = _load_depth_scale()
 
         # Buffered inputs (latest-wins)
-        self._latest_color:  Optional[Image]            = None
-        self._latest_depth:  Optional[Image]            = None
-        self._latest_odom:   Optional[Odometry]         = None
-        self._latest_sg:     Optional[SceneGraph]       = None
-        self._intrinsics:    Optional[CameraIntrinsics] = None
+        self._latest_color:  Image | None            = None
+        self._latest_depth:  Image | None            = None
+        self._latest_odom:   Odometry | None         = None
+        self._latest_sg:     SceneGraph | None       = None
+        self._intrinsics:    CameraIntrinsics | None = None
         self._buf_lock = threading.Lock()
 
-        self._last_update_time: Optional[float] = None
+        self._last_update_time: float | None = None
         self._total_frames: int = 0
-        self._bg_thread: Optional[threading.Thread] = None
+        self._bg_thread: threading.Thread | None = None
         self._recon_active = threading.Event()
 
     # ── Module lifecycle ────────────────────────────────────────────────────
@@ -359,7 +359,7 @@ class ReconstructionModule(Module, layer=3):
             color_bgr = color_bgr[..., ::-1].copy()
 
         # Dynamic masking: build pixel bboxes from current scene_graph
-        exclude_boxes: Optional[np.ndarray] = None
+        exclude_boxes: np.ndarray | None = None
         if self._mask_dynamic and sg is not None and sg.objects:
             boxes = []
             for obj in sg.objects:
@@ -396,7 +396,7 @@ class ReconstructionModule(Module, layer=3):
         depth_mm: np.ndarray,
         intrinsics: CameraIntrinsics,
         camera_to_world: np.ndarray,
-        exclude_boxes: Optional[np.ndarray] = None,
+        exclude_boxes: np.ndarray | None = None,
     ) -> int:
         """Process one RGB-D frame directly (bypassing ports).
 

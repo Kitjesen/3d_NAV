@@ -5,7 +5,6 @@ Semantic Perception API - 追踪器接口
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
 
 import numpy as np
 

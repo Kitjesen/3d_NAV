@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from nav.services.nav_services import dynamic_filter as df
+from core import dynamic_filter as df
 
 # ── PCD I/O round-trip ────────────────────────────────────────────────────
 

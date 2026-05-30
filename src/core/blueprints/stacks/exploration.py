@@ -117,6 +117,7 @@ def _add_external_tare_bridge(bp: Blueprint, **kw) -> None:
     from exploration.tare_explorer_module import TAREExplorerModule
 
     kw.setdefault("prefer_path_strategy", False)
+    kw.setdefault("configured_backend", "tare_external")
     bp.add(TAREExplorerModule, **_tare_kwargs(kw))
     bp.add(ExplorationSupervisorModule, **_supervisor_kwargs(kw))
     logger.info("External TARE exploration bridge enabled (native process off)")
@@ -127,6 +128,7 @@ def _tare_kwargs(kw: dict) -> dict:
     allowed = {
         "way_point_topic", "path_topic", "runtime_topic",
         "finish_topic", "start_topic",
+        "configured_backend",
         "goal_frame_id",
         "way_point_timeout_s", "auto_start",
         "hold_active_goal_until_terminal",

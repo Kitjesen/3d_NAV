@@ -428,8 +428,14 @@ class TestTAREStatsSnapshot(unittest.TestCase):
                     "navigation_terminal_count",
                     "navigation_success_count",
                     "navigation_failure_count",
-                    "last_navigation_status"):
+                    "last_navigation_status",
+                    "configured_backend", "backend",
+                    "degraded", "degraded_reason"):
             self.assertIn(key, snap)
+        self.assertEqual(snap["configured_backend"], "tare")
+        self.assertEqual(snap["backend"], "tare")
+        self.assertFalse(snap["degraded"])
+        self.assertEqual(snap["degraded_reason"], "")
 
     def test_stats_report_unhealthy_before_first_waypoint(self):
         from exploration.tare_explorer_module import TAREExplorerModule
@@ -485,6 +491,10 @@ class TestTAREskills(unittest.TestCase):
         parsed = json.loads(m.get_tare_status())
         self.assertIn("alive", parsed)
         self.assertIn("waypoint_count", parsed)
+        self.assertEqual(parsed["configured_backend"], "tare")
+        self.assertEqual(parsed["backend"], "tare")
+        self.assertFalse(parsed["degraded"])
+        self.assertEqual(parsed["degraded_reason"], "")
 
 
 # ─── Stack factory ───────────────────────────────────────────────────────────
@@ -531,6 +541,7 @@ class TestExplorationStackFactory(unittest.TestCase):
         self.assertNotIn("tare_explorer", names)
         tare = next(e for e in bp._entries if e.name == "TAREExplorerModule")
         self.assertIs(tare.config["prefer_path_strategy"], False)
+        self.assertEqual(tare.config["configured_backend"], "tare_external")
 
     def test_full_stack_forwards_external_tare_supervisor_timeout(self):
         from core.blueprints.full_stack import full_stack_blueprint

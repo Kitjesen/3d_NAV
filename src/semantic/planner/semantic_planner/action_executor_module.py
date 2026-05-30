@@ -14,7 +14,7 @@ import json
 import logging
 import math
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.module import Module
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3

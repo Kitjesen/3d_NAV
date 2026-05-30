@@ -27,10 +27,11 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import math
 import re
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
@@ -106,6 +107,8 @@ class SemanticPlannerModule(Module, layer=4):
         max_frontiers: int = 10,
         approach_distance: float = 0.5,
         lera_cooldown: float = _LERA_COOLDOWN,
+        llm_backend: str = "kimi",
+        llm_model: str = "",
         save_dir: str = "",
         **kw,
     ):
@@ -117,6 +120,8 @@ class SemanticPlannerModule(Module, layer=4):
         self._max_frontiers = max_frontiers
         self._approach_dist = approach_distance
         self._lera_cooldown = lera_cooldown
+        self._llm_backend = llm_backend
+        self._llm_model = llm_model
 
         # Backends (lazy init in setup)
         self._goal_resolver = None
@@ -135,6 +140,7 @@ class SemanticPlannerModule(Module, layer=4):
         # Active instruction + resolved goal
         self._current_instruction: str = ""
         self._current_goal_pose: PoseStamped | None = None
+        self._last_goal_publish_signature: tuple[str, str, float, float, float] | None = None
 
         # LERa state — all guarded by _lera_lock
         self._lera_lock = threading.Lock()
@@ -217,7 +223,7 @@ class SemanticPlannerModule(Module, layer=4):
         try:
             from .goal_resolver import GoalResolver
             from .llm_client import LLMConfig
-            llm_cfg = LLMConfig()
+            llm_cfg = LLMConfig(backend=self._llm_backend, model=self._llm_model)
             self._goal_resolver = GoalResolver(
                 primary_config=llm_cfg,
                 fast_path_threshold=self._fast_threshold,
@@ -281,6 +287,7 @@ class SemanticPlannerModule(Module, layer=4):
             return
 
         self._current_instruction = text
+        self._last_goal_publish_signature = None
         with self._lera_lock:
             self._failure_count = 0
             self._requery_count = 0
@@ -336,6 +343,26 @@ class SemanticPlannerModule(Module, layer=4):
 
     def _on_odom(self, odom: Odometry) -> None:
         self._robot_pos = np.array([odom.x, odom.y, getattr(odom, "z", 0.0)])
+
+    @staticmethod
+    def _rounded_goal_coord(value: float) -> float:
+        value = float(value)
+        return round(value, 3) if math.isfinite(value) else value
+
+    def _publish_goal_pose_once(self, instruction: str, pose: PoseStamped) -> bool:
+        signature = (
+            instruction,
+            str(pose.frame_id or ""),
+            self._rounded_goal_coord(pose.x),
+            self._rounded_goal_coord(pose.y),
+            self._rounded_goal_coord(pose.z),
+        )
+        self._current_goal_pose = pose
+        if signature == self._last_goal_publish_signature:
+            return False
+        self._last_goal_publish_signature = signature
+        self.goal_pose.publish(pose)
+        return True
 
     def _on_detections(self, dets: list) -> None:
         """Detection update — consumed by scene_graph path."""
@@ -478,6 +505,7 @@ class SemanticPlannerModule(Module, layer=4):
                     self._requery_count = 0
                 self._current_instruction = ""
                 self._current_goal_pose = None
+                self._last_goal_publish_signature = None
             else:
                 # Re-run full Fast→Slow resolution with the current scene graph.
                 with self._lera_lock:
@@ -493,6 +521,7 @@ class SemanticPlannerModule(Module, layer=4):
             self._failure_count = 0
             self._current_instruction = ""
             self._current_goal_pose = None
+            self._last_goal_publish_signature = None
 
         else:
             logger.warning("[LERa] Unknown strategy '%s', defaulting to abort", strategy)
@@ -557,12 +586,11 @@ class SemanticPlannerModule(Module, layer=4):
                         ),
                         ts=time.time(),
                     )
-                    self._current_goal_pose = pose
-                    self.goal_pose.publish(pose)
-                    self.planner_status.publish("RESOLVED")
-                    self._chat("assistant",
+                    if self._publish_goal_pose_once(instruction, pose):
+                        self.planner_status.publish("RESOLVED")
+                        self._chat("assistant",
                                f"找到目标：({pos[0]:.2f}, {pos[1]:.2f})，开始导航",
-                               phase="fast_path")
+                                   phase="fast_path")
                     return
         except Exception:
             logger.exception("Fast path resolution failed")
@@ -664,10 +692,9 @@ class SemanticPlannerModule(Module, layer=4):
                 frame_id=SEMANTIC_PLANNER_MAP_FRAME_ID,
                 ts=time.time(),
             )
-            self._current_goal_pose = pose
-            self.goal_pose.publish(pose)
-            self.planner_status.publish("VECTOR_MEMORY")
-            self._chat("assistant",
+            if self._publish_goal_pose_once(instruction, pose):
+                self.planner_status.publish("VECTOR_MEMORY")
+                self._chat("assistant",
                        f"向量记忆命中：({best['x']:.2f}, {best['y']:.2f}) 置信度 {best.get('score', 0):.2f}",
                        phase="vector")
             logger.info("Vector memory hit: '%s' → (%.1f, %.1f) score=%.2f",
@@ -695,13 +722,12 @@ class SemanticPlannerModule(Module, layer=4):
                     frame_id=SEMANTIC_PLANNER_MAP_FRAME_ID,
                     ts=time.time(),
                 )
-                self._current_goal_pose = pose  # track for LERa retry
-                self.goal_pose.publish(pose)
-                self._frontier_count += 1
-                self.planner_status.publish("EXPLORING")
-                self._chat("assistant",
+                if self._publish_goal_pose_once(instruction, pose):
+                    self._frontier_count += 1
+                    self.planner_status.publish("EXPLORING")
+                    self._chat("assistant",
                            f"前沿点：({pos[0]:.2f}, {pos[1]:.2f})，边探索边搜索",
-                           phase="frontier")
+                               phase="frontier")
             else:
                 self._chat("assistant", "⚠ 无可达前沿点，尝试视觉伺服", phase="visual_servo")
                 self._fallback_visual_servo(instruction)

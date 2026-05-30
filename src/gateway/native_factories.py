@@ -11,7 +11,6 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Optional
 
 from core.config import RobotConfig, get_config
 from core.native_install import DDS_ENV, exe

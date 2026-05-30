@@ -14,7 +14,6 @@ Fast Path (VLingNav/OmniNav 风格) 完全跳过 LLM, 不使用 prompt。
 """
 
 import json
-from typing import Dict, List, Optional
 
 # ================================================================
 #  系统提示

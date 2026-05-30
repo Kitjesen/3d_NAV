@@ -6,7 +6,6 @@ YOLO-World检测器 - API适配实现
 
 import logging
 import time
-from typing import List, Optional
 
 import numpy as np
 

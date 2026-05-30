@@ -19,7 +19,7 @@ def planner(llm: str = "kimi", save_dir: str = "", **config) -> Blueprint:
     try:
         from semantic.planner.semantic_planner.llm_module import LLMModule
         from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
-        bp.add(SemanticPlannerModule, save_dir=save_dir)
+        bp.add(SemanticPlannerModule, save_dir=save_dir, llm_backend=llm)
         bp.add(LLMModule, backend=llm)
     except ImportError as e:
         logger.warning("Semantic planner not available: %s", e)

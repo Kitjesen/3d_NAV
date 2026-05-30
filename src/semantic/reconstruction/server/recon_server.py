@@ -53,9 +53,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
+
+from core.backend_status import BackendStatus
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +79,11 @@ class ReconJob:
     output_dir: Path
     status: JobStatus = JobStatus.COLLECTING
     created_at: float = field(default_factory=time.time)
-    started_at: Optional[float] = None
-    finished_at: Optional[float] = None
+    started_at: float | None = None
+    finished_at: float | None = None
     num_keyframes: int = 0
-    result: Optional[dict] = None
-    error: Optional[str] = None
+    result: dict | None = None
+    error: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -119,6 +121,7 @@ class ReconServer:
         from .backends.registry import get_backend, list_backends
 
         self._default_backend  = backend
+        self._backend_status   = BackendStatus.configured_as(backend)
         self._output_dir       = Path(output_dir)
         self._output_dir.mkdir(parents=True, exist_ok=True)
         self._auto_trigger     = int(auto_trigger_frames)
@@ -130,15 +133,16 @@ class ReconServer:
         self._lock = asyncio.Lock() if _in_async_context() else None
 
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         # Verify backend is known
         try:
             available = list_backends()
             if backend not in available:
                 logger.warning("Backend '%s' not in registry %s", backend, available)
+                self._backend_status.mark_degraded("backend not registered")
         except Exception:
-            pass
+            self._backend_status.mark_degraded("backend registry unavailable")
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
@@ -215,8 +219,8 @@ class ReconServer:
     def trigger_reconstruction(
         self,
         session_id: str,
-        backend: Optional[str] = None,
-        options: Optional[dict] = None,
+        backend: str | None = None,
+        options: dict | None = None,
     ) -> ReconJob:
         """Submit a reconstruction job for the given session."""
         if session_id not in self._jobs:
@@ -229,7 +233,7 @@ class ReconServer:
         return self._submit_job(session_id, options=options or {})
 
     def _submit_job(
-        self, session_id: str, options: Optional[dict] = None
+        self, session_id: str, options: dict | None = None
     ) -> ReconJob:
         job = self._jobs[session_id]
         job.status = JobStatus.QUEUED
@@ -279,11 +283,17 @@ class ReconServer:
         finally:
             job.finished_at = time.time()
 
-    def get_job(self, session_id: str) -> Optional[ReconJob]:
+    def get_job(self, session_id: str) -> ReconJob | None:
         return self._jobs.get(session_id)
 
     def list_jobs(self) -> list[dict]:
         return [j.to_dict() for j in self._jobs.values()]
+
+    def health(self) -> dict[str, Any]:
+        return {
+            "status": "ok",
+            **self._backend_status.as_health_fields(),
+        }
 
 
 # ── FastAPI application ──────────────────────────────────────────────────────
@@ -328,7 +338,7 @@ def create_app(
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "backend": backend}
+        return server.health()
 
     @app.get("/api/v1/backends")
     async def get_backends():
@@ -383,7 +393,7 @@ def create_app(
     @app.post("/api/v1/jobs/{session_id}/trigger")
     async def trigger_job(
         session_id: str,
-        backend_override: Optional[str] = None,
+        backend_override: str | None = None,
     ):
         """Trigger reconstruction for the given session."""
         try:

@@ -100,13 +100,29 @@ All backends registered via `@register("category", "name")` in `core.registry`. 
 
 ### Profiles
 
-| Profile | Driver | SLAM | Native | Semantic | Use Case |
-|---------|--------|------|--------|----------|----------|
-| `stub` | stub | none | no | no | Framework testing |
-| `dev` | stub | none | no | yes | Semantic pipeline dev |
-| `sim` | sim_ros2 | bridge | yes | yes | MuJoCo full simulation |
-| `map` | sim_ros2 | fastlio2 | no | no | Build map with SLAM |
-| `s100p` | sim_ros2 | localizer | no | yes | Real robot navigation |
+Full definitions in `cli/profiles_data.py` (14 named profiles + 7 robot presets = 21 total combinations).
+
+| Profile | Robot Preset | SLAM | Semantic | Use Case |
+|---------|-------------|------|----------|----------|
+| `stub` | stub | none | no | Framework testing |
+| `dev` | stub | none | yes | Semantic pipeline dev |
+| `map` | s100p | fastlio2 | no | Build new map via SLAM |
+| `nav` | s100p | bridge | yes | Navigate using saved map (PCT) |
+| `explore` | s100p | fastlio2 | yes | Wavefront frontier exploration |
+| `tare_explore` | s100p | fastlio2 | yes | CMU TARE hierarchical exploration |
+| `sim` | sim | bridge | yes | MuJoCo full simulation |
+| `sim_mujoco_live` | sim_gazebo | none | no | MuJoCo raw MID-360 + Fast-LIO live sim |
+| `sim_gazebo` | sim_gazebo | none | yes | Gazebo/GZ ROS-native simulation |
+| `sim_industrial` | sim_gazebo | none | yes | Engineering industrial-yard simulation |
+| `sim_cmu_tare` | sim_gazebo | none | no | CMU Unity + external TARE simulation |
+| `sim_nav` | stub | none | no | Pure-Python nav sim (no ROS2/C++) |
+| `super_lio` | s100p | super_lio | yes | Evaluate Super-LIO backend |
+| `super_lio_relocation` | s100p | super_lio_relocation | yes | Super-LIO relocation against saved map |
+| `s100p` | thunder | localizer | yes | Real robot navigation (alias) |
+| `thunder` | thunder | localizer | yes | Direct thunder robot control |
+| `navigate` | thunder | localizer | yes | Alias for s100p |
+| `ros2` | sim_ros2 | bridge | yes | ROS2 simulation |
+| `sim_gazebo` | sim_gazebo | none | yes | Gazebo sim (repeated as standalone) |
 | `explore` | thunder | fastlio2 | yes | yes | Exploration (no map) |
 
 ### Backpressure Policies

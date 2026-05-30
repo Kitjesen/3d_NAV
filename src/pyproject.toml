@@ -16,12 +16,10 @@ include = [
     "core*",
     "drivers*",
     "memory*",
-    "nav_rings*",
     "nav_services*",
     "global_planning*",
     "semantic_planner*",
     "semantic_perception*",
-    "semantic_common*",
     "reconstruction*",
 ]
 

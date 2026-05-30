@@ -37,7 +37,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -104,14 +104,14 @@ class DatasetRecorderModule(Module, layer=3):
         self._body_to_cam = _load_cam_body_extrinsic()
 
         # 缓冲（最新帧优先）
-        self._latest_color:  Optional[Image]            = None
-        self._latest_depth:  Optional[Image]            = None
-        self._latest_odom:   Optional[Odometry]         = None
-        self._intrinsics:    Optional[CameraIntrinsics] = None
+        self._latest_color:  Image | None            = None
+        self._latest_depth:  Image | None            = None
+        self._latest_odom:   Odometry | None         = None
+        self._intrinsics:    CameraIntrinsics | None = None
         self._buf_lock = threading.Lock()
 
         # 关键帧选择状态
-        self._last_kf_pos:  Optional[np.ndarray] = None
+        self._last_kf_pos:  np.ndarray | None = None
         self._last_kf_yaw:  float = 0.0
         self._last_kf_time: float = 0.0
         self._frame_count:  int   = 0

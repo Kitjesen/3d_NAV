@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from core.runtime_interface import map_frame_id
 
@@ -41,14 +41,14 @@ class SlowPathMixin:
 
     依赖 self 上存在:
       - self._primary: LLMClientBase
-      - self._fallback: Optional[LLMClientBase]
+      - self._fallback: LLMClientBase | None
       - self._adacot: AdaCoTRouter
-      - self._explored_directions: List[Dict]
+      - self._explored_directions: list[Dict]
       - self._explore_step_count: int
       - self._visited_room_ids: set
-      - self._tsg: Optional[TopologySemGraph]
+      - self._tsg: TopologySemGraph | None
       - self._semantic_prior_engine: SemanticPriorEngine
-      - self._room_object_kg: Optional[Any]
+      - self._room_object_kg: Any | None
       - self.fast_resolve() (来自 FastPathMixin)
       - self._extract_keywords() (来自 FastPathMixin)
       - self._selective_grounding() (本 Mixin)
@@ -589,7 +589,6 @@ class SlowPathMixin:
         Returns:
             过滤后的场景图 JSON
         """
-        from typing import Dict as _Dict
 
         from core.utils.sanitize import safe_json_loads
 

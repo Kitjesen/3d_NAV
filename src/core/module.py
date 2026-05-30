@@ -373,6 +373,24 @@ class Module:
         """
         pass
 
+    def reconfigure_backend(
+        self,
+        category: str,
+        backend: str,
+        **config: Any,
+    ) -> dict[str, Any]:
+        """Conservative runtime backend switch contract.
+
+        Modules opt in by overriding this method. The default is intentionally
+        fail-closed because most robot backends are not safe to swap in place.
+        """
+        return {
+            "ok": False,
+            "category": category,
+            "requested_backend": backend,
+            "reason": "backend_reconfigure_unsupported",
+        }
+
     # -- Dynamic port creation --------------------------------------------
 
     def io(self, name: str, direction: type, msg_type: type | None = None) -> Any:

@@ -20,7 +20,7 @@
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 

@@ -17,7 +17,7 @@
 
 import logging
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 from scipy.spatial import ConvexHull, KDTree

@@ -2,13 +2,13 @@
 BPU 检测 + BoT-SORT 跟踪器 — 实时多目标跟踪。
 
 架构:
-  BPUDetector.detect() → List[Detection2D]   (~26ms, BPU 硬件)
+  BPUDetector.detect() → list[Detection2D]   (~26ms, BPU 硬件)
         ↓
   _DetectionResults wrapper (xyxy→xywh 格式转换)
         ↓
   BOTSORT.update()                            (~3ms, 纯 numpy/scipy)
         ↓
-  List[TrackedDetection]                      (带持久 track_id)
+  list[TrackedDetection]                      (带持久 track_id)
 
 跟踪器直接使用 ultralytics BoT-SORT 实现，不依赖 PyTorch 推理。
 ReID 默认关闭，仅靠 IoU + Kalman 滤波，适合嵌入式场景。
@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 import numpy as np
 
@@ -38,7 +37,7 @@ class TrackedDetection:
 
 
 class _DetectionResults:
-    """将 List[Detection2D] 包装为 BYTETracker.update() 期望的接口。
+    """将 list[Detection2D] 包装为 BYTETracker.update() 期望的接口。
 
     BYTETracker/BOTSORT 要求 results 对象支持:
       - results.conf    → (N,) float32 置信度

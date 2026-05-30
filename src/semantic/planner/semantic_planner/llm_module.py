@@ -28,8 +28,9 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
+from core.backend_status import BackendStatus
 from core.module import Module
 from core.registry import register
 from core.stream import In, Out
@@ -104,7 +105,9 @@ class LLMModule(Module, layer=4):
         **kw,
     ):
         super().__init__(**kw)
+        self._backend_status = BackendStatus.configured_as(backend)
         self._backend_name = backend
+        self._canonical_backend_name = backend
         self._model = model
         self._api_key_env = api_key_env
         self._timeout_sec = timeout_sec
@@ -116,6 +119,8 @@ class LLMModule(Module, layer=4):
         self._call_count = 0
         self._total_latency_ms = 0.0
         self._error_count = 0
+        self._backend_lock = threading.RLock()
+        self._in_flight = 0
 
         # Circuit breaker — fail fast under sustained LLM failure
         self._cb_threshold: int = kw.get("circuit_breaker_threshold", 5)
@@ -153,7 +158,27 @@ class LLMModule(Module, layer=4):
 
     def _create_client(self):
         """Factory: instantiate the selected LLM backend."""
-        from .llm_client import LLMConfig, create_llm_client
+        return self._create_client_for(
+            self._backend_name,
+            model=self._model,
+            api_key_env=self._api_key_env,
+            timeout_sec=self._timeout_sec,
+            temperature=self._temperature,
+            base_url=self._base_url,
+        )
+
+    def _create_client_for(
+        self,
+        backend: str,
+        *,
+        model: str = "",
+        api_key_env: str = "",
+        timeout_sec: float | None = None,
+        temperature: float | None = None,
+        base_url: str = "",
+    ):
+        """Instantiate an LLM backend without mutating active state."""
+        from .llm_client import LLMConfig, create_llm_client, resolve_llm_backend
 
         # Resolve defaults per backend
         defaults = {
@@ -164,15 +189,16 @@ class LLMModule(Module, layer=4):
             "qwen":    {"model": "qwen-turbo", "api_key_env": "DASHSCOPE_API_KEY"},
             "mock":    {"model": "mock", "api_key_env": ""},
         }
-        d = defaults.get(self._backend_name, {})
+        canonical = resolve_llm_backend(backend)
+        d = defaults.get(backend, defaults.get(canonical, {}))
 
         config = LLMConfig(
-            backend=self._backend_name,
-            model=self._model or d.get("model", ""),
-            api_key_env=self._api_key_env or d.get("api_key_env", ""),
-            timeout_sec=self._timeout_sec,
-            temperature=self._temperature,
-            base_url=self._base_url or d.get("base_url", ""),
+            backend=backend,
+            model=model or d.get("model", ""),
+            api_key_env=api_key_env or d.get("api_key_env", ""),
+            timeout_sec=timeout_sec if timeout_sec is not None else self._timeout_sec,
+            temperature=temperature if temperature is not None else self._temperature,
+            base_url=base_url or d.get("base_url", ""),
         )
         return create_llm_client(config)
 
@@ -197,6 +223,8 @@ class LLMModule(Module, layer=4):
             # Cooldown elapsed — allow one probe request (half-open)
             logger.info("LLMModule: circuit half-open, probing backend")
 
+        with self._backend_lock:
+            self._in_flight += 1
         future = asyncio.run_coroutine_threadsafe(
             self._async_chat(req), self._loop)
         # Non-blocking: response published from async callback
@@ -258,6 +286,9 @@ class LLMModule(Module, layer=4):
                 model=self._model,
                 error=str(e),
             ))
+        finally:
+            with self._backend_lock:
+                self._in_flight = max(0, self._in_flight - 1)
 
     def stop(self):
         """Shutdown async loop and client."""
@@ -275,6 +306,93 @@ class LLMModule(Module, layer=4):
         self._loop_thread = None
         super().stop()
 
+    def reconfigure_backend(
+        self,
+        category: str,
+        backend: str,
+        **config: Any,
+    ) -> dict[str, Any]:
+        if category not in {"llm", "llm_client"}:
+            return super().reconfigure_backend(category, backend, **config)
+
+        from .llm_client import available_llm_backends, resolve_llm_backend
+
+        available = available_llm_backends()
+        if backend not in available:
+            return {
+                "ok": False,
+                "category": "llm",
+                "requested_backend": backend,
+                "reason": "unknown_backend",
+                "available": available,
+            }
+
+        with self._backend_lock:
+            if self._in_flight > 0:
+                return {
+                    "ok": False,
+                    "category": "llm",
+                    "requested_backend": backend,
+                    "reason": "backend_reconfigure_in_flight",
+                    "in_flight": self._in_flight,
+                }
+            previous_backend = self._backend_name
+            previous_client = self._client
+            previous_status = self._backend_status
+            model = str(config.get("model", self._model) or "")
+            api_key_env = str(config.get("api_key_env", self._api_key_env) or "")
+            base_url = str(config.get("base_url", self._base_url) or "")
+            timeout_sec = float(config.get("timeout_sec", self._timeout_sec))
+            temperature = float(config.get("temperature", self._temperature))
+            try:
+                client = self._create_client_for(
+                    backend,
+                    model=model,
+                    api_key_env=api_key_env,
+                    timeout_sec=timeout_sec,
+                    temperature=temperature,
+                    base_url=base_url,
+                )
+            except ValueError:
+                return {
+                    "ok": False,
+                    "category": "llm",
+                    "requested_backend": backend,
+                    "reason": "unknown_backend",
+                    "available": available_llm_backends(),
+                }
+            except Exception as exc:
+                self._client = previous_client
+                self._backend_status = previous_status
+                return {
+                    "ok": False,
+                    "category": "llm",
+                    "requested_backend": backend,
+                    "reason": "backend_reconfigure_failed",
+                    "error": str(exc),
+                }
+
+            self._backend_name = backend
+            self._canonical_backend_name = resolve_llm_backend(backend)
+            client_config = getattr(client, "config", None)
+            self._model = model or getattr(client_config, "model", self._model)
+            self._api_key_env = api_key_env
+            self._base_url = base_url
+            self._timeout_sec = timeout_sec
+            self._temperature = temperature
+            self._client = client
+            self._backend_status = BackendStatus.configured_as(backend)
+            self._backend_status.use(backend, degraded=False)
+            self._consecutive_failures = 0
+            self._circuit_open_until = 0.0
+            return {
+                "ok": True,
+                "category": "llm",
+                "previous_backend": previous_backend,
+                "backend": backend,
+                "degraded": False,
+            }
+
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
         avg_ms = (self._total_latency_ms / self._call_count
@@ -283,7 +401,8 @@ class LLMModule(Module, layer=4):
         if self._consecutive_failures >= self._cb_threshold:
             circuit_state = "half-open" if time.time() >= self._circuit_open_until else "open"
         info["llm"] = {
-            "backend": self._backend_name,
+            **self._backend_status.as_health_fields(),
+            "canonical_backend": self._canonical_backend_name,
             "model": self._model,
             "calls": self._call_count,
             "errors": self._error_count,

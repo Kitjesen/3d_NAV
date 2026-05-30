@@ -2,8 +2,8 @@
 
 Each test targets a specific Wave 1 change from
 ``C:\\Users\\99563\\.claude\\plans\\streamed-moseying-patterson.md``.
-The goal is to lock in the hard-fail / no-silent-fallback behaviour so later
-refactors can't regress to the old "looks-fine-but-wrong" state.
+The goal is to lock in safe fallback behaviour so later refactors can't regress
+to the old "looks-fine-but-wrong" state.
 """
 from __future__ import annotations
 
@@ -31,23 +31,66 @@ class TestW1LocalPlannerNoFallback(unittest.TestCase):
             "C++ backend was unavailable.",
         )
 
-    def test_nanobind_backend_raises_when_nav_core_missing(self):
-        """setup() must hard-fail (not fall back) when _nav_core.so is absent."""
+    def test_nanobind_backend_falls_back_to_cmu_py_when_nav_core_missing(self):
+        """setup() may fall back to cmu_py, but never to obstacle-blind simple paths."""
         from base_autonomy.modules import local_planner_module as mod
         planner = mod.LocalPlannerModule(backend="nanobind")
-        with mock.patch.object(mod, "try_import_nav_core", return_value=None):
+        fake_path_data = {"paths": object()}
+        with (
+            mock.patch.object(mod, "try_import_nav_core", return_value=None),
+            mock.patch.object(mod, "_load_paths", return_value=fake_path_data),
+        ):
+            planner._setup_nanobind()
+
+        self.assertEqual(planner._backend, "cmu_py")
+        self.assertIs(planner._path_data, fake_path_data)
+        self.assertIsNone(planner._core)
+
+    def test_nanobind_fallback_health_reports_degraded_cmu_py(self):
+        from base_autonomy.modules import local_planner_module as mod
+        planner = mod.LocalPlannerModule(backend="nanobind")
+        fake_path_data = {"paths": object()}
+        with (
+            mock.patch.object(mod, "try_import_nav_core", return_value=None),
+            mock.patch.object(mod, "_load_paths", return_value=fake_path_data),
+        ):
+            planner._setup_nanobind()
+
+        info = planner.health()["local_planner"]
+        self.assertEqual(info["configured_backend"], "nanobind")
+        self.assertEqual(info["backend"], "cmu_py")
+        self.assertTrue(info["degraded"])
+        self.assertIn("_nav_core", info["degraded_reason"])
+        self.assertTrue(info["paths_loaded"])
+        self.assertTrue(info["running"])
+
+    def test_nanobind_fallback_still_fails_when_cmu_py_paths_missing(self):
+        from base_autonomy.modules import local_planner_module as mod
+        planner = mod.LocalPlannerModule(backend="nanobind")
+        with (
+            mock.patch.object(mod, "try_import_nav_core", return_value=None),
+            mock.patch.object(mod, "_load_paths", return_value=None),
+        ):
             with self.assertRaises(RuntimeError) as ctx:
                 planner._setup_nanobind()
-            self.assertIn("_nav_core", str(ctx.exception))
 
-    def test_nanobind_backend_requires_local_planner_symbols(self):
-        """A stale _nav_core extension must not count as production local planning."""
+        self.assertIn("cmu_py", str(ctx.exception))
+        self.assertNotEqual(planner._backend, "simple")
+
+    def test_nanobind_backend_requires_symbols_before_claiming_nanobind(self):
+        """A stale _nav_core extension must be reported as cmu_py, not nanobind."""
         from base_autonomy.modules import local_planner_module as mod
         planner = mod.LocalPlannerModule(backend="nanobind")
-        with mock.patch.object(mod, "try_import_nav_core", return_value=None) as importer:
-            with self.assertRaises(RuntimeError):
-                planner._setup_nanobind()
-            importer.assert_called_once_with(("LocalPlannerParams", "LocalPlannerCore"))
+        fake_path_data = {"paths": object()}
+        with (
+            mock.patch.object(mod, "try_import_nav_core", return_value=None) as importer,
+            mock.patch.object(mod, "_load_paths", return_value=fake_path_data),
+        ):
+            planner._setup_nanobind()
+
+            importer.assert_any_call(("LocalPlannerParams", "LocalPlannerCore"))
+            importer.assert_any_call()
+        self.assertEqual(planner._backend, "cmu_py")
 
 
 # ---------------------------------------------------------------------------

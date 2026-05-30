@@ -45,6 +45,7 @@ __all__ = [
 def add_autonomy_stack(
     bp: Blueprint,
     backend: str = "cmu",
+    terrain_backend: str | None = None,
     path_follower_backend: str = "pure_pursuit",
     local_planner_config: dict[str, Any] | None = None,
     **kw,
@@ -54,12 +55,13 @@ def add_autonomy_stack(
     Args:
         bp: Blueprint to add modules to.
         backend: Backend for TerrainModule and LocalPlannerModule ("cmu" or "simple").
+        terrain_backend: Optional independent TerrainModule backend.
         path_follower_backend: Backend for PathFollowerModule ("pure_pursuit" or "pid").
 
     Returns:
         The same Blueprint (for chaining).
     """
-    bp.add(TerrainModule, backend=backend)
+    bp.add(TerrainModule, backend=terrain_backend or backend)
     bp.add(LocalPlannerModule, backend=backend, **(local_planner_config or {}))
     bp.add(PathFollowerModule, backend=path_follower_backend, **kw)
     return bp

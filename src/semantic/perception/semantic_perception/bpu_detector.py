@@ -13,7 +13,6 @@ Supported model families:
 
 import logging
 import os
-from typing import List, Optional
 
 import numpy as np
 

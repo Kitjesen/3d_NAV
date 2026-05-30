@@ -22,6 +22,7 @@ from typing import Any, Dict
 import numpy as np
 
 from base_autonomy.modules._nav_core_loader import nav_core_build_hint, try_import_nav_core
+from core.backend_status import BackendStatus, require_backend
 from core.module import Module
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
@@ -30,6 +31,9 @@ from core.runtime_interface import TOPICS, topic_default_frame_id
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
+
+
+_AVAILABLE_TERRAIN_BACKENDS = ("nanobind", "native", "simple")
 
 
 @register("terrain", "nanobind", description="C++ terrain analysis via nanobind (zero-copy)")
@@ -56,6 +60,8 @@ class TerrainModule(Module, layer=2):
 
     def __init__(self, backend: str = "nanobind", **kw):
         super().__init__(**kw)
+        require_backend("terrain", backend, _AVAILABLE_TERRAIN_BACKENDS)
+        self._backend_status = BackendStatus.configured_as(backend)
         self._backend = backend
         self._core = None       # nanobind: TerrainAnalysisCore
         self._nodes: dict[str, Any] = {}  # native: NativeModule dict
@@ -126,8 +132,10 @@ class TerrainModule(Module, layer=2):
                     node.setup()
                 except (FileNotFoundError, PermissionError) as e:
                     logger.warning("TerrainModule: %s setup failed: %s", name, e)
+                    self._backend_status.mark_degraded(f"{name} setup failed: {e}")
         except ImportError as e:
             logger.warning("TerrainModule: native backend not available: %s", e)
+            self._backend_status.mark_degraded(f"native backend not available: {e}")
 
     def start(self):
         super().start()
@@ -247,7 +255,7 @@ class TerrainModule(Module, layer=2):
                 "pid": native.get("pid"),
             }
         info["terrain"] = {
-            "backend": self._backend,
+            **self._backend_status.as_health_fields(),
             "has_core": self._core is not None,
             "nodes": node_health,
         }

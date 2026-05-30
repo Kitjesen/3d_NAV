@@ -25,7 +25,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +162,7 @@ class TaskDecomposer(TaskRulesMixin):
     规则匹配数据与 decompose_with_rules() 由 TaskRulesMixin 提供。
     """
 
-    _knowledge_graph = None  # type: Optional[Any]
+    _knowledge_graph = None  # type: Any | None
 
     @classmethod
     def set_knowledge_graph(cls, kg) -> None:

@@ -7,7 +7,6 @@ CLIP编码器 - API适配实现
 import hashlib
 import logging
 import time
-from typing import Dict, List, Optional
 
 import numpy as np
 

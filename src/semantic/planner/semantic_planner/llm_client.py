@@ -22,7 +22,8 @@ import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+
+from core.registry import get, list_plugins, register
 
 logger = logging.getLogger(__name__)
 
@@ -720,22 +721,59 @@ _BACKEND_ALIASES = {
 }
 
 
+@register("llm_client", "openai", description="OpenAI-compatible chat client")
+class _OpenAIClientProvider:
+    @staticmethod
+    def create(config: LLMConfig) -> LLMClientBase:
+        return OpenAIClient(config)
+
+
+@register("llm_client", "claude", description="Anthropic Claude chat client")
+class _ClaudeClientProvider:
+    @staticmethod
+    def create(config: LLMConfig) -> LLMClientBase:
+        return ClaudeClient(config)
+
+
+@register("llm_client", "qwen", description="Alibaba Qwen/DashScope chat client")
+class _QwenClientProvider:
+    @staticmethod
+    def create(config: LLMConfig) -> LLMClientBase:
+        return QwenClient(config)
+
+
+@register("llm_client", "moonshot", description="Moonshot/Kimi OpenAI-compatible chat client")
+class _MoonshotClientProvider:
+    @staticmethod
+    def create(config: LLMConfig) -> LLMClientBase:
+        return MoonshotClient(config)
+
+
+@register("llm_client", "mock", description="Offline deterministic mock LLM client")
+class _MockLLMClientProvider:
+    @staticmethod
+    def create(config: LLMConfig) -> LLMClientBase:
+        return MockLLMClient(config)
+
+
+def resolve_llm_backend(name: str) -> str:
+    """Resolve aliases such as kimi/offline to canonical plugin names."""
+    return _BACKEND_ALIASES.get(name.lower(), name.lower())
+
+
+def available_llm_backends() -> list[str]:
+    """Return canonical plugin names plus public aliases accepted by config."""
+    return sorted(set(_BACKEND_ALIASES) | set(list_plugins("llm_client")))
+
+
 def create_llm_client(config: LLMConfig) -> LLMClientBase:
     """根据配置创建 LLM 客户端。"""
-    backend = _BACKEND_ALIASES.get(config.backend.lower(), config.backend.lower())
-
-    if backend == "openai":
-        return OpenAIClient(config)
-    elif backend == "claude":
-        return ClaudeClient(config)
-    elif backend == "qwen":
-        return QwenClient(config)
-    elif backend == "moonshot":
-        return MoonshotClient(config)
-    elif backend == "mock":
-        return MockLLMClient(config)
-    else:
+    backend = resolve_llm_backend(config.backend)
+    try:
+        provider = get("llm_client", backend)
+        return provider.create(config)
+    except KeyError:
         raise ValueError(
             f"Unknown LLM backend: '{config.backend}'. "
-            f"Supported: {sorted(_BACKEND_ALIASES.keys())}"
-        )
+            f"Supported: {available_llm_backends()}"
+        ) from None

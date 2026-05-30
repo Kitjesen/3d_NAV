@@ -6,7 +6,6 @@ perception_publishers.py — 发布 Mixin
 """
 
 import json
-from typing import List
 
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray

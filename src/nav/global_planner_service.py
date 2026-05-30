@@ -7,15 +7,16 @@ from __future__ import annotations
 
 import logging
 import os
+import pickle
 import time
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Tuple
 
 import numpy as np
 
 from core.runtime_interface import TOPICS, topic_default_frame_id
 from nav.plan_safety import evaluate_backend_path_safety
-from nav.services.nav_services.same_source_map_artifacts import (
+from core.same_source_map_artifacts import (
     validate_saved_map_artifact_dir,
 )
 
@@ -511,7 +512,7 @@ class GlobalPlannerService:
         while queue:
             cx, cy, dist = queue.popleft()
             if dist > max_cells:
-                break
+                continue
 
             if 0 <= cx < w and 0 <= cy < h:
                 if acceptable_cell(cx, cy):
@@ -521,6 +522,8 @@ class GlobalPlannerService:
                     gz = float(goal[2]) if len(goal) > 2 else 0.0
                     return np.array([wx, wy, gz])
 
+            if dist >= max_cells:
+                continue
             for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                 nx, ny = cx + dx, cy + dy
                 if (nx, ny) not in visited:
@@ -924,6 +927,51 @@ class GlobalPlannerService:
     @property
     def last_plan_report(self) -> dict[str, Any]:
         return dict(self._last_plan_report)
+
+    def backend_status(self) -> dict[str, Any]:
+        report = self.last_plan_report
+        selected = str(report.get("selected_planner") or self._planner_name)
+        fallback_reason = str(report.get("fallback_reason") or "")
+        return {
+            "configured_backend": self._planner_name,
+            "backend": selected,
+            "fallback_backend": self._fallback_planner_name,
+            "degraded": bool(fallback_reason) or selected != self._planner_name,
+            "degraded_reason": fallback_reason,
+        }
+
+    def reload_tomogram(self, tomogram: str) -> dict[str, Any]:
+        """Reload the active tomogram/costmap through the planner service boundary."""
+        self._tomogram = str(tomogram or "")
+        self._map_artifact_gate = self._validate_map_artifact_gate()
+        if self._backend is None:
+            return {
+                "ok": False,
+                "backend": self._planner_name,
+                "reason": "planner_backend_not_ready",
+            }
+        load_tomogram = getattr(self._backend, "_load_tomogram", None)
+        if callable(load_tomogram):
+            load_tomogram(self._tomogram)
+            return {"ok": True, "backend": self._planner_name, "mode": "tomogram"}
+        update_map = getattr(self._backend, "update_map", None)
+        if callable(update_map):
+            with open(self._tomogram, "rb") as f:
+                data = pickle.load(f)
+            grid = data.get("grid") if isinstance(data, dict) else None
+            if grid is None:
+                return {
+                    "ok": False,
+                    "backend": self._planner_name,
+                    "reason": "tomogram_has_no_grid",
+                }
+            update_map(grid, resolution=data.get("resolution", 0.2))
+            return {"ok": True, "backend": self._planner_name, "mode": "costmap"}
+        return {
+            "ok": False,
+            "backend": self._planner_name,
+            "reason": "planner_backend_reload_unsupported",
+        }
 
     def _is_pct_planner(self, name: str | None = None) -> bool:
         return (name or self._planner_name).lower() == "pct"

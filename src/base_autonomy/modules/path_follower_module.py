@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from base_autonomy.modules._nav_core_loader import nav_core_build_hint, try_import_nav_core
+from core.backend_status import BackendStatus, require_backend
 from core.module import Module
 from core.msgs.geometry import Twist, Vector3
 from core.msgs.nav import Odometry, Path
@@ -37,6 +38,13 @@ from core.stream import In, Out
 logger = logging.getLogger(__name__)
 
 
+_AVAILABLE_PATH_FOLLOWER_BACKENDS = ("nav_core", "pure_pursuit", "pid")
+
+
+@register("path_follower", "pid",
+          description="Python adaptive pure-pursuit fallback")
+@register("path_follower", "pure_pursuit",
+          description="C++ path follower via NativeModule subprocess")
 @register("path_follower", "nav_core",
           description="C++ compute_control via nanobind (Pure Pursuit + adaptive lookahead)")
 class PathFollowerModule(Module, layer=2):
@@ -66,6 +74,8 @@ class PathFollowerModule(Module, layer=2):
                  turn_speed_min_scale: float = 1.0,
                  **kw):
         super().__init__(**kw)
+        require_backend("path_follower", backend, _AVAILABLE_PATH_FOLLOWER_BACKENDS)
+        self._backend_status = BackendStatus.configured_as(backend)
         self._backend = backend
         self._max_speed = max_speed
         self._lookahead = lookahead
@@ -175,6 +185,7 @@ class PathFollowerModule(Module, layer=2):
                 "PathFollowerModule: _nav_core.so not found - using pid backend.\n"
                 "  To enable C++ path follower:\n  %s", nav_core_build_hint()
             )
+            self._backend_status.use("pid", reason="compatible _nav_core missing")
             self._backend = "pid"
             self._nc = None
             return
@@ -218,6 +229,7 @@ class PathFollowerModule(Module, layer=2):
             logger.info("PathFollowerModule [nav_core]: C++ compute_control loaded")
         except Exception as e:
             logger.warning("PathFollowerModule: _nav_core error: %s - using pid backend", e)
+            self._backend_status.use("pid", reason=f"nav_core init failed: {e}")
             self._backend = "pid"
             self._nc = None
 
@@ -234,9 +246,11 @@ class PathFollowerModule(Module, layer=2):
                 self._node.setup()
             except (FileNotFoundError, PermissionError) as e:
                 logger.warning("PathFollowerModule: setup failed: %s", e)
+                self._backend_status.mark_degraded(f"pure_pursuit setup failed: {e}")
                 self._node = None
         except ImportError as e:
             logger.warning("PathFollowerModule: C++ backend not available: %s", e)
+            self._backend_status.mark_degraded(f"pure_pursuit backend not available: {e}")
 
     # -- Module lifecycle --
 
@@ -552,7 +566,7 @@ class PathFollowerModule(Module, layer=2):
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
         h = {
-            "backend": self._backend,
+            **self._backend_status.as_health_fields(),
             "has_path": bool(self._nc_path) if self._backend == "nav_core"
                         else self._path_points is not None,
             "max_yaw_rate": self._max_yaw_rate,

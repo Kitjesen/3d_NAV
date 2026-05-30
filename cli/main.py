@@ -701,6 +701,64 @@ def _resolve_profile_name(explicit_profile: str | None, args: argparse.Namespace
     return profile_name
 
 
+def _validate_backend_overrides(args: argparse.Namespace) -> None:
+    from core.backend_status import require_backend
+    from core.blueprints.stacks.slam import normalize_slam_profile
+
+    slam_profile = getattr(args, "slam_profile", None)
+    if slam_profile is not None:
+        require_backend(
+            "slam_profile",
+            normalize_slam_profile(slam_profile),
+            (
+                "none",
+                "fastlio2",
+                "localizer",
+                "bridge",
+                "super_lio",
+                "super_lio_relocation",
+            ),
+        )
+
+    exploration_backend = getattr(args, "exploration_backend", None)
+    if exploration_backend is not None:
+        require_backend(
+            "exploration",
+            exploration_backend,
+            ("none", "tare", "tare_external"),
+        )
+
+    if getattr(args, "local_planner_backend", None) is not None:
+        from base_autonomy.modules.local_planner_module import LocalPlannerModule  # noqa: F401
+        from core.registry import list_plugins
+
+        require_backend(
+            "local_planner",
+            args.local_planner_backend,
+            list_plugins("local_planner"),
+        )
+
+    if getattr(args, "path_follower_backend", None) is not None:
+        from base_autonomy.modules.path_follower_module import PathFollowerModule  # noqa: F401
+        from core.registry import list_plugins
+
+        require_backend(
+            "path_follower",
+            args.path_follower_backend,
+            list_plugins("path_follower"),
+        )
+
+    if getattr(args, "terrain_backend", None) is not None:
+        from base_autonomy.modules.terrain_module import TerrainModule  # noqa: F401
+        from core.registry import list_plugins
+
+        require_backend(
+            "terrain",
+            args.terrain_backend,
+            list_plugins("terrain"),
+        )
+
+
 def _resolve_config(
     profile_name: str,
     args: argparse.Namespace,
@@ -741,6 +799,8 @@ def _resolve_config(
     if endpoint_name:
         cfg = _apply_runtime_endpoint_config(profile_name, cfg, endpoint_name)
 
+    _validate_backend_overrides(args)
+
     overrides = {
         "dog_host": args.dog_host,
         "dog_port": args.dog_port,
@@ -748,6 +808,11 @@ def _resolve_config(
         "encoder": args.encoder,
         "llm": args.llm,
         "planner": args.planner,
+        "slam_profile": getattr(args, "slam_profile", None),
+        "exploration_backend": getattr(args, "exploration_backend", None),
+        "local_planner_backend": getattr(args, "local_planner_backend", None),
+        "path_follower_backend": getattr(args, "path_follower_backend", None),
+        "terrain_backend": getattr(args, "terrain_backend", None),
         "tomogram": args.tomogram,
         "plan_safety_policy": args.plan_safety_policy,
         "fallback_planner_name": args.fallback_planner_name,
@@ -756,6 +821,10 @@ def _resolve_config(
     for k, v in overrides.items():
         if v is not None:
             cfg[k] = v
+    if getattr(args, "local_planner_backend", None) is not None:
+        cfg["python_autonomy_backend"] = args.local_planner_backend
+    if getattr(args, "path_follower_backend", None) is not None:
+        cfg["python_path_follower_backend"] = args.path_follower_backend
     if args.no_semantic:
         cfg["enable_semantic"] = False
     if args.no_gateway:
@@ -865,6 +934,11 @@ def main() -> None:
     parser.add_argument("--encoder", default=None)
     parser.add_argument("--llm", default=None)
     parser.add_argument("--planner", default=None)
+    parser.add_argument("--slam-profile", dest="slam_profile", default=None)
+    parser.add_argument("--exploration-backend", default=None)
+    parser.add_argument("--local-planner-backend", default=None)
+    parser.add_argument("--path-follower-backend", default=None)
+    parser.add_argument("--terrain-backend", default=None)
     parser.add_argument("--tomogram", default=None)
     parser.add_argument(
         "--plan-safety-policy",

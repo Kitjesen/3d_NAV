@@ -95,6 +95,44 @@ class TestNavigationModule(unittest.TestCase):
         self.assertEqual(clears, [True])
         self.assertTrue(recovery[-1].is_zero())
 
+    def test_cancel_clears_stale_teleop_resume_state(self):
+        m = self._make()
+        m._paused_for_teleop = True
+        m._pre_teleop_goal = np.array([5.0, 6.0, 0.0])
+        m._pre_teleop_state = "EXECUTING"
+        m._state = "EXECUTING"
+        m._plan = MagicMock()
+
+        m._on_cancel("operator_cancel")
+        m._on_teleop_active(False)
+
+        self.assertIsNone(m._pre_teleop_goal)
+        self.assertIsNone(m._pre_teleop_state)
+        m._plan.assert_not_called()
+
+    def test_stop_clears_stale_teleop_resume_state(self):
+        m = self._make()
+        m._paused_for_teleop = True
+        m._pre_teleop_goal = np.array([5.0, 6.0, 0.0])
+        m._pre_teleop_state = "EXECUTING"
+        m._state = "EXECUTING"
+        m._plan = MagicMock()
+
+        m._on_stop(2)
+        m._on_teleop_active(False)
+
+        self.assertIsNone(m._pre_teleop_goal)
+        self.assertIsNone(m._pre_teleop_state)
+        m._plan.assert_not_called()
+
+    def test_recovery_motion_returns_without_sleeping_in_caller(self):
+        m = self._make()
+        m._state = "EXECUTING"
+
+        with patch("nav.navigation_module.time.sleep", side_effect=AssertionError("blocking sleep")):
+            m._execute_recovery_motion(post_action="none")
+            m._request_recovery_stop()
+
     def test_downsample(self):
         m = self._make(downsample_dist=2.0)
         path = [(0, 0, 0), (0.5, 0, 0), (1, 0, 0), (3, 0, 0), (5, 0, 0)]

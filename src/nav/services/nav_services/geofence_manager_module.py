@@ -14,11 +14,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core import In, Module, Out
 from core.msgs.nav import Odometry
-from nav.services.nav_services.yaml_helpers import load_yaml, save_yaml
+from core.yaml_helpers import load_yaml, save_yaml
 
 
 class GeofenceManagerModule(Module, layer=6):
@@ -32,6 +32,7 @@ class GeofenceManagerModule(Module, layer=6):
     odometry: In[Odometry]
     geofence_command: In[str]
     geofence_alert: Out[dict]
+    stop_cmd: Out[int]
 
     def __init__(self, **config: Any) -> None:
         super().__init__(**config)
@@ -53,6 +54,7 @@ class GeofenceManagerModule(Module, layer=6):
     def _on_odom(self, msg: Odometry) -> None:
         self._robot_x = msg.x
         self._robot_y = msg.y
+        self.check_intrusion()
 
     def _on_command(self, raw: str) -> None:
         """Parse JSON command and dispatch to handler."""
@@ -157,6 +159,7 @@ class GeofenceManagerModule(Module, layer=6):
                 }
                 alerts.append(alert)
                 self.geofence_alert.publish(alert)
+                self.stop_cmd.publish(2)
         return alerts
 
     @staticmethod

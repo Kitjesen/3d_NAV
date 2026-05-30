@@ -14,7 +14,7 @@ import asyncio
 import json
 import logging
 import threading
-from typing import Any, Dict, Optional
+from typing import Any
 
 from core.module import Module
 from core.msgs.nav import Odometry

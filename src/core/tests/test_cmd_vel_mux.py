@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import time
 import unittest
+import math
+import threading
 
 from core.msgs.geometry import Twist, Vector3
 from nav.cmd_vel_mux_module import CmdVelMux
@@ -87,6 +89,30 @@ class TestCmdVelMux(unittest.TestCase):
         self.assertEqual(mux._active, "path_follower")
         self.assertAlmostEqual(published[-1].linear.x, 0.3)
 
+    def test_timed_out_active_source_emits_zero(self):
+        """When the last active source expires, the mux actively sends zero."""
+        mux = self._make_mux(timeout=0.05)
+        published = []
+        mux.driver_cmd_vel.subscribe(lambda t: published.append(t))
+
+        mux._on_source("path_follower", _twist(0.4))
+        time.sleep(0.08)
+        mux._check_timeout()
+
+        self.assertEqual(mux._active, "")
+        self.assertTrue(published[-1].is_zero())
+
+    def test_invalid_twist_is_sanitized_to_zero(self):
+        """NaN/Inf velocity commands must never reach the driver."""
+        mux = self._make_mux()
+        published = []
+        mux.driver_cmd_vel.subscribe(lambda t: published.append(t))
+
+        mux._on_source("path_follower", _twist(float("nan")))
+
+        self.assertTrue(published[-1].is_zero())
+        self.assertTrue(math.isfinite(published[-1].linear.x))
+
     def test_visual_servo_preempts_path_follower(self):
         """Visual servo (80) preempts path follower (40)."""
         mux = self._make_mux()
@@ -146,6 +172,12 @@ class TestCmdVelMux(unittest.TestCase):
 
         self.assertIn("path_follower", sources)
         self.assertIn("teleop", sources)
+
+    def test_shared_source_state_uses_reentrant_lock(self):
+        """Mux shared source and active state must have a reentrant guard."""
+        mux = self._make_mux()
+
+        self.assertIsInstance(mux._lock, type(threading.RLock()))
 
 
 # ---------------------------------------------------------------------------

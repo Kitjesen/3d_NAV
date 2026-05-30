@@ -25,7 +25,6 @@ YOLO-World 开放词汇检测器实现（论文级升级）
 
 import logging
 import time
-from typing import Dict, List, Optional
 
 import numpy as np
 

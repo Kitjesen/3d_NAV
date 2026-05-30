@@ -13,7 +13,7 @@ color_projector.py — RGB-D 帧 → 世界坐标系彩色点云
 
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 
@@ -51,7 +51,7 @@ class ColorProjector:
         depth_mm: np.ndarray,        # (H, W) uint16，单位 mm
         fx: float, fy: float, cx: float, cy: float,
         camera_to_world: np.ndarray, # 4×4 float64 变换矩阵
-        exclude_boxes: Optional[np.ndarray] = None,  # (M, 4) [x1,y1,x2,y2] 动态遮罩
+        exclude_boxes: np.ndarray | None = None,  # (M, 4) [x1,y1,x2,y2] 动态遮罩
         depth_scale: float = 0.001,  # 深度值单位到米的缩放，默认 mm→m
     ) -> int:
         """用一帧 RGB-D 数据更新体素颜色表，返回新增/更新的体素数。

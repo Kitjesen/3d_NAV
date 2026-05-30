@@ -35,7 +35,7 @@ import math
 import os
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
@@ -158,6 +158,7 @@ class NavigationModule(Module, layer=5):
         empty_path_retry_interval_s: float = 3.0,
         empty_path_retry_timeout_s: float = 30.0,
         replan_on_costmap_update: bool | None = None,
+        auto_resume_after_teleop: bool = False,
         **kw,
     ):
         super().__init__(**kw)
@@ -252,9 +253,13 @@ class NavigationModule(Module, layer=5):
         self._preview_planner_lock = threading.Lock()
 
         # Teleop pause/resume
+        self._auto_resume_after_teleop = bool(auto_resume_after_teleop)
         self._paused_for_teleop: bool = False
         self._pre_teleop_goal: np.ndarray | None = None
         self._pre_teleop_state: str | None = None
+        self._recovery_lock = threading.Lock()
+        self._recovery_stop_event = threading.Event()
+        self._recovery_thread: threading.Thread | None = None
 
         # Cooldown for costmap-triggered replanning (3s minimum between replans)
         self._last_costmap_replan_time = 0.0
@@ -676,6 +681,7 @@ class NavigationModule(Module, layer=5):
 
     def _on_stop(self, level: int) -> None:
         if level >= 2:
+            self._clear_teleop_resume_state()
             self._tracker.clear()
             self._publish_motion_stop()
             self._using_external_strategy_path = False
@@ -704,8 +710,14 @@ class NavigationModule(Module, layer=5):
             })
 
     def _publish_motion_stop(self) -> None:
+        self._request_recovery_stop()
         self.clear_path.publish(True)
         self.recovery_cmd_vel.publish(Twist.zero())
+
+    def _clear_teleop_resume_state(self) -> None:
+        self._paused_for_teleop = False
+        self._pre_teleop_goal = None
+        self._pre_teleop_state = None
 
     def _on_teleop_active(self, active: bool) -> None:
         """Pause navigation when teleop engages, resume when released."""
@@ -722,14 +734,24 @@ class NavigationModule(Module, layer=5):
 
         elif not active and self._paused_for_teleop:
             self._paused_for_teleop = False
-            # Resume previous mission if we had one
             if (self._pre_teleop_goal is not None
                     and self._state == MissionState.IDLE):
-                logger.info("NavigationModule: teleop released, resuming navigation")
-                self._goal = self._pre_teleop_goal
-                self._pre_teleop_goal = None
-                self._pre_teleop_state = None
-                self._plan()
+                if self._auto_resume_after_teleop:
+                    logger.info("NavigationModule: teleop released, resuming navigation")
+                    self._goal = self._pre_teleop_goal
+                    self._pre_teleop_goal = None
+                    self._pre_teleop_state = None
+                    self._plan()
+                else:
+                    logger.info(
+                        "NavigationModule: teleop released, explicit resume required"
+                    )
+                    self.adapter_status.publish({
+                        "event": "teleop_release_resume_required",
+                        "ts": time.time(),
+                    })
+                    self._pre_teleop_goal = None
+                    self._pre_teleop_state = None
             else:
                 logger.info("NavigationModule: teleop released, no mission to resume")
                 self._pre_teleop_goal = None
@@ -782,6 +804,7 @@ class NavigationModule(Module, layer=5):
         self._patrol_index = 0
         self._goal = None
         self._goal_frame_id = None
+        self._clear_teleop_resume_state()
         self._active_path_terminal_goal = None
         self._using_external_strategy_path = False
         self._active_external_strategy_path = []
@@ -1200,33 +1223,11 @@ class NavigationModule(Module, layer=5):
         elif status.event == EV_STUCK:
             if self._replan_count < self._max_replan:
                 self._replan_count += 1
-                # Try backup motion before replanning (back up briefly, then rotate)
-                self._execute_recovery_motion()
                 if self._using_external_strategy_path:
-                    self._tracker.pause()
-                    self._republish_external_strategy_path()
-                    logger.warning(
-                        "Stuck detected, recovery motion; retaining external "
-                        "strategy path (%d/%d)",
-                        self._replan_count,
-                        self._max_replan,
-                    )
-                    self.adapter_status.publish({
-                        "event": "external_strategy_path_stuck_recovery",
-                        "recovery_count": self._replan_count,
-                        "max_recovery_count": self._max_replan,
-                        "remaining_waypoints": max(
-                            0,
-                            self._tracker.path_length - self._tracker.wp_index,
-                        ),
-                        "ts": time.time(),
-                    })
-                    return
-                logger.warning(
-                    "Stuck detected, recovery motion + replan (%d/%d)",
-                    self._replan_count, self._max_replan,
-                )
-                self._plan()
+                    self._execute_recovery_motion(post_action="external_strategy")
+                else:
+                    self._execute_recovery_motion(post_action="replan")
+                return
             else:
                 self._failure_reason = "stuck after max replans"
                 self._set_state(MissionState.STUCK)
@@ -1298,7 +1299,25 @@ class NavigationModule(Module, layer=5):
         "forward_speed": 0.0, "forward_duration": 0.0,
     }
 
-    def _execute_recovery_motion(self) -> None:
+    def _request_recovery_stop(self, join_timeout: float = 0.2) -> None:
+        with self._recovery_lock:
+            self._recovery_stop_event.set()
+            thread = self._recovery_thread
+
+        if (
+            thread is not None
+            and thread.is_alive()
+            and thread is not threading.current_thread()
+        ):
+            thread.join(timeout=join_timeout)
+
+        with self._recovery_lock:
+            if self._recovery_thread is thread and (
+                thread is None or not thread.is_alive()
+            ):
+                self._recovery_thread = None
+
+    def _execute_recovery_motion(self, post_action: str = "replan") -> bool:
         """W2-8: context-aware stuck recovery.
 
         Picks a recovery strategy based on the latest terrain class reported
@@ -1319,39 +1338,105 @@ class NavigationModule(Module, layer=5):
         )
         self.clear_path.publish(True)
 
+        self._request_recovery_stop()
+        stop_event = threading.Event()
+        thread = threading.Thread(
+            target=self._run_recovery_motion,
+            args=(strat, klass, post_action, stop_event),
+            name="navigation-recovery-motion",
+            daemon=True,
+        )
+        with self._recovery_lock:
+            self._recovery_stop_event = stop_event
+            self._recovery_thread = thread
+        thread.start()
+        return True
+
+    def _run_recovery_motion(
+        self,
+        strat: dict[str, Any],
+        reason: str,
+        post_action: str,
+        stop_event: threading.Event,
+    ) -> None:
         step_hz = 10
 
         def _drive(linear_x: float, angular_z: float, duration: float) -> bool:
             """Publish a fixed cmd_vel for `duration` seconds at step_hz."""
             if duration <= 0.0:
                 return True
-            steps = int(duration * step_hz)
+            steps = max(1, int(math.ceil(duration * step_hz)))
             for _ in range(steps):
-                if self._state != MissionState.EXECUTING:
+                if stop_event.is_set() or self._state != MissionState.EXECUTING:
                     return False
                 self.recovery_cmd_vel.publish(Twist(
                     linear=Vector3(linear_x, 0.0, 0.0),
                     angular=Vector3(0.0, 0.0, angular_z),
                 ))
-                time.sleep(1.0 / step_hz)
+                if stop_event.wait(1.0 / step_hz):
+                    return False
             return True
+
+        def _finish(completed: bool) -> None:
+            self.recovery_cmd_vel.publish(Twist.zero())
+            with self._recovery_lock:
+                if self._recovery_thread is threading.current_thread():
+                    self._recovery_thread = None
+            if completed and not stop_event.is_set():
+                self._finish_recovery_motion(post_action, reason)
 
         # Backup phase
         if not _drive(strat["backup_speed"], 0.0, strat["backup_duration"]):
+            _finish(False)
             return
 
         # Rotate phase — alternate direction per replan to avoid dead-lock
         if strat["rotate_duration"] > 0.0 and strat["rotate_speed"] != 0.0:
             direction = 1.0 if self._replan_count % 2 == 1 else -1.0
             if not _drive(0.0, strat["rotate_speed"] * direction, strat["rotate_duration"]):
+                _finish(False)
                 return
 
         # Forward nudge phase (slip/grip terrain)
         if not _drive(strat["forward_speed"], 0.0, strat["forward_duration"]):
+            _finish(False)
             return
 
         # Stop
-        self.recovery_cmd_vel.publish(Twist.zero())
+        _finish(True)
+
+    def _finish_recovery_motion(self, post_action: str, reason: str) -> None:
+        if post_action == "none":
+            return
+        if self._state != MissionState.EXECUTING:
+            return
+        if post_action == "external_strategy":
+            self._tracker.pause()
+            self._republish_external_strategy_path()
+            logger.warning(
+                "Stuck detected, recovery motion; retaining external "
+                "strategy path (%d/%d)",
+                self._replan_count,
+                self._max_replan,
+            )
+            self.adapter_status.publish({
+                "event": "external_strategy_path_stuck_recovery",
+                "recovery_count": self._replan_count,
+                "max_recovery_count": self._max_replan,
+                "remaining_waypoints": max(
+                    0,
+                    self._tracker.path_length - self._tracker.wp_index,
+                ),
+                "reason": reason,
+                "ts": time.time(),
+            })
+            return
+        if post_action == "replan":
+            logger.warning(
+                "Stuck detected, recovery motion + replan (%d/%d)",
+                self._replan_count, self._max_replan,
+            )
+            self._plan()
 
     # ── Planning ──────────────────────────────────────────────────────────
 
@@ -2151,14 +2236,48 @@ class NavigationModule(Module, layer=5):
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     def stop(self) -> None:
+        self._request_recovery_stop()
         if self._ros2_node is not None:
             self._ros2_node.destroy_node()
             self._ros2_node = None
         self._preview_executor.shutdown(wait=False, cancel_futures=True)
         super().stop()
 
+    def planner_backend_status(self) -> dict[str, Any]:
+        backend_status = getattr(self._planner_svc, "backend_status", None)
+        if callable(backend_status):
+            return backend_status()
+        report = self._planner_last_plan_report(self._planner_svc)
+        selected = str(
+            report.get("selected_planner")
+            or getattr(self._planner_svc, "_planner_name", "unknown")
+        )
+        configured = str(getattr(self._planner_svc, "_planner_name", selected))
+        fallback_reason = str(report.get("fallback_reason") or "")
+        return {
+            "configured_backend": configured,
+            "backend": selected,
+            "fallback_backend": getattr(
+                self._planner_svc,
+                "_fallback_planner_name",
+                "",
+            ),
+            "degraded": bool(fallback_reason) or selected != configured,
+            "degraded_reason": fallback_reason,
+        }
+
+    def reload_planner_tomogram(self, tomogram: str) -> dict[str, Any]:
+        reload_tomogram = getattr(self._planner_svc, "reload_tomogram", None)
+        if not callable(reload_tomogram):
+            return {
+                "ok": False,
+                "reason": "planner_reload_unsupported",
+            }
+        return reload_tomogram(tomogram)
+
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
+        info["planner_backend"] = self.planner_backend_status()
         info["navigation"] = {
             "planner": getattr(self._planner_svc, "_planner_name", None),
             "plan_safety_policy": getattr(

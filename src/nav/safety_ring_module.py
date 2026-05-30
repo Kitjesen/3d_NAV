@@ -18,9 +18,10 @@ from __future__ import annotations
 import json
 import logging
 import math
+import threading
 import time
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Tuple
 
 import numpy as np
 
@@ -93,8 +94,10 @@ class SafetyRingModule(Module, layer=0):
         self._progress_window = progress_window_sec
 
         # Ring 1 state
-        self._last_odom_time = time.time()
+        self._last_odom_time = 0.0
         self._last_cmdvel_time = time.time()
+        self._invalid_odom = False
+        self._invalid_cmd_vel = False
         self._safety_level = SafetyLevel.SAFE
 
         # Ring 2 state
@@ -131,6 +134,32 @@ class SafetyRingModule(Module, layer=0):
         self._latest_mission: dict | None = None
         self._instruction = ""
 
+        self._monitor_stop = threading.Event()
+        self._monitor_thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        super().start()
+        self._monitor_stop.clear()
+        if self._monitor_thread is None or not self._monitor_thread.is_alive():
+            self._monitor_thread = threading.Thread(
+                target=self._monitor_loop,
+                name="safety_ring_monitor",
+                daemon=True,
+            )
+            self._monitor_thread.start()
+
+    def stop(self) -> None:
+        self._monitor_stop.set()
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            self._monitor_thread.join(timeout=1.0)
+        self._monitor_thread = None
+        super().stop()
+
+    def _monitor_loop(self) -> None:
+        interval = max(0.02, min(self._odom_timeout, self._cmdvel_timeout) / 2.0)
+        while not self._monitor_stop.wait(interval):
+            self._publish_safety()
+
     def _has_motion_intent(self) -> bool:
         mission = self._latest_mission or {}
         state = str(mission.get("state", "")).upper()
@@ -148,6 +177,7 @@ class SafetyRingModule(Module, layer=0):
         self.mission_status.subscribe(self._on_mission)
         self.localization_status.subscribe(self._on_localization_status)
         self.gnss_fusion_health.subscribe(self._on_gnss_fusion_health)
+        self._publish_safety()
 
     # -- Ring 1: Reflex Safety -----------------------------------------------
 
@@ -157,6 +187,8 @@ class SafetyRingModule(Module, layer=0):
         odom_alive = (now - self._last_odom_time) < self._odom_timeout
         cmd_alive = (now - self._last_cmdvel_time) < self._cmdvel_timeout
 
+        if self._invalid_odom or self._invalid_cmd_vel:
+            return SafetyLevel.STOP
         if not odom_alive:
             self._path_points = None
             self._goal_xy = None
@@ -171,14 +203,13 @@ class SafetyRingModule(Module, layer=0):
 
     def _publish_safety(self):
         level = self._check_links()
-        if level != self._safety_level:
-            self._safety_level = level
-            if level == SafetyLevel.STOP:
-                self.stop_cmd.publish(2)
-            elif level == SafetyLevel.WARN:
-                self.stop_cmd.publish(1)
-            else:
-                self.stop_cmd.publish(0)
+        self._safety_level = level
+        if level == SafetyLevel.STOP:
+            self.stop_cmd.publish(2)
+        elif level == SafetyLevel.WARN:
+            self.stop_cmd.publish(1)
+        else:
+            self.stop_cmd.publish(0)
 
         self.safety_state.publish(SafetyState(
             level=level.value,
@@ -279,10 +310,19 @@ class SafetyRingModule(Module, layer=0):
     def _on_odom(self, odom: Odometry):
         self._last_odom_time = time.time()
         x, y = odom.x, odom.y
+        self._invalid_odom = not all(
+            math.isfinite(float(v))
+            for v in (odom.x, odom.y, odom.yaw, odom.vx, odom.vy)
+        )
         if math.isfinite(x) and math.isfinite(y):
             self._robot_xy = np.array([x, y])
-        self._robot_yaw = odom.yaw
-        self._actual_speed = math.hypot(odom.vx, odom.vy)
+        if math.isfinite(odom.yaw):
+            self._robot_yaw = odom.yaw
+        self._actual_speed = (
+            math.hypot(odom.vx, odom.vy)
+            if math.isfinite(odom.vx) and math.isfinite(odom.vy)
+            else float("inf")
+        )
 
         # Tick all three rings
         self._publish_safety()
@@ -306,7 +346,17 @@ class SafetyRingModule(Module, layer=0):
 
     def _on_cmdvel(self, msg: Twist):
         self._last_cmdvel_time = time.time()
-        self._cmd_speed = math.hypot(msg.linear.x, msg.linear.y)
+        values = (
+            msg.linear.x, msg.linear.y, msg.linear.z,
+            msg.angular.x, msg.angular.y, msg.angular.z,
+        )
+        self._invalid_cmd_vel = not all(math.isfinite(float(v)) for v in values)
+        self._cmd_speed = (
+            math.hypot(msg.linear.x, msg.linear.y)
+            if not self._invalid_cmd_vel
+            else float("inf")
+        )
+        self._publish_safety()
 
     def _on_mission(self, status: dict):
         self._latest_mission = status

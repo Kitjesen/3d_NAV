@@ -6,7 +6,6 @@ GroundingDINO 开放词汇检测器实现。
 
 import logging
 import os
-from typing import List, Optional
 
 import numpy as np
 

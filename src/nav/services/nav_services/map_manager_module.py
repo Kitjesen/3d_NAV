@@ -29,7 +29,7 @@ import pickle
 import shutil
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
@@ -472,8 +472,8 @@ class MapManagerModule(Module, layer=6):
                 return "localizer"
             if services.get("slam") in ("running", "active"):
                 return "slam"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("_resolve_slam_profile: service_manager lookup failed: %s", e)
         return "unknown"
 
     @staticmethod
@@ -637,7 +637,8 @@ class MapManagerModule(Module, layer=6):
                             return int(parts[1])
                     if upper.startswith("DATA"):
                         break
-        except Exception:
+        except Exception as e:
+            logger.debug("_pcd_point_count failed for %s: %s", path, e)
             return 0
         return 0
 
@@ -658,7 +659,8 @@ class MapManagerModule(Module, layer=6):
         try:
             with path.open("rb") as fh:
                 return cls._tomogram_shape_from_data(pickle.load(fh))
-        except Exception:
+        except Exception as e:
+            logger.debug("_load_tomogram_shape failed for %s: %s", path, e)
             return []
 
     @staticmethod
@@ -666,7 +668,8 @@ class MapManagerModule(Module, layer=6):
         try:
             data = np.load(str(path))
             return [int(value) for value in np.asarray(data["grid"]).shape]
-        except Exception:
+        except Exception as e:
+            logger.debug("_load_occupancy_shape failed for %s: %s", path, e)
             return []
 
     def _build_tomogram(self, name: str) -> dict[str, Any]:
@@ -1073,8 +1076,8 @@ class MapManagerModule(Module, layer=6):
             pts = np.asarray(cloud.points, dtype=np.float32)
             if pts.shape[0] > 0:
                 return pts
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("_load_pcd_points: open3d failed for %s: %s", pcd_path, e)
 
         # Attempt 2: numpy ASCII fallback for plain-text PCD files
         try:
@@ -1099,8 +1102,8 @@ class MapManagerModule(Module, layer=6):
                             continue
             if pts_list:
                 return np.array(pts_list, dtype=np.float32)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("_load_pcd_points: numpy ASCII fallback failed for %s: %s", pcd_path, e)
 
         return None
 

@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from core.backend_status import BackendStatus
 from core.module import Module, skill
 from core.msgs.nav import Odometry
 from core.msgs.semantic import SceneGraph
@@ -61,6 +62,7 @@ class VectorMemoryModule(Module, layer=3):
         **kw,
     ):
         super().__init__(**kw)
+        self._encoder_status = BackendStatus.configured_as(kw.get("encoder_backend", "auto"))
         self._persist_dir = persist_dir or _DEFAULT_PERSIST_DIR
         self._collection_name = collection_name
         self._store_interval = store_interval
@@ -109,6 +111,7 @@ class VectorMemoryModule(Module, layer=3):
             if test_result is not None and len(test_result) > 0:
                 self._encoder = candidate
                 self._encoder_type = "mobileclip"
+                self._encoder_status.use("mobileclip", degraded=False)
                 self._embedding_dim = int(np.array(test_result[0]).size)
                 logger.info("VectorMemoryModule: MobileCLIP text encoder ready")
                 return
@@ -129,6 +132,7 @@ class VectorMemoryModule(Module, layer=3):
             if test_result is not None and len(test_result) > 0:
                 self._encoder = candidate
                 self._encoder_type = "clip"
+                self._encoder_status.use("clip", degraded=False)
                 self._embedding_dim = int(np.array(test_result[0]).size)
                 logger.info("VectorMemoryModule: CLIP encoder ready")
                 return
@@ -143,6 +147,7 @@ class VectorMemoryModule(Module, layer=3):
             from sentence_transformers import SentenceTransformer
             self._st_model = SentenceTransformer("all-MiniLM-L6-v2")
             self._encoder_type = "sentence_transformers"
+            self._encoder_status.use("sentence_transformers", degraded=False)
             self._embedding_dim = 384
             logger.info("VectorMemoryModule: sentence-transformers encoder ready (all-MiniLM-L6-v2, 384-dim)")
             return
@@ -154,6 +159,11 @@ class VectorMemoryModule(Module, layer=3):
         # No semantic encoder available: keep the module usable with a stable
         # lexical fallback, while reporting that semantic embeddings are degraded.
         self._encoder_type = "lexical_hash"
+        self._encoder_status.use(
+            "lexical_hash",
+            reason="no semantic text encoder available",
+            degraded=True,
+        )
         self._embedding_dim = 512
         logger.warning(
             "VectorMemoryModule: no semantic text encoder available; using "
@@ -457,6 +467,20 @@ class VectorMemoryModule(Module, layer=3):
             "sentence_transformers",
         )
 
+    def _encoder_backend_health(self) -> dict[str, Any]:
+        fields = self._encoder_status.as_health_fields()
+        if self._encoder_type == "none" or fields["backend"] == self._encoder_type:
+            return fields
+        degraded = self._encoder_type == "lexical_hash"
+        return {
+            "configured_backend": fields["configured_backend"],
+            "backend": self._encoder_type,
+            "degraded": degraded,
+            "degraded_reason": (
+                "no semantic text encoder available" if degraded else ""
+            ),
+        }
+
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
         entry_count = self._entry_count()
@@ -467,6 +491,7 @@ class VectorMemoryModule(Module, layer=3):
         info["semantic_encoder_ready"] = self._semantic_encoder_ready()
         info["degraded"] = self._encoder_type == "lexical_hash"
         info["encoder_type"] = self._encoder_type
+        info["encoder_backend"] = self._encoder_backend_health()
         info["embedding_dim"] = self._embedding_dim
         info["persist_dir"] = self._persist_dir
         return info
@@ -482,6 +507,7 @@ class VectorMemoryModule(Module, layer=3):
             "persist_dir": self._persist_dir,
             "max_np_entries": self._max_np_entries,
             "encoder_type": self._encoder_type,
+            "encoder_backend": self._encoder_backend_health(),
             "semantic_encoder_ready": self._semantic_encoder_ready(),
             "degraded": self._encoder_type == "lexical_hash",
             "embedding_dim": self._embedding_dim,

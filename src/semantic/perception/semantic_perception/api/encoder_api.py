@@ -5,7 +5,7 @@ Semantic Perception API - 编码器接口
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Union
+from typing import Union
 
 import numpy as np
 

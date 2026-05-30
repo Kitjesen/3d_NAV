@@ -85,6 +85,9 @@ def test_profile_graph_snapshot_locks_safety_gateway_and_mux_edges():
         assert "SafetyRingModule.stop_cmd->NavigationModule.stop_signal" in wires
         assert f"GatewayModule.stop_cmd->{driver}.stop_signal" in wires
         assert "GatewayModule.stop_cmd->NavigationModule.stop_signal" in wires
+        if "GeofenceManagerModule" in modules:
+            assert f"GeofenceManagerModule.stop_cmd->{driver}.stop_signal" in wires
+            assert "GeofenceManagerModule.stop_cmd->NavigationModule.stop_signal" in wires
         assert "GatewayModule.cmd_vel->CmdVelMux.teleop_cmd_vel" in wires
         assert "NavigationModule.mission_status->GatewayModule.mission_status" in wires
         assert "NavigationModule.mission_status->MCPServerModule.mission_status" in wires
@@ -877,3 +880,26 @@ def test_navigation_forwards_path_follower_drive_mode():
     )
 
     assert follower_entry.config["two_way_drive"] is False
+
+
+def test_navigation_forwards_independent_autonomy_backends():
+    bp = navigation(
+        "astar",
+        "",
+        False,
+        terrain_backend="simple",
+        local_planner_backend="cmu_py",
+        path_follower_backend="pid",
+    )
+
+    terrain_entry = next(entry for entry in bp._entries if entry.name == "TerrainModule")
+    local_planner_entry = next(
+        entry for entry in bp._entries if entry.name == "LocalPlannerModule"
+    )
+    follower_entry = next(
+        entry for entry in bp._entries if entry.name == "PathFollowerModule"
+    )
+
+    assert terrain_entry.config["backend"] == "simple"
+    assert local_planner_entry.config["backend"] == "cmu_py"
+    assert follower_entry.config["backend"] == "pid"

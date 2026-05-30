@@ -35,7 +35,7 @@ import base64
 import io
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 

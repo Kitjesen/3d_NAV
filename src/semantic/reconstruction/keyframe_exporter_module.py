@@ -33,7 +33,7 @@ import math
 import threading
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -89,14 +89,14 @@ class ReconKeyframeExporterModule(Module, layer=3):
         self._body_to_cam: np.ndarray = _load_cam_body_extrinsic()
 
         # Latest buffers (latest-wins)
-        self._latest_color:  Optional[Image]            = None
-        self._latest_depth:  Optional[Image]            = None
-        self._latest_odom:   Optional[Odometry]         = None
-        self._intrinsics:    Optional[CameraIntrinsics] = None
+        self._latest_color:  Image | None            = None
+        self._latest_depth:  Image | None            = None
+        self._latest_odom:   Odometry | None         = None
+        self._intrinsics:    CameraIntrinsics | None = None
         self._buf_lock = threading.Lock()
 
         # Keyframe selection state
-        self._last_kf_pos:   Optional[np.ndarray] = None  # [x,y,z]
+        self._last_kf_pos:   np.ndarray | None = None  # [x,y,z]
         self._last_kf_yaw:   float = 0.0
         self._last_kf_time:  float = 0.0
         self._frame_counter: int   = 0
@@ -108,7 +108,7 @@ class ReconKeyframeExporterModule(Module, layer=3):
         self._upload_errors:  int = 0
 
         self._recon_export_active = threading.Event()
-        self._upload_thread: Optional[threading.Thread] = None
+        self._upload_thread: threading.Thread | None = None
 
     # ── Module lifecycle ────────────────────────────────────────────────────
 
@@ -195,7 +195,7 @@ class ReconKeyframeExporterModule(Module, layer=3):
         depth: Image,
         odom: Odometry,
         ts: float,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Encode one keyframe into a serialisable dict."""
         try:
             # Encode colour as JPEG
@@ -347,7 +347,7 @@ def _angle_diff(a: float, b: float) -> float:
     return d
 
 
-def _encode_jpeg(img: Image, quality: int = 85) -> Optional[bytes]:
+def _encode_jpeg(img: Image, quality: int = 85) -> bytes | None:
     """Encode an Image to JPEG bytes. Returns None on failure."""
     try:
         import cv2  # type: ignore
@@ -368,7 +368,7 @@ def _encode_jpeg(img: Image, quality: int = 85) -> Optional[bytes]:
         return None
 
 
-def _encode_depth_png(depth_img: Image, max_depth_m: float = 6.0) -> Optional[bytes]:
+def _encode_depth_png(depth_img: Image, max_depth_m: float = 6.0) -> bytes | None:
     """Encode depth image to 16-bit PNG bytes (values in mm). Returns None on failure."""
     try:
         import cv2  # type: ignore

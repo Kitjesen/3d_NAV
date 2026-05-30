@@ -187,16 +187,24 @@ def navigation(
         if enable_native:
             add_autonomy_stack(
                 bp,
-                backend="cmu",
-                path_follower_backend="nav_core",
+                backend=config.get("local_planner_backend", "cmu"),
+                terrain_backend=config.get("terrain_backend"),
+                path_follower_backend=config.get("path_follower_backend", "nav_core"),
                 local_planner_config=local_planner_config,
                 **path_follower_config,
             )
         else:
             add_autonomy_stack(
                 bp,
-                backend=config.get("python_autonomy_backend", "nanobind"),
-                path_follower_backend=config.get("python_path_follower_backend", "nav_core"),
+                backend=config.get(
+                    "local_planner_backend",
+                    config.get("python_autonomy_backend", "nanobind"),
+                ),
+                terrain_backend=config.get("terrain_backend"),
+                path_follower_backend=config.get(
+                    "path_follower_backend",
+                    config.get("python_path_follower_backend", "nav_core"),
+                ),
                 local_planner_config=local_planner_config,
                 **path_follower_config,
             )

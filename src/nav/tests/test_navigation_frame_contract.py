@@ -6,7 +6,8 @@ import numpy as np
 
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 from core.msgs.nav import Odometry
-from nav.navigation_module import NavigationModule
+from nav.navigation_module import MissionState, NavigationModule
+from nav.waypoint_tracker import EV_STUCK, TrackerStatus
 
 
 class _RecordingPlanner:
@@ -180,6 +181,15 @@ class _FailuresThenPathPlanner(_EmptyThenPathPlanner):
             "reached_goal": True,
         }
         return [start.copy(), goal.copy()], 0.0
+
+
+class _StuckTracker:
+    current_waypoint = None
+    wp_index = 0
+    path_length = 1
+
+    def update(self, robot_pos: np.ndarray, robot_yaw: float | None = None):
+        return TrackerStatus(0, 1, event=EV_STUCK)
 
 
 def test_navigation_stop_releases_lifecycle_resources() -> None:
@@ -895,6 +905,49 @@ def test_navigation_cancel_is_idempotent_motion_cleanup_while_idle():
     assert clears == [True]
     assert zeros[-1].linear.x == 0.0
     assert zeros[-1].angular.z == 0.0
+
+
+def test_teleop_release_does_not_auto_resume_without_explicit_resume(monkeypatch):
+    nav = NavigationModule(enable_ros2_bridge=False, auto_resume_after_teleop=False)
+    nav._state = MissionState.EXECUTING
+    nav._goal = np.array([1.0, 2.0, 0.0], dtype=float)
+    planned: list[bool] = []
+    events: list[dict] = []
+    nav.adapter_status._add_callback(events.append)
+    monkeypatch.setattr(nav, "_plan", lambda: planned.append(True))
+
+    nav._on_teleop_active(True)
+    nav._on_teleop_active(False)
+
+    assert planned == []
+    assert nav._state == MissionState.IDLE
+    assert nav._pre_teleop_goal is None
+    assert events[-1]["event"] == "teleop_release_resume_required"
+
+
+def test_external_strategy_stuck_recovery_defers_post_action_until_thread_done(monkeypatch):
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._state = MissionState.EXECUTING
+    nav._using_external_strategy_path = True
+    nav._tracker = _StuckTracker()
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        nav,
+        "_execute_recovery_motion",
+        lambda post_action="replan": calls.append(("execute", post_action)) or True,
+    )
+    monkeypatch.setattr(
+        nav,
+        "_finish_recovery_motion",
+        lambda post_action, reason: calls.append(("finish", post_action)),
+    )
+
+    nav._on_odom(Odometry(
+        pose=Pose(position=Vector3(0.0, 0.0, 0.0), orientation=Quaternion()),
+        frame_id="map",
+    ))
+
+    assert calls == [("execute", "external_strategy")]
 
 
 def test_navigation_preview_rejects_non_map_odometry_frame():

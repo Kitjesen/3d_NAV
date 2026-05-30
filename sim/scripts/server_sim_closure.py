@@ -6,12 +6,20 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from core.algorithm_gates import DIMOS_BENCHMARK_REQUIRED_GATES
+from core.algorithm_gates import INSPECTION_MVP_REQUIRED_GATES
+
 MID360_PATTERN_REL = "sim/assets/livox/mid360.npy"
 MID360_PATTERN_SHA256 = "448821576a658673e8f7929992c8c0d687eb052657d7b584d038729a83da1bfb"
 LIVE_NAV_MAP_TOPIC = "/nav/map_cloud"
@@ -2626,26 +2634,9 @@ ALGORITHM_PRESETS: dict[str, tuple[str, ...]] = {
         "large_loop_closure",
     ),
     "inspection_mvp": (
-        "gateway_runtime_acceptance",
-        "routecheck_preflight",
-        "large_terrain",
-        "fastlio2_dynamic_inspection",
-        "dynamic_obstacle_local_planner",
-        "moving_obstacle_sweep",
+        *INSPECTION_MVP_REQUIRED_GATES,
     ),
-    "dimos_benchmark": (
-        "gateway_runtime_acceptance",
-        "routecheck_preflight",
-        "large_terrain",
-        "native_pct_mujoco",
-        "dynamic_obstacle_local_planner",
-        "fastlio2_dynamic_inspection",
-        "moving_obstacle_sweep",
-        "large_loop_closure",
-        "gazebo_runtime",
-        "saved_map_relocalize",
-        "pct_saved_map_navigation",
-    ),
+    "dimos_benchmark": (*DIMOS_BENCHMARK_REQUIRED_GATES,),
     "full_algorithm": tuple(spec.name for spec in GATES),
 }
 
@@ -2709,6 +2700,10 @@ ALGORITHM_VALIDATION_FLOW: tuple[dict[str, Any], ...] = (
 
 
 def _ordered_gate_names(names: set[str]) -> list[str]:
+    if names == set(DIMOS_BENCHMARK_REQUIRED_GATES):
+        return list(DIMOS_BENCHMARK_REQUIRED_GATES)
+    if names == set(INSPECTION_MVP_REQUIRED_GATES):
+        return list(INSPECTION_MVP_REQUIRED_GATES)
     ordered = [spec.name for spec in GATES if spec.name in names]
     ordered_set = set(ordered)
     ordered.extend(sorted(names - ordered_set))

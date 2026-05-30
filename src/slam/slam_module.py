@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
+from core.backend_status import BackendStatus
 from core.module import Module
 from core.registry import register
 from core.stream import Out
@@ -51,6 +52,7 @@ class SLAMModule(Module, layer=1):
     def __init__(self, backend: str = "fastlio2", **kw):
         super().__init__(**kw)
         self._backend = backend
+        self._backend_status = BackendStatus.configured_as(backend)
         self._node = None
         self._lio_node = None
         self._pgo_node = None
@@ -80,6 +82,7 @@ class SLAMModule(Module, layer=1):
             self._pgo_node.setup()
         except (ImportError, FileNotFoundError, PermissionError) as e:
             logger.warning("SLAMModule [fastlio2]: not available: %s", e)
+            self._backend_status.mark_degraded(str(e))
 
     def _setup_pointlio(self):
         """Point-LIO SLAM.  Expects /lidar/scan from LidarModule."""
@@ -91,6 +94,7 @@ class SLAMModule(Module, layer=1):
             self._node.setup()
         except (ImportError, FileNotFoundError, PermissionError) as e:
             logger.warning("SLAMModule [pointlio]: not available: %s", e)
+            self._backend_status.mark_degraded(str(e))
 
     def _setup_genz_icp(self):
         """GenZ-ICP — degeneracy-robust LiDAR odometry (no IMU).
@@ -105,6 +109,7 @@ class SLAMModule(Module, layer=1):
             self._node.setup()
         except (ImportError, FileNotFoundError, PermissionError) as e:
             logger.warning("SLAMModule [genz]: not available: %s", e)
+            self._backend_status.mark_degraded(str(e))
 
     def _setup_localizer(self):
         """Fast-LIO2 (odometry) + ICP localizer (map matching).  Expects /lidar/scan from LidarModule."""
@@ -118,6 +123,7 @@ class SLAMModule(Module, layer=1):
             self._node.setup()
         except (ImportError, FileNotFoundError, PermissionError) as e:
             logger.warning("SLAMModule [localizer]: not available: %s", e)
+            self._backend_status.mark_degraded(str(e))
 
     def start(self):
         super().start()
@@ -159,7 +165,7 @@ class SLAMModule(Module, layer=1):
                 "restarts": native.get("restarts", 0),
             }
         info["slam"] = {
-            "backend": self._backend,
+            **self._backend_status.as_health_fields(),
             "node": node_info,
         }
         return info

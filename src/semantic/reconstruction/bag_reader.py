@@ -41,7 +41,7 @@ import math
 import struct
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -68,10 +68,10 @@ def read_rgb_d_bag(
     bag_path: str | Path,
     output_dir: str | Path,
     *,
-    color_topic:  Optional[str] = None,
-    depth_topic:  Optional[str] = None,
-    info_topic:   Optional[str] = None,
-    odom_topic:   Optional[str] = None,
+    color_topic:  str | None = None,
+    depth_topic:  str | None = None,
+    info_topic:   str | None = None,
+    odom_topic:   str | None = None,
     keyframe_dist_m:  float = 0.15,
     keyframe_rot_rad: float = 0.17,
     keyframe_time_s:  float = 1.0,
@@ -122,10 +122,10 @@ def read_rgb_d_bag(
         )
 
     # 缓冲最近消息
-    latest_color:  Optional[Any] = None
-    latest_depth:  Optional[Any] = None
-    latest_odom:   Optional[Any] = None
-    intrinsics:    Optional[dict] = None
+    latest_color:  Any | None = None
+    latest_depth:  Any | None = None
+    latest_odom:   Any | None = None
+    intrinsics:    dict | None = None
 
     # 关键帧选择状态
     last_kf_pos  = None
@@ -238,8 +238,8 @@ def read_lidar_bag(
     bag_path: str | Path,
     output_ply: str | Path,
     *,
-    cloud_topic: Optional[str] = None,
-    odom_topic:  Optional[str] = None,
+    cloud_topic: str | None = None,
+    odom_topic:  str | None = None,
     voxel_size:  float = 0.05,
     max_points:  int   = 5_000_000,
 ) -> Path:
@@ -274,7 +274,7 @@ def read_lidar_bag(
     logger.info("bag_reader(lidar): cloud=%s odom=%s", cloud_t, odom_t)
 
     all_points: list[np.ndarray] = []
-    latest_odom: Optional[Any] = None
+    latest_odom: Any | None = None
     odom_map: dict[float, np.ndarray] = {}  # ts → T_body
 
     sub_topics = [t for t in [cloud_t, odom_t] if t]
@@ -335,7 +335,7 @@ class _BagReader:
     def close(self): pass
 
 
-def _open_bag(bag_path: Path) -> Optional[_BagReader]:
+def _open_bag(bag_path: Path) -> _BagReader | None:
     """尝试用 rosbags（首选）或 rosbag2_py 打开 bag，返回读取器。"""
     # 1. 优先用 rosbags（无需 ROS2 环境）
     try:
@@ -504,7 +504,7 @@ def _decode_depth_msg(msg, max_depth_m: float = 6.0) -> np.ndarray:
     return arr
 
 
-def _decode_pointcloud2(msg) -> Optional[np.ndarray]:
+def _decode_pointcloud2(msg) -> np.ndarray | None:
     """将 sensor_msgs/PointCloud2 解码为 (N, 3) float32 XYZ 数组。"""
     try:
         data = bytes(msg.data)
@@ -552,7 +552,7 @@ def _angle_diff(a: float, b: float) -> float:
     return d
 
 
-def _first_match(topics: list[str], candidates: list[str]) -> Optional[str]:
+def _first_match(topics: list[str], candidates: list[str]) -> str | None:
     for c in candidates:
         if c in topics:
             return c
@@ -560,7 +560,7 @@ def _first_match(topics: list[str], candidates: list[str]) -> Optional[str]:
 
 
 def _flush_transforms_json(
-    output_dir: Path, intrinsics: Optional[dict], frames: list[dict]
+    output_dir: Path, intrinsics: dict | None, frames: list[dict]
 ) -> None:
     intr = intrinsics or {}
     payload = {
@@ -582,7 +582,7 @@ def _flush_transforms_json(
 
 
 def _write_metadata(
-    output_dir: Path, intrinsics: Optional[dict],
+    output_dir: Path, intrinsics: dict | None,
     kf_dist: float, kf_rot: float, kf_time: float, max_depth: float,
 ) -> None:
     meta = {

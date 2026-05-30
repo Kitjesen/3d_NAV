@@ -75,13 +75,15 @@ class SHMPublisher(Publisher):
                 f"buffer capacity {max_data}. Increase buffer_size in TopicConfig."
             )
 
-        self._seq += 1
+        complete_seq = self._seq + 2
+        busy_seq = complete_seq - 1
+        ts = time.time()
         buf = self._shm.buf
 
-        # Write control block
-        struct.pack_into("<QdQ", buf, 0, self._seq, time.time(), data_len)
-        # Write data
+        struct.pack_into("<QdQ", buf, 0, busy_seq, ts, data_len)
         buf[CTRL_SIZE : CTRL_SIZE + data_len] = data
+        struct.pack_into("<QdQ", buf, 0, complete_seq, ts, data_len)
+        self._seq = complete_seq
 
     def close(self) -> None:
         try:
@@ -131,11 +133,15 @@ class SHMSubscriber(Subscriber):
                 continue
             buf = self._shm.buf
             seq, ts, data_len = struct.unpack_from("<QdQ", buf, 0)
-            if seq > self._last_seq and data_len > 0:
-                self._last_seq = seq
+            if seq > self._last_seq and seq % 2 == 0 and data_len > 0:
                 data = bytes(buf[CTRL_SIZE : CTRL_SIZE + data_len])
+                seq2, ts2, data_len2 = struct.unpack_from("<QdQ", buf, 0)
+                if seq2 != seq or ts2 != ts or data_len2 != data_len or seq2 % 2 != 0:
+                    time.sleep(self._poll_interval)
+                    continue
+                self._last_seq = seq2
                 try:
-                    self._callback(data, ts)
+                    self._callback(data, ts2)
                 except Exception as e:
                     logger.error(f"[SHM-Sub] callback error: {e}")
             time.sleep(self._poll_interval)

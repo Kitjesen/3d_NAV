@@ -27,7 +27,7 @@ import heapq
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 
@@ -82,7 +82,7 @@ def _astar_on_grid(trav: np.ndarray, start: tuple[int, int], goal: tuple[int, in
         timeout_sec: seconds before giving up; returns None on timeout (no exception)
 
     Returns:
-        List[(ix, iy)] path, or None if unreachable or timed out
+        list[(ix, iy)] path, or None if unreachable or timed out
     """
     deadline = time.monotonic() + timeout_sec
     def h(a, b): return abs(a[0] - b[0]) + abs(a[1] - b[1])  # Manhattan heuristic

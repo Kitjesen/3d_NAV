@@ -28,7 +28,7 @@ import math
 import threading
 import time
 from collections.abc import Callable
-from typing import Dict, List, Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 
@@ -160,7 +160,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         self._last_bp_time: float = 0.0                   # BP 节流: 最多 1Hz
 
         # ── Neuro-Symbolic Belief GCN (KG-BELIEF) ──
-        self._belief_model = None  # Optional[BeliefPredictor]
+        self._belief_model = None  # BeliefPredictor | None
 
         # W2-2: warn once if intrinsics_fx is 0 — avoid per-frame log spam,
         # also prevents silently using a default 600 px focal length that
@@ -177,7 +177,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         return self._views
 
     def set_room_namer(self, namer: Callable) -> None:
-        """注册 Room LLM 命名回调 (async def namer(labels: List[str]) -> str)。
+        """注册 Room LLM 命名回调 (async def namer(labels: list[str]) -> str)。
 
         创新1 补强: Region 稳定后 (物体数 >= 3 且持续 10s 无变化),
         调用 LLM 将 'area_with_door_chair' 命名为 '走廊' / 'office' 等可读名称,

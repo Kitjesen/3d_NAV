@@ -33,6 +33,127 @@ def _write_test_video(path: Path) -> Path:
     return path
 
 
+def test_dimos_required_gates_come_from_core_algorithm_gate_constant():
+    from core.algorithm_gates import DIMOS_BENCHMARK_REQUIRED_GATES
+
+    assert tuple(server_sim_closure.ALGORITHM_PRESETS["dimos_benchmark"]) == tuple(
+        DIMOS_BENCHMARK_REQUIRED_GATES
+    )
+    assert DIMOS_BENCHMARK_REQUIRED_GATES[0] == "gateway_runtime_acceptance"
+
+
+def test_dimos_summary_required_gate_sequence_preserves_core_order(tmp_path: Path, monkeypatch):
+    from core.algorithm_gates import DIMOS_BENCHMARK_REQUIRED_GATES
+
+    monkeypatch.setattr(server_sim_closure, "ROOT", tmp_path)
+
+    summary = server_sim_closure.summarize(
+        report_overrides={},
+        required=set(DIMOS_BENCHMARK_REQUIRED_GATES),
+        include_optional=False,
+    )
+
+    assert tuple(summary["required_gate_sequence"]) == DIMOS_BENCHMARK_REQUIRED_GATES
+
+
+def test_structured_planner_result_marks_unavailable_backend_as_skip(monkeypatch, tmp_path: Path):
+    import importlib.util
+
+    module_path = Path("tests/benchmark/benchmark_planner_structured.py")
+    spec = importlib.util.spec_from_file_location("benchmark_planner_structured", module_path)
+    assert spec is not None and spec.loader is not None
+    benchmark = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(benchmark)
+
+    class UnavailableService:
+        map_artifact_gate = {"ok": False}
+
+        def __init__(self, **kwargs):
+            pass
+
+        def setup(self):
+            raise RuntimeError("pct planner unavailable: native backend missing")
+
+    monkeypatch.setattr(benchmark, "GlobalPlannerService", UnavailableService)
+
+    result = benchmark.benchmark_planner(
+        "pct",
+        tmp_path,
+        (0.0, 0.0, 0.0),
+        (1.0, 0.0, 0.0),
+    )
+
+    assert result["status"] == "skip"
+    assert result["ok"] is False
+    assert result["synthetic"] is True
+    assert result["claim_scope"] == "planner_regression_only"
+
+
+def test_structured_planner_plan_unavailable_is_skip_not_fail(monkeypatch, tmp_path: Path):
+    import importlib.util
+
+    module_path = Path("tests/benchmark/benchmark_planner_structured.py")
+    spec = importlib.util.spec_from_file_location("benchmark_planner_structured", module_path)
+    assert spec is not None and spec.loader is not None
+    benchmark = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(benchmark)
+
+    class Backend:
+        pass
+
+    class UnavailableAtPlanService:
+        map_artifact_gate = {"ok": True}
+        last_plan_report = {}
+        _backend = Backend()
+
+        def __init__(self, **kwargs):
+            pass
+
+        def setup(self):
+            return None
+
+        def plan(self, start, goal, safe_goal_tolerance=0.0):
+            raise RuntimeError("GlobalPlannerService: pct planner unavailable")
+
+    monkeypatch.setattr(benchmark, "GlobalPlannerService", UnavailableAtPlanService)
+
+    result = benchmark.benchmark_planner(
+        "pct",
+        tmp_path,
+        (0.0, 0.0, 0.0),
+        (1.0, 0.0, 0.0),
+    )
+
+    assert result["status"] == "skip"
+    assert result["ok"] is False
+
+
+def test_structured_planner_import_dependency_skip_report(tmp_path: Path):
+    import importlib.util
+
+    module_path = Path("tests/benchmark/benchmark_planner_structured.py")
+    spec = importlib.util.spec_from_file_location("benchmark_planner_structured", module_path)
+    assert spec is not None and spec.loader is not None
+    benchmark = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(benchmark)
+
+    json_out = tmp_path / "report.json"
+
+    exit_code = benchmark.write_import_skip_report(
+        json_out=json_out,
+        planners=["astar", "pct"],
+        routes=["terrain_short"],
+        error="missing dependency: numpy",
+    )
+
+    payload = json.loads(json_out.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["status_counts"] == {"pass": 0, "skip": 1, "fail": 0}
+    assert payload["results"][0]["status"] == "skip"
+    assert payload["results"][0]["ok"] is False
+    assert payload["synthetic"] is True
+
+
 def _complete_gateway_runtime_acceptance_report() -> dict:
     return {
         "schema_version": "lingtu.gateway_runtime_acceptance.v1",

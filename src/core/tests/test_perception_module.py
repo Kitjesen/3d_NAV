@@ -448,6 +448,21 @@ class TestQuatToRotation:
 
 
 class TestDetectorConfiguration:
+    def test_perception_backend_registry_names_are_visible(self):
+        from core.registry import list_plugins
+
+        assert {"yoloe", "yolo_world", "bpu", "sim_scene"} <= set(
+            list_plugins("perception_detector")
+        )
+        assert {"clip", "mobileclip"} <= set(list_plugins("perception_encoder"))
+        assert {"bpu"} <= set(list_plugins("perception_tracker"))
+
+    def test_unknown_perception_backend_fails_fast(self):
+        with pytest.raises(ValueError, match="Unknown perception_detector backend 'bogus'"):
+            PerceptionModule(detector_type="bogus")
+        with pytest.raises(ValueError, match="Unknown perception_encoder backend 'bogus'"):
+            PerceptionModule(encoder_type="bogus")
+
     @patch("semantic.perception.semantic_perception.instance_tracker.InstanceTracker")
     def test_setup_uses_tracking_iou_threshold(self, instance_tracker_cls):
         mod = PerceptionModule(

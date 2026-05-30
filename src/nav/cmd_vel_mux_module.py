@@ -24,8 +24,9 @@ SafetyRing, etc.) can display who controls the robot.
 from __future__ import annotations
 
 import logging
+import math
+import threading
 import time
-from typing import Dict, Optional
 
 from core.module import Module
 from core.msgs.geometry import Twist
@@ -78,6 +79,9 @@ class CmdVelMux(Module, layer=0):
 
         self._active: str = ""
         self._last_publish_time: float = 0.0
+        self._lock = threading.RLock()
+        self._stop_event = threading.Event()
+        self._monitor_thread: threading.Thread | None = None
 
     def setup(self) -> None:
         self.teleop_cmd_vel.subscribe(
@@ -89,55 +93,113 @@ class CmdVelMux(Module, layer=0):
         self.path_follower_cmd_vel.subscribe(
             lambda t: self._on_source("path_follower", t))
 
+    def start(self) -> None:
+        super().start()
+        self._stop_event.clear()
+        if self._monitor_thread is None or not self._monitor_thread.is_alive():
+            self._monitor_thread = threading.Thread(
+                target=self._timeout_loop,
+                name="cmd_vel_mux_timeout",
+                daemon=True,
+            )
+            self._monitor_thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            self._monitor_thread.join(timeout=1.0)
+        self._monitor_thread = None
+        super().stop()
+
+    def _timeout_loop(self) -> None:
+        interval = max(0.02, min(0.1, self._source_timeout / 2.0))
+        while not self._stop_event.wait(interval):
+            self._check_timeout()
+
+    @staticmethod
+    def _sanitize_twist(twist: Twist) -> Twist:
+        values = (
+            twist.linear.x, twist.linear.y, twist.linear.z,
+            twist.angular.x, twist.angular.y, twist.angular.z,
+        )
+        if all(math.isfinite(float(v)) for v in values):
+            return twist
+        logger.warning("CmdVelMux: dropping non-finite cmd_vel")
+        return Twist.zero()
+
     def _on_source(self, name: str, twist: Twist) -> None:
         """Handle incoming cmd_vel from a named source."""
         now = time.time()
-        src = self._sources[name]
-        src["last_time"] = now
-        src["last_twist"] = twist
+        twist = self._sanitize_twist(twist)
+        active_update: str | None = None
+        driver_twist: Twist | None = None
 
-        # Select highest-priority active source
-        winner = self._select_active(now)
-        if winner != self._active:
-            if self._active and winner:
-                logger.info("CmdVelMux: %s → %s", self._active, winner)
-            elif winner:
-                logger.info("CmdVelMux: %s active", winner)
+        with self._lock:
+            src = self._sources[name]
+            src["last_time"] = now
+            src["last_twist"] = twist
+
+            winner = self._select_active(now)
+            if winner != self._active:
+                if self._active and winner:
+                    logger.info("CmdVelMux: %s -> %s", self._active, winner)
+                elif winner:
+                    logger.info("CmdVelMux: %s active", winner)
+                self._active = winner
+                active_update = winner
+
+            if name == winner:
+                driver_twist = twist
+                self._last_publish_time = now
+
+        if active_update is not None:
+            self.active_source.publish(active_update)
+        if driver_twist is not None:
+            self.driver_cmd_vel.publish(driver_twist)
+
+    def _check_timeout(self, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        with self._lock:
+            winner = self._select_active(now)
+            if winner == self._active:
+                return
             self._active = winner
-            self.active_source.publish(winner)
-
-        # Only forward if this source is the winner
-        if name == winner:
-            self.driver_cmd_vel.publish(twist)
+            driver_twist = (
+                self._sanitize_twist(self._sources[winner]["last_twist"])
+                if winner
+                else Twist.zero()
+            )
             self._last_publish_time = now
-        elif winner and winner != name:
-            # Another source has higher priority — forward winner's last twist
-            # (already being forwarded by its own callback)
-            pass
+
+        self.active_source.publish(winner)
+        self.driver_cmd_vel.publish(driver_twist)
 
     def _select_active(self, now: float) -> str:
         """Return the name of the highest-priority source that is still active."""
-        best_name = ""
-        best_priority = -1
-        for name, src in self._sources.items():
-            age = now - src["last_time"]
-            if age <= self._source_timeout and src["priority"] > best_priority:
-                best_name = name
-                best_priority = src["priority"]
-        return best_name
+        with self._lock:
+            best_name = ""
+            best_priority = -1
+            for name, src in self._sources.items():
+                age = now - src["last_time"]
+                if age <= self._source_timeout and src["priority"] > best_priority:
+                    best_name = name
+                    best_priority = src["priority"]
+            return best_name
 
     def health(self) -> dict:
         now = time.time()
-        sources = {}
-        for name, src in self._sources.items():
-            last_time = src["last_time"]
-            age = now - last_time if last_time > 0.0 else None
-            sources[name] = {
-                "priority": src["priority"],
-                "active": age is not None and age <= self._source_timeout,
-                "age_ms": round(age * 1000) if age is not None else None,
-            }
+        with self._lock:
+            sources = {}
+            for name, src in self._sources.items():
+                last_time = src["last_time"]
+                age = now - last_time if last_time > 0.0 else None
+                sources[name] = {
+                    "priority": src["priority"],
+                    "active": age is not None and age <= self._source_timeout,
+                    "age_ms": round(age * 1000) if age is not None else None,
+                }
+            active = self._active or "none"
         return {
-            "active_source": self._active or "none",
+            "active_source": active,
             "sources": sources,
         }

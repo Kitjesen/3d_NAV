@@ -31,7 +31,7 @@ from gateway.services.map_safety import (
     safe_map_name,
 )
 from gateway.services.runtime_status import backend_capability_defaults
-from nav.services.nav_services.same_source_map_artifacts import (
+from core.same_source_map_artifacts import (
     validate_saved_map_artifact_dir,
 )
 

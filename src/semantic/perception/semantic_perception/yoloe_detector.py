@@ -20,7 +20,6 @@ USS-Nav pipeline: YOLO-E → instance mask + label → mask + depth → 点云
 
 import logging
 import time
-from typing import Dict, List, Optional
 
 import numpy as np
 

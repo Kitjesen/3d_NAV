@@ -1052,9 +1052,11 @@ def test_algorithm_benchmark_latest_diagnostic_blocks_failed_or_stale_artifact(
 def test_algorithm_benchmark_latest_splits_product_profile_from_strict_benchmark(
     tmp_path,
 ):
+    from core.algorithm_gates import INSPECTION_MVP_REQUIRED_GATES
     from gateway.routes.diagnostics import build_algorithm_benchmark_latest_summary
 
     product_gates = {
+        "gateway_runtime_acceptance",
         "routecheck_preflight",
         "large_terrain",
         "fastlio2_dynamic_inspection",
@@ -1095,13 +1097,7 @@ def test_algorithm_benchmark_latest_splits_product_profile_from_strict_benchmark
     assert inspection["ok"] is True
     assert inspection["ros2_topic_required"] is False
     assert inspection["missing_or_failed"] == []
-    assert inspection["required_gate_sequence"] == [
-        "routecheck_preflight",
-        "large_terrain",
-        "fastlio2_dynamic_inspection",
-        "dynamic_obstacle_local_planner",
-        "moving_obstacle_sweep",
-    ]
+    assert tuple(inspection["required_gate_sequence"]) == INSPECTION_MVP_REQUIRED_GATES
     assert strict["ok"] is False
     assert strict["missing_or_failed"] == strict_only_failures
 

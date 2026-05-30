@@ -43,6 +43,8 @@ def _make_holder() -> _TFHolder:
         SlamBridgeModule._apply_map_odom_to_odometry, h)
     h._should_apply_map_odom_tf = _t.MethodType(
         SlamBridgeModule._should_apply_map_odom_tf, h)
+    h._map_odom_tf_fresh = _t.MethodType(
+        SlamBridgeModule._map_odom_tf_fresh, h)
     h._maybe_apply_map_odom_to_points = _t.MethodType(
         SlamBridgeModule._maybe_apply_map_odom_to_points, h)
     h._maybe_apply_map_odom_to_odometry = _t.MethodType(

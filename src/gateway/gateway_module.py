@@ -54,7 +54,7 @@ import os
 import queue
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable
 
 import numpy as np
 
@@ -110,6 +110,26 @@ from gateway.services.traffic import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MOTION_BACKEND_CATEGORIES = {
+    "planner",
+    "local_planner",
+    "path_follower",
+    "terrain",
+    "slam",
+}
+
+_BACKEND_RECONFIGURE_TARGETS = {
+    "detector": ("PerceptionModule",),
+    "encoder": ("PerceptionModule",),
+    "llm": ("LLMModule",),
+    "llm_client": ("LLMModule",),
+    "planner": ("NavigationModule",),
+    "local_planner": ("LocalPlannerModule",),
+    "path_follower": ("PathFollowerModule",),
+    "terrain": ("TerrainModule",),
+    "slam": ("SlamBridgeModule", "SLAMModule", "SlamModule"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +261,7 @@ class GatewayModule(Module, layer=6):
         # Protected by RLock so callbacks and HTTP handler threads don't race.
         self._state_lock = threading.RLock()
         self._odom:     dict | None = None
+        self._last_invalid_odometry: dict | None = None
         self._sg_json:  str = "{}"
         self._safety:   dict | None = None
         self._mission:  dict | None = None
@@ -549,7 +570,8 @@ class GatewayModule(Module, layer=6):
         try:
             from urllib.error import URLError
             from urllib.request import Request, urlopen
-        except Exception:
+        except Exception as e:
+            logger.debug("GatewayModule: urllib import in prewarm failed: %s", e)
             return False
 
         headers: dict[str, str] = {}
@@ -559,8 +581,8 @@ class GatewayModule(Module, layer=6):
             api_key = _get_configured_key()
             if api_key:
                 headers["X-API-Key"] = api_key
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("GatewayModule: failed to load API key for prewarm: %s", e)
 
         url = f"http://127.0.0.1:{self._port}/api/v1/app/capabilities"
         deadline = time.time() + max(0.0, float(timeout_s))
@@ -978,11 +1000,43 @@ class GatewayModule(Module, layer=6):
             ),
         }
 
+    def reconfigure_backend(
+        self,
+        category: str,
+        backend: str,
+        **config: Any,
+    ) -> dict[str, Any]:
+        if category in _MOTION_BACKEND_CATEGORIES:
+            nav = self._all_modules.get("NavigationModule")
+            state = ""
+            if nav is not None and hasattr(nav, "health"):
+                try:
+                    state = str((nav.health() or {}).get("state", "")).upper()
+                except Exception:
+                    state = "UNKNOWN"
+            if state != "IDLE":
+                return {
+                    "ok": False,
+                    "category": category,
+                    "requested_backend": backend,
+                    "reason": "motion_backend_switch_requires_idle",
+                    "navigation_state": state or "UNKNOWN",
+                }
+
+        for module_name in _BACKEND_RECONFIGURE_TARGETS.get(category, ()):
+            module = self._all_modules.get(module_name)
+            reconfigure = getattr(module, "reconfigure_backend", None)
+            if callable(reconfigure):
+                return reconfigure(category, backend, **config)
+
+        return super().reconfigure_backend(category, backend, **config)
+
     def _coerce_explorer_result(self, result: Any) -> Any:
         if isinstance(result, str):
             try:
                 return json.loads(result)
-            except Exception:
+            except Exception as e:
+                logger.debug("_coerce_explorer_result JSON parse failed: %s", e)
                 return result
         return result
 
@@ -1125,7 +1179,8 @@ class GatewayModule(Module, layer=6):
                 and not nav_blockers
             ):
                 blockers.append("navigation_not_ready")
-        except Exception:
+        except Exception as e:
+            logger.debug("_exploration_start_readiness: build_navigation_status failed: %s", e)
             blockers.append("navigation_status_unavailable")
 
         blockers = list(dict.fromkeys(blockers))
@@ -1185,6 +1240,22 @@ class GatewayModule(Module, layer=6):
             "child_frame_id": str(getattr(odom, "child_frame_id", "") or "body"),
             "ts": odom.ts,
         }
+        numeric_fields = ("x", "y", "z", "yaw", "vx", "wz", "ts")
+        invalid_fields = [
+            name for name in numeric_fields
+            if not math.isfinite(float(d.get(name, 0.0)))
+        ]
+        if invalid_fields:
+            self._last_invalid_odometry = {
+                "reason": "non_finite_odometry",
+                "fields": invalid_fields,
+                "ts": time.time(),
+            }
+            logger.warning(
+                "GatewayModule: quarantined non-finite odometry fields=%s",
+                invalid_fields,
+            )
+            return
         with self._state_lock:
             self._odom = d
             # Track for Hz calculation (sliding window of 20)
@@ -1219,8 +1290,8 @@ class GatewayModule(Module, layer=6):
     def _on_icp_quality(self, q: float) -> None:
         try:
             self._icp_quality = float(q)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("_on_icp_quality: failed to convert %r: %s", q, e)
 
     # ── Last-known-pose persistence (auto-relocalize on session/start) ────
     # Keeps a tiny JSON snapshot of the last *successful* relocalize call so
@@ -1398,7 +1469,8 @@ class GatewayModule(Module, layer=6):
             if self._exploring and self._session_uses_external_slam_none():
                 return "exploring", None
             return "idle", None
-        except Exception:
+        except Exception as e:
+            logger.warning("_session_detect_current_mode: service_manager lookup failed: %s", e)
             if self._exploring and self._session_uses_external_slam_none():
                 return "exploring", None
             return "idle", None
@@ -1722,8 +1794,8 @@ class GatewayModule(Module, layer=6):
             else:
                 profile = "stopped"
             self._cached_slam_profile = profile
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("_get_slam_profile: service_manager lookup failed: %s", e)
         return self._cached_slam_profile
 
     @staticmethod
@@ -1764,8 +1836,8 @@ class GatewayModule(Module, layer=6):
                 ]
                 if objects:
                     self.push_event({"type": "scene_graph", "objects": objects})
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("_on_scene_graph: failed to build objects list: %s", e)
 
     def _on_safety(self, state: SafetyState) -> None:
         d = {"level": getattr(state, "level", 0), "ts": time.time()}
@@ -1785,8 +1857,8 @@ class GatewayModule(Module, layer=6):
                 "type": "navigation_status",
                 "data": build_navigation_status(self),
             })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("_on_mission: build_navigation_status failed: %s", e)
 
     def _on_eval(self, ev: ExecutionEval) -> None:
         d = ev.to_dict() if hasattr(ev, "to_dict") else {"raw": str(ev)}
@@ -1897,7 +1969,8 @@ class GatewayModule(Module, layer=6):
     def _json_payload(self, value: Any) -> Any:
         try:
             return json.loads(json.dumps(value, ensure_ascii=False, default=str))
-        except Exception:
+        except Exception as e:
+            logger.debug("_json_payload round-trip failed: %s", e)
             return {"raw": str(value)}
 
     def _on_traversable_frontiers(self, candidates: list) -> None:
@@ -1935,8 +2008,8 @@ class GatewayModule(Module, layer=6):
                 for p in path.poses
             ] if hasattr(path, 'poses') else []
             self.push_event({"type": "local_path", "points": points})
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("_on_local_path: failed to build points: %s", e)
 
     def _on_costmap(self, cm: dict) -> None:
         """Throttle OccupancyGridModule costmap to ~2 Hz and push as SSE.
@@ -2345,6 +2418,27 @@ class GatewayModule(Module, layer=6):
 
         gw = self
 
+        @app.post("/api/v1/runtime/backend")
+        async def post_runtime_backend(body: dict[str, Any]):
+            category = str(body.get("category", ""))
+            backend = str(body.get("backend", ""))
+            config = body.get("config") or {}
+            if not category or not backend:
+                return {
+                    "ok": False,
+                    "reason": "missing_category_or_backend",
+                    "category": category,
+                    "requested_backend": backend,
+                }
+            if not isinstance(config, dict):
+                return {
+                    "ok": False,
+                    "category": category,
+                    "requested_backend": backend,
+                    "reason": "invalid_config",
+                }
+            return gw.reconfigure_backend(category, backend, **config)
+
         register_operation_routes(app, gw)
         register_diagnostic_routes(app, gw)
         register_map_routes(app, gw)
@@ -2547,8 +2641,8 @@ class GatewayModule(Module, layer=6):
                  f"\"{{file_path: '{tmp}'}}\""],
                 capture_output=True, text=True, encoding="utf-8",
                 errors="replace", timeout=15)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("_generate_viewer_live: ros2 save_map failed: %s", e)
 
         if os.path.isfile(tmp) and os.path.getsize(tmp) > 200:
             # Parse temp PCD

@@ -14,6 +14,8 @@ from datetime import datetime
 from collections.abc import Mapping
 from typing import Any
 
+from core.algorithm_gates import DIMOS_BENCHMARK_REQUIRED_GATES
+from core.algorithm_gates import INSPECTION_MVP_REQUIRED_GATES
 from gateway.schemas import AlgorithmBenchmarkLatestResponse
 from gateway.schemas import InspectionAcceptanceRequest
 from gateway.schemas import InspectionAcceptanceResponse
@@ -26,25 +28,6 @@ from gateway.schemas import RuntimeContractResponse
 
 ALGORITHM_BENCHMARK_SCHEMA_VERSION = "lingtu.algorithm_benchmark_latest.v1"
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[3]
-INSPECTION_MVP_REQUIRED_GATES = (
-    "routecheck_preflight",
-    "large_terrain",
-    "fastlio2_dynamic_inspection",
-    "dynamic_obstacle_local_planner",
-    "moving_obstacle_sweep",
-)
-DIMOS_BENCHMARK_REQUIRED_GATES = (
-    "routecheck_preflight",
-    "large_terrain",
-    "native_pct_mujoco",
-    "dynamic_obstacle_local_planner",
-    "fastlio2_dynamic_inspection",
-    "moving_obstacle_sweep",
-    "large_loop_closure",
-    "gazebo_runtime",
-    "saved_map_relocalize",
-    "pct_saved_map_navigation",
-)
 ALGORITHM_PRODUCT_PROFILES: dict[str, dict[str, Any]] = {
     "inspection_mvp": {
         "label": "Inspection MVP",
@@ -161,6 +144,89 @@ def _command_snapshot(gw: Any) -> dict[str, Any]:
         "replayed_commands": 0,
         "rate_policy_hz": {},
         "rate_policy_enforcement": "unknown",
+    }
+
+
+def build_plugin_catalog() -> dict[str, Any]:
+    """Read-only view of registered plugin categories and provider metadata."""
+    from core.registry import get_metadata, list_categories, list_plugins
+
+    categories: dict[str, list[dict[str, Any]]] = {}
+    for category in list_categories():
+        entries: list[dict[str, Any]] = []
+        for name in list_plugins(category):
+            entries.append(
+                {
+                    "name": name,
+                    "metadata": _json_ready(get_metadata(category, name)),
+                }
+            )
+        categories[category] = entries
+    return {
+        "schema_version": 1,
+        "categories": categories,
+        "category_count": len(categories),
+        "ts": time.time(),
+    }
+
+
+_BACKEND_STATUS_KEYS = {
+    "configured_backend",
+    "backend",
+    "degraded",
+    "degraded_reason",
+}
+
+
+def _is_backend_status_payload(value: Mapping[str, Any]) -> bool:
+    return _BACKEND_STATUS_KEYS <= set(value.keys())
+
+
+def _backend_status_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "configured_backend": _json_ready(value.get("configured_backend")),
+        "backend": _json_ready(value.get("backend")),
+        "degraded": bool(value.get("degraded")),
+        "degraded_reason": str(value.get("degraded_reason") or ""),
+    }
+
+
+def _collect_backend_statuses(
+    value: Any,
+    *,
+    prefix: str = "",
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        return {}
+    backends: dict[str, dict[str, Any]] = {}
+    if _is_backend_status_payload(value):
+        backends[prefix or "backend"] = _backend_status_payload(value)
+    for key, child in value.items():
+        if not isinstance(child, Mapping):
+            continue
+        child_prefix = f"{prefix}.{key}" if prefix else str(key)
+        backends.update(_collect_backend_statuses(child, prefix=child_prefix))
+    return backends
+
+
+def build_active_backend_status(gw: Any) -> dict[str, Any]:
+    """Read-only view of configured/effective backends from live module health."""
+    modules: dict[str, Any] = {}
+    for name, module in (getattr(gw, "_all_modules", None) or {}).items():
+        try:
+            if not hasattr(module, "health"):
+                continue
+            health = module.health()
+            backends = _collect_backend_statuses(health)
+            if backends:
+                modules[str(name)] = {"backends": backends}
+        except Exception as exc:
+            modules[str(name)] = {"error": str(exc)}
+    return {
+        "schema_version": 1,
+        "modules": modules,
+        "module_count": len(modules),
+        "ts": time.time(),
     }
 
 
@@ -783,7 +849,7 @@ def _runtime_contract_snapshot() -> dict[str, Any]:
 
 
 def _load_topic_contract() -> dict[str, Any]:
-    from nav.services.nav_services.yaml_helpers import load_yaml
+    from core.yaml_helpers import load_yaml
 
     path = (
         pathlib.Path(__file__).resolve().parents[3]
@@ -1045,7 +1111,7 @@ def _inspection_map_gate(body: Any) -> dict[str, Any] | None:
     if not map_dir:
         return None
     from core.runtime_validation_gates import runtime_validation_gates
-    from nav.services.nav_services.same_source_map_artifacts import (
+    from core.same_source_map_artifacts import (
         validate_saved_map_artifact_dir,
     )
 
@@ -1212,6 +1278,15 @@ def register_diagnostic_routes(app, gw) -> None:
     )
     async def runtime_contract():
         return _runtime_contract_snapshot()
+
+    @app.get(
+        "/api/v1/diagnostics/plugins",
+        summary="Read registered plugin categories and providers",
+    )
+    async def plugin_catalog():
+        payload = build_plugin_catalog()
+        payload["active"] = build_active_backend_status(gw)
+        return payload
 
     @app.post(
         "/api/v1/diagnostics/field-check",

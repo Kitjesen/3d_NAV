@@ -7,7 +7,6 @@ semantic_labeler.py — 为点云注入语义标签
 
 import json
 import threading
-from typing import List, Optional
 
 import numpy as np
 

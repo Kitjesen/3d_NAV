@@ -5,7 +5,7 @@ Semantic Perception API - 公共类型定义
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 

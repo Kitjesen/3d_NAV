@@ -33,6 +33,7 @@ import threading
 import time as _time
 from typing import Any
 
+from core.backend_status import BackendStatus
 from core.module import Module, skill
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 from core.msgs.nav import Odometry
@@ -81,9 +82,11 @@ class TAREExplorerModule(Module, layer=5):
         navigation_goal_match_tolerance_m: float = 1.0,
         max_waypoint_distance_m: float = 0.0,
         waypoint_odometry_timeout_s: float = 5.0,
+        configured_backend: str = "tare",
         **kw: Any,
     ) -> None:
         super().__init__(**kw)
+        self._backend_status = BackendStatus.configured_as(configured_backend)
         self._way_point_topic = way_point_topic
         self._path_topic = path_topic
         self._runtime_topic = runtime_topic
@@ -711,6 +714,7 @@ class TAREExplorerModule(Module, layer=5):
         healthy = (wp_age < self._way_point_timeout_s
                    and (self._reader is not None or self._rclpy_node is not None))
         self.tare_stats.publish({
+            **self._backend_status.as_health_fields(),
             "alive": self._reader is not None or self._rclpy_node is not None,
             "started": self._started_exploration,
             "healthy": healthy,
@@ -771,6 +775,7 @@ class TAREExplorerModule(Module, layer=5):
         import json
         now = _time.time()
         return json.dumps({
+            **self._backend_status.as_health_fields(),
             "alive": self._reader is not None or self._rclpy_node is not None,
             "started": self._started_exploration,
             "waypoint_count": self._waypoint_count,

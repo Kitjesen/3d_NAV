@@ -24,7 +24,7 @@ CLIP 特征编码器 — 图像/文本跨模态匹配（论文级实现）
 
 import hashlib
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 
