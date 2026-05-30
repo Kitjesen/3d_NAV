@@ -15,6 +15,14 @@ ROOT = Path(__file__).resolve().parents[2]
 MID360_PATTERN_REL = "sim/assets/livox/mid360.npy"
 MID360_PATTERN_SHA256 = "448821576a658673e8f7929992c8c0d687eb052657d7b584d038729a83da1bfb"
 LIVE_NAV_MAP_TOPIC = "/nav/map_cloud"
+DEFAULT_REQUIRED_MAX_REPORT_AGE_S = 24.0 * 60.0 * 60.0
+DEFAULT_FRESHNESS_REQUIRED_GATES = frozenset({
+    "large_terrain",
+    "native_pct_mujoco",
+    "pct_saved_map_navigation",
+    "moving_obstacle_sweep",
+    "large_loop_closure",
+})
 
 
 @dataclass(frozen=True)
@@ -1452,6 +1460,12 @@ def _eval_gateway_runtime_acceptance(
         blockers.append("report.ok is not true")
     if report.get("mode") != "non_motion":
         blockers.append("mode is not non_motion")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
     if report.get("ros2_topic_required") is not False:
         blockers.append("ros2_topic_required is not false")
     _extend_unique(blockers, [str(blocker) for blocker in report.get("blockers") or []])
@@ -1881,6 +1895,12 @@ def _eval_cmu_unity_runtime(report: dict[str, Any]) -> tuple[bool, list[str], di
         blockers.append("schema_version is not lingtu.cmu_unity_runtime_gate.v1")
     if report.get("ok") is not True:
         blockers.append("report.ok is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
     if report.get("runtime_executed") is not True:
         blockers.append("runtime_executed is not true")
     runtime_evidence_blockers, shared_runtime_evidence = _shared_runtime_evidence(
@@ -3059,9 +3079,16 @@ def summarize(
         else tuple(spec for spec in GATES if spec.name in required_names)
     )
     for spec in selected_specs:
+        spec_max_report_age_s = max_report_age_s
+        if (
+            spec_max_report_age_s is None
+            and spec.name in required_names
+            and spec.name in DEFAULT_FRESHNESS_REQUIRED_GATES
+        ):
+            spec_max_report_age_s = DEFAULT_REQUIRED_MAX_REPORT_AGE_S
         path = report_overrides.get(spec.name) or _best_match(
             spec,
-            max_report_age_s=max_report_age_s,
+            max_report_age_s=spec_max_report_age_s,
             generated_at=generated_at,
         )
         if path is None:
@@ -3073,6 +3100,7 @@ def summarize(
                 "blockers": ["report missing"],
                 "path": "",
                 "command": spec.command,
+                "is_fresh": False,
             }
             continue
         if not path.exists():
@@ -3084,17 +3112,19 @@ def summarize(
                 "blockers": [f"report missing: {path}"],
                 "path": str(path),
                 "command": spec.command,
+                "is_fresh": False,
             }
             continue
         report_mtime = path.stat().st_mtime
         report_age_s = max(0.0, generated_at - report_mtime)
         freshness_blockers: list[str] = []
-        if max_report_age_s is not None and report_age_s > max_report_age_s:
+        if spec_max_report_age_s is not None and report_age_s > spec_max_report_age_s:
             freshness_blockers.append(
-                f"report_age_s {report_age_s:.3f} > max_report_age_s {max_report_age_s:.3f}"
+                f"report_age_s {report_age_s:.3f} > max_report_age_s {spec_max_report_age_s:.3f}"
             )
         try:
             report = _load_json(path)
+            report_timestamp = report.get("generated_at") or report.get("timestamp") or report_mtime
             ok, blockers, evidence = spec.evaluator(report)
             blockers = [*blockers, *freshness_blockers]
             ok = bool(ok) and not freshness_blockers
@@ -3107,6 +3137,9 @@ def summarize(
                 "path": str(path),
                 "report_mtime": report_mtime,
                 "report_age_s": round(report_age_s, 3),
+                "report_timestamp": report_timestamp,
+                "max_report_age_s": spec_max_report_age_s,
+                "is_fresh": not freshness_blockers,
                 "command": spec.command,
                 "evidence": evidence,
             }
@@ -3120,6 +3153,8 @@ def summarize(
                 "path": str(path),
                 "report_mtime": report_mtime,
                 "report_age_s": round(report_age_s, 3),
+                "max_report_age_s": spec_max_report_age_s,
+                "is_fresh": not freshness_blockers,
                 "command": spec.command,
             }
 

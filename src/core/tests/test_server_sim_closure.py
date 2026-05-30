@@ -37,6 +37,9 @@ def _complete_gateway_runtime_acceptance_report() -> dict:
     return {
         "schema_version": "lingtu.gateway_runtime_acceptance.v1",
         "ok": True,
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
         "mode": "non_motion",
         "target_result": (
             "Gateway-only product runtime acceptance; ROS2 topic inspection is not required."
@@ -4112,6 +4115,38 @@ def test_server_sim_closure_prefers_fresh_failed_report_over_stale_pass(
     gaps = "\n".join(summary["remaining_gaps"])
     assert "large_terrain: report.ok is not true" in gaps
     assert "report_age_s" not in gaps
+
+
+def test_server_sim_closure_prefers_fresh_failed_native_pct_over_stale_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server_sim_closure, "ROOT", tmp_path)
+    fresh_failed = _write_json(
+        tmp_path / "artifacts/server_sim_closure/native_pct_mujoco/report.json",
+        {"ok": False},
+    )
+    stale_pass = _write_json(
+        tmp_path / "artifacts/native_pct_mujoco_gate_old/report.json",
+        {
+            "ok": True,
+            "planner": "pct",
+            "pct_native_backend_used": True,
+            "primary_planner": "pct",
+            "selected_planner": "pct",
+            "fallback_used": False,
+        },
+    )
+    os.utime(stale_pass, (1, 1))
+
+    summary = server_sim_closure.summarize(
+        report_overrides={},
+        required={"native_pct_mujoco"},
+        include_optional=False,
+    )
+
+    assert summary["ok"] is False
+    assert Path(summary["gates"]["native_pct_mujoco"]["path"]) == fresh_failed
 
 
 def test_server_sim_closure_large_terrain_surfaces_pct_runtime_blocker(tmp_path: Path) -> None:
