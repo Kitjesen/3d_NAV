@@ -2,7 +2,7 @@
 
 Replaces ``ros2 launch livox_ros_driver2 ...`` with Python:
 
-    from drivers.lidar import Lidar
+    from drivers.real.lidar import Lidar
 
     lidar = Lidar()
     lidar.connect("192.168.1.115")      # starts driver + DDS bridge
@@ -18,7 +18,7 @@ Replaces ``ros2 launch livox_ros_driver2 ...`` with Python:
 
 Blueprint usage:
 
-    from drivers.lidar import LidarModule
+    from drivers.real.lidar import LidarModule
 
     bp.add(LidarModule)
     bp.wire("LidarModule", "scan", "TerrainModule", "cloud")

@@ -5,7 +5,7 @@ that can be started, stopped, and subscribed to without running SLAM.
 
 Blueprint usage::
 
-    from drivers.lidar import LidarModule
+    from drivers.real.lidar import LidarModule
 
     bp.add(LidarModule)                             # default config
     bp.add(LidarModule, ip="192.168.1.120")         # override IP
@@ -13,7 +13,7 @@ Blueprint usage::
 
 Stack factory usage (in blueprints/stacks/)::
 
-    from drivers.lidar import LidarModule
+    from drivers.real.lidar import LidarModule
     bp.add(LidarModule, ip=ip)
     # SLAMModule no longer starts the driver — it subscribes via DDS topics
     # that LidarModule's native driver publishes.

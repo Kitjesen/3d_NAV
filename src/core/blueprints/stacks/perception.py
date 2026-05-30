@@ -28,7 +28,7 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
     )
 
     try:
-        from drivers.thunder.camera_bridge_module import CameraBridgeModule
+        from drivers.real.thunder.camera_bridge_module import CameraBridgeModule
 
         if needs_camera_bridge:
             # Read camera rotation from robot_config.yaml

@@ -1428,7 +1428,7 @@ class TestCameraBridgeModule(unittest.TestCase):
     """Test CameraBridgeModule instantiation and stub mode (no rclpy)."""
 
     def _make_bridge(self, **kw):
-        from drivers.thunder.camera_bridge_module import CameraBridgeModule
+        from drivers.real.thunder.camera_bridge_module import CameraBridgeModule
         return CameraBridgeModule(**kw)
 
     def _make_stub_bridge(self, **kw):

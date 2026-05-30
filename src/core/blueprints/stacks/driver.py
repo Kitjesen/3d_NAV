@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def _ensure_drivers_registered():
     for mod in (
-        "drivers.thunder.han_dog_module",
+        "drivers.real.thunder.han_dog_module",
         "core.blueprints.stub",
         "drivers.sim.mujoco_driver_module",
         "drivers.sim.ros2_sim_driver",

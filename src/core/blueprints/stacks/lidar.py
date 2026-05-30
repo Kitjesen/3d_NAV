@@ -37,7 +37,7 @@ def lidar(ip: str | None = None, enabled: bool = True) -> Blueprint:
         return bp
 
     try:
-        from drivers.lidar import LidarModule
+        from drivers.real.lidar import LidarModule
         kw = {}
         if ip:
             kw["ip"] = ip

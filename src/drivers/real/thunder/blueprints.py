@@ -6,7 +6,7 @@
 
 Usage::
 
-    from drivers.thunder.blueprints import thunder_basic, thunder_nav, thunder_semantic
+    from drivers.real.thunder.blueprints import thunder_basic, thunder_nav, thunder_semantic
     system = thunder_nav(dog_host="192.168.66.190").build()
     system.start()
 """
@@ -26,7 +26,7 @@ from core.blueprint import Blueprint
 
 def thunder_basic(dog_host: str = "127.0.0.1", dog_port: int = 13145, **kw) -> Blueprint:
     """Basic: ThunderDriver + SafetyRing + Navigation. No semantic."""
-    from drivers.thunder.han_dog_module import ThunderDriver
+    from drivers.real.thunder.han_dog_module import ThunderDriver
     from nav.navigation_module import NavigationModule
     from nav.safety_ring_module import SafetyRingModule
 

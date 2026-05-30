@@ -7,7 +7,7 @@ repo = os.path.abspath(repo)
 sys.path[:0] = [os.path.join(repo, "src"), repo]
 
 for mod in (
-    "drivers.thunder.han_dog_module",
+    "drivers.real.thunder.han_dog_module",
     "core.blueprints.stub",
     "drivers.sim.mujoco_driver_module",
     "drivers.sim.ros2_sim_driver",
