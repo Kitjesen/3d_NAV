@@ -5,7 +5,7 @@ subprocesses. Does NOT produce data directly — SLAM data flows through
 SlamBridgeModule which subscribes to DDS topics published by the C++ nodes.
 
 Architecture:
-    LidarModule (drivers.lidar) → starts Livox driver, publishes /lidar/scan
+    LidarModule (drivers.real.lidar) → starts Livox driver, publishes /lidar/scan
     SLAMModule  (this)          → starts SLAM C++ nodes, consumes /lidar/scan
     SlamBridgeModule (separate) → subscribes to DDS topics → Out[odometry], Out[map_cloud]
 

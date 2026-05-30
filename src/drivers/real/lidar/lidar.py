@@ -5,7 +5,7 @@ NumPy point cloud delivery. Replaces ros2 launch with a single call.
 
 Usage::
 
-    from drivers.lidar import Lidar
+    from drivers.real.lidar import Lidar
 
     # connect + callback
     lidar = Lidar()

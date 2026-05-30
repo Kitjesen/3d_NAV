@@ -5,7 +5,7 @@
 ```python
 from core import autoconnect
 from core.registry import get
-import drivers.thunder.han_dog_module
+import drivers.real.thunder.han_dog_module
 
 system = autoconnect(
     get("driver", "thunder").blueprint(dog_host="192.168.66.190"),

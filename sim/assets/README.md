@@ -21,7 +21,7 @@ the existing LingTu policy and PD-control path can keep writing joint targets.
 
 Compatibility paths:
 
-- `../robot/thunder.urdf` is a copy of the latest URDF with mesh paths adjusted
+- `../robots/thunder.urdf` is a copy of the latest URDF with mesh paths adjusted
   from `../meshes/` to `../assets/meshes/`.
 - `../robots/nova_dog/robot_with_camera.xml` mirrors `mjcf/thunder_v3_lingtu.xml`
   for older scripts that still open the historical NOVA Dog path.

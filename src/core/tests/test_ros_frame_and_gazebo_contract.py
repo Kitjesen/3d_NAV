@@ -376,8 +376,8 @@ def test_sim_ros2_bridge_publishes_canonical_tf_and_cloud_frames():
 
 
 def test_lidar_module_uses_runtime_frame_contract():
-    module_source = _read("src/drivers/lidar/lidar_module.py")
-    driver_source = _read("src/drivers/lidar/lidar.py")
+    module_source = _read("src/drivers/real/lidar/lidar_module.py")
+    driver_source = _read("src/drivers/real/lidar/lidar.py")
 
     assert "from core.runtime_interface import FRAMES, TOPICS" in module_source
     assert "scan_topic: str = TOPICS.lidar_scan" in module_source

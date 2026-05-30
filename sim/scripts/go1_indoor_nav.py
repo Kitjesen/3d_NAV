@@ -26,7 +26,7 @@ import numpy as np
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _SCRIPT_DIR.parents[1]
 _SIM_ROOT = _REPO_ROOT / "sim"
-_SCENE_XML = _SIM_ROOT / "scenes" / "indoor_office.xml"
+_SCENE_XML = _SIM_ROOT / "worlds" / "indoor_office.xml"
 _POLICY_ONNX = _SIM_ROOT / "robots" / "go1_playground" / "go1_policy.onnx"
 
 # Ensure src/ on path

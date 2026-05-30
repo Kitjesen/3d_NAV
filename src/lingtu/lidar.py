@@ -1,5 +1,5 @@
-"""LiDAR — compatibility shim. Use drivers.lidar.Lidar directly."""
+"""LiDAR — compatibility shim. Use drivers.real.lidar.Lidar directly."""
 
-from drivers.lidar import Lidar as LiDAR
+from drivers.real.lidar import Lidar as LiDAR
 
 __all__ = ["LiDAR"]

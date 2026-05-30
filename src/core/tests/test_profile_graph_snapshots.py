@@ -114,6 +114,67 @@ def test_profile_graph_snapshot_locks_mapping_and_algorithm_edges():
         assert "TraversabilityCostModule.fused_cost->GatewayModule.costmap" in wires
 
 
+# Profiles that assemble the full map + autonomy chain (occupancy/ESDF ->
+# traversability -> nav, plus terrain -> local planner -> path follower).
+_NAV_CONTRACT_PROFILES = (
+    "stub",
+    "dev",
+    "sim",
+    "sim_gazebo",
+    "sim_industrial",
+    "map",
+    "nav",
+    "explore",
+)
+
+
+def test_navigation_compute_contract_layer_main_edges():
+    """NAV COMPUTE CONTRACT: the four-layer main chain must be wired.
+
+    docs/architecture/NAVIGATION_COMPUTE_CONTRACT.md §2/§7.
+      L5 global -> L2 gating -> L2 local -> L2 control.
+    """
+    for profile in _NAV_CONTRACT_PROFILES:
+        wires = _wire_set(graph_for_profile(profile))
+
+        # L2 safety gating: fused_cost (risk grid) -> global gate only.
+        assert (
+            "TraversabilityCostModule.fused_cost->NavigationModule.costmap" in wires
+        ), profile
+        # L2 local planning: terrain_map (local geometry) is the main local input.
+        assert (
+            "TerrainModule.terrain_map->LocalPlannerModule.terrain_map" in wires
+        ), profile
+        # L5 -> L2 command dispatch (global_path + waypoint as staged goals).
+        assert (
+            "NavigationModule.global_path->LocalPlannerModule.global_path" in wires
+        ), profile
+        assert (
+            "NavigationModule.waypoint->LocalPlannerModule.waypoint" in wires
+        ), profile
+        # L2 control tracking: local_path -> path follower -> cmd_vel.
+        assert (
+            "LocalPlannerModule.local_path->PathFollowerModule.local_path" in wires
+        ), profile
+
+
+def test_navigation_compute_contract_forbids_role_drift_edges():
+    """NAV COMPUTE CONTRACT §3/§7: forbidden edges must never appear.
+
+    - fused_cost/costmap must NOT feed the local planner's primary scoring.
+    - terrain_map (local geometry) must NOT feed global strategy.
+    """
+    for profile in PROFILE_SNAPSHOT_TARGETS:
+        wires = _wire_set(graph_for_profile(profile))
+        for wire in wires:
+            assert not wire.startswith(
+                "TraversabilityCostModule.fused_cost->LocalPlannerModule"
+            ), f"{profile}: costmap must not be a local-planner input ({wire})"
+            assert not wire.startswith(
+                "TerrainModule.terrain_map->NavigationModule"
+            ), f"{profile}: terrain_map must not drive global planning ({wire})"
+
+
 def test_nav_profile_uses_slam_bridge_localization_health_edges():
     wires = _wire_set(graph_for_profile("nav"))
 

@@ -154,7 +154,7 @@ except Exception:
     pass
 
 # 12
-from drivers.thunder.camera_bridge_module import CameraBridgeModule
+from drivers.real.thunder.camera_bridge_module import CameraBridgeModule
 
 cb = CameraBridgeModule()
 cb.setup()

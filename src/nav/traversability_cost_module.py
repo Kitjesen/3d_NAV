@@ -1,10 +1,16 @@
 """TraversabilityCostModule — map layer hub: ESDF relay + slope visualization.
 
+NAV COMPUTE CONTRACT (docs/architecture/NAVIGATION_COMPUTE_CONTRACT.md):
+  This module produces the L2 SAFETY-GATING / observability signal `fused_cost`
+  (a RISK grid = occupancy + slope + ESDF proximity). Consumers are the GLOBAL
+  safety gate (NavigationModule.costmap), exploration, and Gateway visualization
+  — NOT the local planner's primary scoring. The `esdf_field` relay to
+  LocalPlanner is a RESERVED extension point: nav_core's LocalPlannerCore has no
+  set_esdf binding yet, so ESDF does NOT currently influence local scoring.
+
 Two core functions:
-  1. ESDF → LocalPlanner  — relay ESDF distance field + gradients for smooth
-     obstacle avoidance scoring in the CMU local planner. This is the primary
-     value on S100P: the local planner gets distance-to-obstacle info it never
-     had before, enabling path-score bias toward corridor centers.
+  1. ESDF → LocalPlanner  — relay ESDF distance field + gradients (RESERVED:
+     not yet consumed by nav_core scoring; see contract §5).
   2. Slope → Web          — compute slope grid from ElevationMap and push via
      Gateway SSE for operator situational awareness (green/yellow/red overlay).
 

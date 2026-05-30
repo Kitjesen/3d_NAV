@@ -20,10 +20,10 @@ Ports:
 Usage::
 
     # Prefer ThunderDriver instead:
-    from drivers.thunder.han_dog_module import ThunderDriver
+    from drivers.real.thunder.han_dog_module import ThunderDriver
 
     # Legacy usage (deprecated):
-    from drivers.thunder.connection import NovaDogConnection
+    from drivers.real.thunder.connection import NovaDogConnection
 """
 
 from __future__ import annotations
