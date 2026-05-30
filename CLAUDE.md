@@ -80,6 +80,9 @@ High layers → low layers only. L5→L2 (waypoint→PathFollower) is command di
 | `navigation(planner)` | Blueprint | NavigationModule + Autonomy chain |
 | `safety()` | Blueprint | SafetyRing + Geofence |
 | `gateway(port)` | Blueprint | Gateway + MCP + Teleop |
+| `exploration(backend)` | Blueprint | TARE exploration (wavefront removed 2026-04) |
+| `lidar(ip, enabled)` | Blueprint | Livox MID-360 hardware driver (decoupled from SLAM) |
+| `sim_lidar(scene_xml)` | Blueprint | Simulated PointCloud2 from MuJoCo scene geometry |
 
 ### Pluggable Backends (via Registry)
 

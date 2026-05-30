@@ -88,6 +88,92 @@ def _write_active_same_source_tomogram(map_root):
     return active_dir
 
 
+def test_diagnostics_plugin_catalog_exposes_registered_backends():
+    from base_autonomy.modules.local_planner_module import LocalPlannerModule  # noqa: F401
+    from base_autonomy.modules.path_follower_module import PathFollowerModule  # noqa: F401
+    from gateway.routes.diagnostics import build_plugin_catalog
+    from semantic.planner.semantic_planner.llm_client import MockLLMClient  # noqa: F401
+
+    payload = build_plugin_catalog()
+
+    assert payload["schema_version"] == 1
+    categories = payload["categories"]
+    assert "local_planner" in categories
+    assert {entry["name"] for entry in categories["local_planner"]} >= {
+        "nanobind",
+        "cmu",
+        "cmu_py",
+        "simple",
+    }
+    assert "llm_client" in categories
+    assert "mock" in {entry["name"] for entry in categories["llm_client"]}
+
+
+def test_diagnostics_plugin_catalog_route():
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    payload = asyncio.run(_endpoint(gateway, "/api/v1/diagnostics/plugins")())
+
+    assert payload["schema_version"] == 1
+    assert "gateway" in payload["categories"]
+
+
+def test_diagnostics_plugin_catalog_route_exposes_active_backend_status():
+    from gateway.gateway_module import GatewayModule
+
+    class FakeLocalPlanner:
+        def health(self):
+            return {
+                "local_planner": {
+                    "configured_backend": "nanobind",
+                    "backend": "cmu_py",
+                    "degraded": True,
+                    "degraded_reason": "compatible _nav_core missing",
+                }
+            }
+
+    class FakeVectorMemory:
+        def health(self):
+            return {
+                "backend": "numpy",
+                "encoder_backend": {
+                    "configured_backend": "auto",
+                    "backend": "lexical_hash",
+                    "degraded": True,
+                    "degraded_reason": "no semantic text encoder available",
+                },
+            }
+
+    class BrokenModule:
+        def health(self):
+            raise RuntimeError("health failed")
+
+    gateway = GatewayModule()
+    gateway.on_system_modules(
+        {
+            "LocalPlannerModule": FakeLocalPlanner(),
+            "VectorMemoryModule": FakeVectorMemory(),
+            "BrokenModule": BrokenModule(),
+        }
+    )
+
+    payload = asyncio.run(_endpoint(gateway, "/api/v1/diagnostics/plugins")())
+
+    active = payload["active"]
+    local = active["modules"]["LocalPlannerModule"]["backends"]["local_planner"]
+    vector = active["modules"]["VectorMemoryModule"]["backends"]["encoder_backend"]
+    broken = active["modules"]["BrokenModule"]
+    assert active["schema_version"] == 1
+    assert local["configured_backend"] == "nanobind"
+    assert local["backend"] == "cmu_py"
+    assert local["degraded"] is True
+    assert "compatible _nav_core missing" in local["degraded_reason"]
+    assert vector["configured_backend"] == "auto"
+    assert vector["backend"] == "lexical_hash"
+    assert broken["error"] == "health failed"
+
+
 def test_localization_status_covers_product_states():
     from gateway.gateway_module import GatewayModule
     from gateway.services.runtime_status import build_localization_status
@@ -757,6 +843,19 @@ def test_navigation_status_reports_mission_path_and_control_source():
     )
     assert payload["reason_codes"] == []
     assert payload["localization"]["degraded"] is False
+
+
+def test_drift_watchdog_classifies_nan_odom_as_diverged():
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+
+    assert gateway._drift_odom_diverged({
+        "x": float("nan"),
+        "y": 0.0,
+        "z": 0.0,
+        "vx": 0.0,
+    })[0] is True
 
 
 def test_navigation_status_reports_current_runtime_boundary(monkeypatch):

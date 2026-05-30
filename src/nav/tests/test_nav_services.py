@@ -87,7 +87,7 @@ class TestMapManagerModule(unittest.TestCase):
         )
         tomogram.write_bytes(b"unit-test-tomogram")
         from core.runtime_interface import TOPICS, topic_default_frame_id
-        from nav.services.nav_services.same_source_map_artifacts import (
+        from core.same_source_map_artifacts import (
             build_saved_map_metadata,
             sha256_file,
         )
@@ -598,7 +598,7 @@ class TestMapManagerModule(unittest.TestCase):
             artifacts["occupancy_grid"]["source_map_sha256"],
             artifacts["map_pcd"]["sha256"],
         )
-        from nav.services.nav_services.same_source_map_artifacts import (
+        from core.same_source_map_artifacts import (
             validate_same_source_map_metadata,
         )
 
@@ -1528,6 +1528,16 @@ class TestGeofenceManagerModule(unittest.TestCase):
         alerts = self.mod.check_intrusion()
         self.assertEqual(len(alerts), 1)
         self.assertEqual(alerts[0]["type"], "intrusion")
+
+    def test_intrusion_publishes_hard_stop_on_odom(self):
+        polygon = [[0, 0], [10, 0], [10, 10], [0, 10]]
+        self.mod._fences["zone"] = {"polygon": polygon, "enabled": True}
+        stops = []
+        self.mod.stop_cmd._add_callback(stops.append)
+
+        self.mod._on_odom(Odometry(pose=Pose(5.0, 5.0, 0.0)))
+
+        self.assertEqual(stops[-1], 2)
 
     def test_check_intrusion_outside(self):
         polygon = [[0, 0], [10, 0], [10, 10], [0, 10]]

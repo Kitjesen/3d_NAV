@@ -34,15 +34,16 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from core import In, Module, Out, skill
+from core.dynamic_filter import apply_dynamic_filter_step1half
 from core.msgs.sensor import PointCloud2
 from core.runtime_interface import TOPICS, topic_default_frame_id
-from nav.services.nav_services.same_source_map_artifacts import (
+from core.same_source_map_artifacts import (
     build_saved_map_metadata,
     sha256_file,
     validate_saved_map_artifact_dir,
     validate_same_source_map_metadata,
 )
-from nav.services.nav_services.yaml_helpers import load_yaml, save_yaml
+from core.yaml_helpers import load_yaml, save_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -336,8 +337,7 @@ class MapManagerModule(Module, layer=6):
         # Keep this in one helper so env-var, parameter, and error handling
         # stay aligned with the gateway save path.
         # See docs/05-specialized/dynamic_obstacle_removal.md Phase 2.
-        from gateway.gateway_module import _apply_dynamic_filter_step1half
-        dufo_result: dict[str, Any] | None = _apply_dynamic_filter_step1half(map_dir)
+        dufo_result: dict[str, Any] | None = apply_dynamic_filter_step1half(map_dir)
 
         # Step 2: auto-build tomogram (required for global planner).
         tomo_result = self._build_tomogram(name)
@@ -964,7 +964,9 @@ class MapManagerModule(Module, layer=6):
             "mode":            "trinary",
         }
         try:
-            import yaml as _yaml
+            from core.yaml_helpers import yaml as _yaml
+            if _yaml is None:
+                raise ImportError
             with open(yaml_path, "w") as f:
                 _yaml.safe_dump(yaml_body, f, default_flow_style=False, sort_keys=False)
         except ImportError:

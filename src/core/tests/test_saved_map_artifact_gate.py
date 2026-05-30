@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _write_same_source_map(tmp_path: Path, *, frame_id: str = "odom") -> Path:
-    from nav.services.nav_services.same_source_map_artifacts import (
+    from core.same_source_map_artifacts import (
         write_same_source_map_artifacts,
     )
 
@@ -43,7 +43,7 @@ def _write_same_source_map(tmp_path: Path, *, frame_id: str = "odom") -> Path:
 
 
 def test_saved_map_artifact_dir_gate_accepts_same_source_metadata(tmp_path: Path):
-    from nav.services.nav_services.same_source_map_artifacts import (
+    from core.same_source_map_artifacts import (
         validate_saved_map_artifact_dir,
     )
 
@@ -81,7 +81,7 @@ def test_saved_map_artifact_dir_gate_accepts_same_source_metadata(tmp_path: Path
 def test_saved_map_artifact_dir_gate_reports_expected_source_contract(
     tmp_path: Path,
 ):
-    from nav.services.nav_services.same_source_map_artifacts import (
+    from core.same_source_map_artifacts import (
         validate_saved_map_artifact_dir,
     )
 
@@ -105,7 +105,7 @@ def test_saved_map_artifact_dir_gate_reports_expected_source_contract(
 
 
 def test_saved_map_artifact_dir_gate_rejects_missing_metadata(tmp_path: Path):
-    from nav.services.nav_services.same_source_map_artifacts import (
+    from core.same_source_map_artifacts import (
         validate_saved_map_artifact_dir,
         write_ascii_pcd,
     )
@@ -123,7 +123,7 @@ def test_saved_map_artifact_dir_gate_rejects_missing_metadata(tmp_path: Path):
 
 
 def test_saved_map_artifact_dir_gate_rejects_file_sha_drift(tmp_path: Path):
-    from nav.services.nav_services.same_source_map_artifacts import (
+    from core.same_source_map_artifacts import (
         validate_saved_map_artifact_dir,
     )
 
@@ -140,7 +140,7 @@ def test_saved_map_artifact_dir_gate_rejects_file_sha_drift(tmp_path: Path):
 def test_saved_map_artifact_dir_gate_rejects_expected_frame_mismatch(
     tmp_path: Path,
 ):
-    from nav.services.nav_services.same_source_map_artifacts import (
+    from core.same_source_map_artifacts import (
         validate_saved_map_artifact_dir,
     )
 
@@ -158,7 +158,7 @@ def test_saved_map_artifact_dir_gate_rejects_expected_frame_mismatch(
 def test_saved_map_artifact_dir_gate_normalizes_expected_frame_ids(
     tmp_path: Path,
 ):
-    from nav.services.nav_services.same_source_map_artifacts import (
+    from core.same_source_map_artifacts import (
         validate_saved_map_artifact_dir,
     )
 

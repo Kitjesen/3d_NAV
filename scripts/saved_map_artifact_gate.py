@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(list(argv or sys.argv[1:]))
     _ensure_import_path()
 
-    from nav.services.nav_services.same_source_map_artifacts import (
+    from core.same_source_map_artifacts import (
         validate_saved_map_artifact_dir,
     )
     from core.runtime_validation_gates import runtime_validation_gates

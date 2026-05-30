@@ -69,7 +69,7 @@ from drivers.sim.mujoco_sensor_bridge import (
     world_xyzi_to_sensor_xyzi as _world_xyzi_to_sensor_xyzi,
     yaw_from_quat_xyzw as _yaw_from_quat_xyzw,
 )
-from nav.services.nav_services.same_source_map_artifacts import (
+from core.same_source_map_artifacts import (
     add_points_to_voxel_store as _add_points_to_voxel_store,
     write_same_source_map_artifacts as _write_same_source_map_artifacts,
 )

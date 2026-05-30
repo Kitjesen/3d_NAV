@@ -256,7 +256,12 @@ class TestVectorMemoryOperations(unittest.TestCase):
         self.assertFalse(health["semantic_encoder_ready"])
         self.assertTrue(health["degraded"])
         self.assertEqual(health["encoder_type"], "lexical_hash")
+        self.assertEqual(health["encoder_backend"]["configured_backend"], "auto")
+        self.assertEqual(health["encoder_backend"]["backend"], "lexical_hash")
+        self.assertTrue(health["encoder_backend"]["degraded"])
+        self.assertIn("semantic text encoder", health["encoder_backend"]["degraded_reason"])
         self.assertEqual(stats["encoder_type"], "lexical_hash")
+        self.assertEqual(stats["encoder_backend"]["backend"], "lexical_hash")
         self.assertFalse(stats["semantic_encoder_ready"])
         self.assertTrue(stats["degraded"])
 

@@ -1262,6 +1262,30 @@ class TestSafetyRingModule(unittest.TestCase):
         self.assertIn(2, stop_cmds,
                       f"Expected stop_cmd=2 for odom timeout, got {stop_cmds}")
 
+    def test_initial_state_without_odom_is_stop(self):
+        """Before the first odom sample, safety must fail closed."""
+        m = self._make_module(odom_timeout_ms=500.0)
+
+        stop_cmds = []
+        m.stop_cmd._add_callback(stop_cmds.append)
+
+        m._publish_safety()
+
+        self.assertEqual(stop_cmds[-1], 2)
+
+    def test_stop_cmd_republishes_current_stop_level(self):
+        """Repeated safety checks in STOP should resend STOP to restarted downstreams."""
+        m = self._make_module()
+        m.odometry._deliver(self._make_odom())
+
+        stop_cmds = []
+        m.stop_cmd._add_callback(stop_cmds.append)
+
+        m.localization_status._deliver({"state": "LOST"})
+        m.localization_status._deliver({"state": "LOST"})
+
+        self.assertGreaterEqual(stop_cmds.count(2), 2)
+
     def test_localization_lost_triggers_stop(self):
         """Localization state LOST triggers stop_cmd == 2."""
         m = self._make_module()

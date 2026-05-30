@@ -168,7 +168,7 @@ def test_fastlio_live_gate_shutdown_is_idempotent() -> None:
 
 
 def test_fastlio_live_gate_writes_same_source_map_artifacts(tmp_path) -> None:
-    from nav.services.nav_services.same_source_map_artifacts import (
+    from core.same_source_map_artifacts import (
         validate_same_source_map_metadata,
         write_same_source_map_artifacts,
     )
@@ -219,7 +219,7 @@ def test_fastlio_live_gate_writes_same_source_map_artifacts(tmp_path) -> None:
 
 
 def test_same_source_map_metadata_rejects_derived_artifact_sha_drift() -> None:
-    from nav.services.nav_services.same_source_map_artifacts import (
+    from core.same_source_map_artifacts import (
         validate_same_source_map_metadata,
     )
 
@@ -263,7 +263,7 @@ def test_same_source_map_metadata_rejects_derived_artifact_sha_drift() -> None:
 
 
 def test_fastlio_live_gate_rejects_diverged_map_before_tomogram(tmp_path) -> None:
-    from nav.services.nav_services.same_source_map_artifacts import (
+    from core.same_source_map_artifacts import (
         write_same_source_map_artifacts,
     )
 

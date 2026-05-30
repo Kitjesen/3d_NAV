@@ -80,13 +80,13 @@ from gateway.schemas import (
     StopRequest,
 )
 from gateway.services.commands import CommandJournal
-from gateway.services.map_safety import (
-    apply_dynamic_filter_step1half as _map_apply_dynamic_filter_step1half,
-    safe_map_name as _map_safe_map_name,
-)
 from gateway.services.map_paths import (
     active_map_name,
     map_dir_for,
+)
+from gateway.services.map_safety import (
+    apply_dynamic_filter_step1half as _map_apply_dynamic_filter_step1half,
+    safe_map_name as _map_safe_map_name,
 )
 from gateway.services.runtime_status import (
     backend_capability_defaults,
@@ -130,68 +130,7 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _safe_map_name(name: str) -> str | None:
-    """Validate a map name from user input. Return error message or None.
-
-    Rejects anything that could be used for path traversal or absolute paths.
-    Allows only alphanumerics + underscore + hyphen + dot (single, not ..).
-    Max 100 chars to prevent abuse.
-
-    Examples:
-        _safe_map_name("lab_0424")        → None (ok)
-        _safe_map_name("../etc/passwd")   → "unsafe: ..."
-        _safe_map_name("a/b")             → "unsafe: ..."
-        _safe_map_name("")                → "empty name"
-    """
-    if not name or not isinstance(name, str):
-        return "empty name"
-    if len(name) > 100:
-        return "name too long (max 100)"
-    if "/" in name or "\\" in name or ".." in name:
-        return f"unsafe characters in name: {name!r}"
-    if name.startswith(".") or name.startswith("-"):
-        return f"name cannot start with . or -: {name!r}"
-    # Whitelist safe chars
-    import re as _re
-    if not _re.fullmatch(r"[A-Za-z0-9_\-\.]+", name):
-        return f"only [A-Za-z0-9_.-] allowed: {name!r}"
-    return None
-
-
-def _apply_dynamic_filter_step1half(save_dir: str | os.PathLike[str]) -> dict | None:
-    """Shared Step 1½ — DUFOMap dynamic-obstacle filter call.
-
-    Both /api/v1/map/save (Web direct) and MapManager._map_save (MCP path)
-    must run DUFOMap filter after PGO and before tomogram build. This helper
-    is the single source of truth to prevent the two call sites from
-    drifting apart (as they did with env var naming in an earlier commit).
-
-    Returns None if the filter is disabled (env var); otherwise the
-    dict from refilter_map (always sets 'success': bool).
-    """
-    if os.environ.get("LINGTU_SAVE_DYNAMIC_FILTER", "1") in ("0", "false", "False", "FALSE", "no", "off", ""):
-        return None
-    try:
-        from nav.services.nav_services.dynamic_filter import refilter_map
-        result = refilter_map(save_dir, timeout_s=300.0)
-        if result.get("success"):
-            orig = result.get("orig_count", 0)
-            clean = result.get("clean_count", 0)
-            dropped = result.get("dropped", 0)
-            pct = 100 * dropped / max(1, orig)
-            logger.info(
-                "dynamic_filter: %s %d→%d pts (-%d, %.1f%%) in %.1fs",
-                os.path.basename(str(save_dir)), orig, clean, dropped, pct,
-                result.get("elapsed_s", 0.0),
-            )
-        else:
-            logger.warning("dynamic_filter: skipped: %s", result.get("error"))
-        return result
-    except Exception as e:
-        logger.warning("dynamic_filter: crashed (non-fatal): %s", e)
-        return {"success": False, "error": str(e)}
-
-
+# Convenience aliases — canonical implementations in gateway.services.map_safety
 _safe_map_name = _map_safe_map_name
 _apply_dynamic_filter_step1half = _map_apply_dynamic_filter_step1half
 
@@ -645,6 +584,35 @@ class GatewayModule(Module, layer=6):
                 return False
         return False
 
+    def _drift_odom_diverged(
+        self,
+        odom: dict[str, Any],
+    ) -> tuple[bool, float, float, float, float, bool]:
+        def abs_finite(key: str) -> tuple[float, bool]:
+            try:
+                value = float(odom.get(key, 0.0))
+            except (TypeError, ValueError):
+                return float("inf"), False
+            if not math.isfinite(value):
+                return float("inf"), False
+            return abs(value), True
+
+        x, x_ok = abs_finite("x")
+        y, y_ok = abs_finite("y")
+        z, z_ok = abs_finite("z")
+        vx, vx_ok = abs_finite("vx")
+        vy, vy_ok = abs_finite("vy")
+        vz, vz_ok = abs_finite("vz")
+        v = max(vx, vy, vz)
+        invalid = not all((x_ok, y_ok, z_ok, vx_ok, vy_ok, vz_ok))
+        xy_bad = (
+            x > self._drift_watchdog_xy_limit
+            or y > self._drift_watchdog_xy_limit
+            or z > self._drift_watchdog_xy_limit
+        )
+        v_bad = v > self._drift_watchdog_v_limit
+        return invalid or xy_bad or v_bad, x, y, z, v, invalid
+
     def _drift_watchdog_loop(
         self, stop_event: threading.Event | None = None
     ) -> None:
@@ -674,13 +642,8 @@ class GatewayModule(Module, layer=6):
                     odom = dict(self._odom) if self._odom else {}
                 if not odom:
                     continue
-                x = abs(float(odom.get("x", 0.0)))
-                y = abs(float(odom.get("y", 0.0)))
-                z = abs(float(odom.get("z", 0.0)))
-                v = abs(float(odom.get("vx", 0.0)))
-                xy_bad = (x > xy_lim or y > xy_lim or z > xy_lim)
-                v_bad  = (v > v_lim)
-                if not (xy_bad or v_bad):
+                diverged, x, y, z, v, invalid = self._drift_odom_diverged(odom)
+                if not diverged:
                     continue
                 # Divergence detected
                 now = time.time()
@@ -700,7 +663,7 @@ class GatewayModule(Module, layer=6):
                 if stop_event.is_set():
                     return
                 self._drift_restart_do_restart(
-                    xy=x, y_abs=y, v=v, stop_event=stop_event
+                    xy=max(x, y, z), y_abs=y, v=v, stop_event=stop_event
                 )
                 self._drift_last_restart_ts = time.time()
                 self._drift_restart_count += 1
