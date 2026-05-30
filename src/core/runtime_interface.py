@@ -1009,6 +1009,48 @@ def topic_formats(topic: str) -> tuple[str, ...]:
         raise ValueError(f"topic {topic!r} has no declared runtime format") from exc
 
 
+def map_frame_id() -> str:
+    """Return the canonical fixed map frame used at runtime boundaries."""
+
+    return FRAMES.map
+
+
+def odom_frame_id() -> str:
+    """Return the canonical odometry frame used at runtime boundaries."""
+
+    return FRAMES.odom
+
+
+def body_frame_id() -> str:
+    """Return the canonical body frame used at runtime boundaries."""
+
+    return FRAMES.body
+
+
+def lidar_frame_id() -> str:
+    """Return the canonical normalized LiDAR frame used at runtime boundaries."""
+
+    return FRAMES.lidar
+
+
+def real_lidar_frame_id() -> str:
+    """Return the physical Livox frame before runtime normalization."""
+
+    return FRAMES.real_lidar
+
+
+def camera_frame_id() -> str:
+    """Return the canonical camera frame used at runtime boundaries."""
+
+    return FRAMES.camera
+
+
+def simulator_world_frame_id() -> str:
+    """Return the simulator fixed-world frame used at runtime boundaries."""
+
+    return FRAMES.simulator_world
+
+
 def profile_data_source(profile: str) -> ProfileDataSourceBinding:
     """Return the declared endpoint data-source binding for one CLI profile."""
 
