@@ -5,18 +5,18 @@ and docs/superpowers/plans/2026-05-30-repo-structure-redesign.md §4).
 
 Why this file exists
 --------------------
-LingTu drivers (real `thunder`, sim `mujoco`/`ros2`, `stub`) are pluggable
-backends resolved via ``core.registry.get("driver", name)``. Historically the
-"what ports must a driver expose" contract lived only as duck-typed annotations
-scattered across each module, so there was no single place to answer
-"is the sim driver shaped like the real driver?".
+LingTu motion drivers (real `thunder`, sim `mujoco`/`ros2`, `stub`) are
+pluggable backends resolved via ``core.registry.get("driver", name)``.
+Historically the "what ports must a robot motion driver expose" contract lived
+only as duck-typed annotations scattered across each module, so there was no
+single place to answer "is the sim driver shaped like the real driver?".
 
 This module makes the contract explicit (dimos-style ``spec`` Protocols) and
 machine-checkable, so sim/real/stub backends can be verified to share one shape.
 
 Contract tiers
 --------------
-* MotionDriver (REQUIRED for every driver):
+* MotionDriver (REQUIRED for every profile-selectable motion driver):
     In  : cmd_vel: In[Twist], stop_signal: In[int]
     Out : odometry: Out[Odometry]
 * CameraSource (OPTIONAL capability):

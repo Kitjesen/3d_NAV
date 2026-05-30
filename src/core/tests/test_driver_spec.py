@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.registry import get, list_plugins
+from core.registry import get
 from drivers.spec import (
     driver_capabilities,
     driver_contract_issues,
@@ -24,6 +24,8 @@ _DRIVER_MODULES = (
     "drivers.sim.mujoco_driver_module",
     "drivers.sim.ros2_sim_driver",
 )
+
+_MOTION_DRIVER_BACKENDS = ("stub", "thunder", "sim_mujoco", "sim_ros2")
 
 
 def _ensure_drivers_registered() -> None:
@@ -43,12 +45,10 @@ def _get_driver(name: str):
         pytest.skip(f"driver '{name}' not registered in this environment")
 
 
-def test_all_registered_drivers_satisfy_motion_contract():
+def test_profile_motion_drivers_satisfy_motion_contract():
     _ensure_drivers_registered()
-    names = list_plugins("driver")
-    assert names, "no driver backends registered"
-    for name in names:
-        cls = get("driver", name)
+    for name in _MOTION_DRIVER_BACKENDS:
+        cls = _get_driver(name)
         issues = driver_contract_issues(cls)
         assert issues == [], f"driver '{name}' violates MotionDriver: {issues}"
 
@@ -69,6 +69,13 @@ def test_minimal_drivers_expose_motion_only(name):
     assert not is_pointcloud_source(cls), (
         f"{name} unexpectedly bundles map_cloud; update spec tiers if intentional"
     )
+
+
+def test_real_lidar_driver_is_sensor_source_not_motion_driver():
+    from drivers.real.lidar import LidarModule
+
+    assert not is_motion_driver(LidarModule)
+    assert is_pointcloud_source(LidarModule) is False
 
 
 def test_driver_capabilities_report_shape():
