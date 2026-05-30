@@ -1,4 +1,4 @@
-"""Unit tests for cli.run_state — save/read/update/compute_uptime."""
+"""Unit tests for cli.run_state save/read/update/compute_uptime."""
 
 from __future__ import annotations
 
@@ -59,6 +59,31 @@ class TestSaveReadClear:
         assert "start_ts" in state and isinstance(state["start_ts"], (int, float))
         assert "host" in state
         assert "version" in state
+
+    def test_save_persists_runtime_boundary(self, isolated_run_dir):
+        from cli.run_state import read_run_state, save_run_state
+
+        runtime = {
+            "endpoint": "real_s100p",
+            "data_source": "real_s100p",
+            "runtime_contract": "real_s100p",
+            "command_sink": "hardware_driver_after_cmd_vel_mux",
+            "resolved_runtime_data_flow": [
+                {
+                    "name": "command_boundary",
+                    "outputs": ["hardware_driver_after_cmd_vel_mux"],
+                }
+            ],
+        }
+        save_run_state(
+            "nav",
+            {"robot": "s100p"},
+            str(isolated_run_dir),
+            runtime=runtime,
+        )
+
+        state = read_run_state()
+        assert state["runtime"] == runtime
 
     def test_save_omits_none_counts(self, isolated_run_dir):
         from cli.run_state import read_run_state, save_run_state
@@ -177,3 +202,158 @@ class TestLingtuVersion:
         v = _lingtu_version()
         assert isinstance(v, str)
         assert len(v) > 0
+
+
+def _runtime_status_state() -> dict:
+    return {
+        "pid": os.getpid(),
+        "profile": "nav",
+        "started_at": "2026-05-23T00:00:00",
+        "start_ts": time.time(),
+        "status": "running",
+        "cwd": str(Path.cwd()),
+        "argv": ["nav"],
+        "daemon": False,
+        "log_dir": "logs/nav",
+        "log_file": "logs/nav/lingtu.log",
+        "host": "test-host",
+        "version": "test",
+        "runtime": {
+            "endpoint": "real_s100p",
+            "data_source": "real_s100p",
+            "runtime_contract": "real_s100p",
+            "command_sink": "hardware_driver_after_cmd_vel_mux",
+            "simulation_only": False,
+            "slam_source": "lingtu_fastlio_or_external_robot_slam",
+            "localization_source": "slam_localizer",
+            "mapping_source": "slam_map_cloud",
+            "frame_links": {
+                "map_to_odom": {
+                    "parent": "map",
+                    "child": "odom",
+                    "required": True,
+                },
+                "odom_to_body": {
+                    "parent": "odom",
+                    "child": "body",
+                    "required": True,
+                },
+                "body_to_lidar": {
+                    "parent": "body",
+                    "child": "lidar_link",
+                    "required": True,
+                },
+            },
+            "frames": {
+                "map": "map",
+                "odom": "odom",
+                "body": "body",
+                "lidar": "lidar_link",
+                "real_lidar": "livox_frame",
+                "camera": "camera_link",
+                "axis_convention": "x_forward_y_left_z_up",
+            },
+            "topic_allowed_frame_ids": {
+                "/nav/odometry": ["odom", "map"],
+                "/nav/registered_cloud": ["body"],
+                "/nav/map_cloud": ["map"],
+                "/nav/global_path": ["map"],
+                "/nav/local_path": ["map", "odom", "body"],
+                "/nav/cmd_vel": ["body"],
+            },
+            "topic_default_frame_ids": {
+                "/nav/odometry": "odom",
+                "/nav/registered_cloud": "body",
+                "/nav/map_cloud": "map",
+                "/nav/global_path": "map",
+                "/nav/local_path": "map",
+                "/nav/cmd_vel": "body",
+            },
+            "resolved_runtime_data_flow": [
+                {"name": "endpoint_adapter", "inputs": ["/nav/lidar_scan", "/nav/imu"]},
+                {
+                    "name": "slam_or_relayed_localization_map",
+                    "outputs": ["/nav/odometry", "/nav/registered_cloud", "/nav/map_cloud"],
+                },
+                {
+                    "name": "command_boundary",
+                    "outputs": ["hardware_driver_after_cmd_vel_mux"],
+                },
+            ],
+            "validation": {"ok": True, "blockers": []},
+        },
+    }
+
+
+def test_status_human_output_includes_runtime_boundary(monkeypatch, capsys):
+    from cli import ui
+
+    state = _runtime_status_state()
+    monkeypatch.setattr(ui, "read_run_state", lambda: state)
+    monkeypatch.setattr(ui, "is_pid_alive", lambda _pid: True)
+
+    ui.cmd_status_external(as_json=False)
+
+    out = capsys.readouterr().out
+    assert "Runtime:  endpoint=real_s100p data_source=real_s100p" in out
+    assert "SLAM:     slam_source=lingtu_fastlio_or_external_robot_slam" in out
+    assert (
+        "Frame ids: map=map odom=odom body=body lidar=lidar_link "
+        "real_lidar=livox_frame camera=camera_link "
+        "axis_convention=x_forward_y_left_z_up"
+    ) in out
+    assert "Frames:   map->odom, odom->body, body->lidar_link" in out
+    assert (
+        "Topic frames: odometry=odom,map registered_cloud=body "
+        "map_cloud=map global_path=map local_path=map,odom,body cmd_vel=body"
+    ) in out
+    assert "Flow:     sensors=/nav/lidar_scan,/nav/imu" in out
+    assert "command=hardware_driver_after_cmd_vel_mux" in out
+
+
+def test_status_json_output_includes_runtime_boundary(monkeypatch, capsys):
+    from cli import ui
+
+    state = _runtime_status_state()
+    monkeypatch.setattr(ui, "read_run_state", lambda: state)
+    monkeypatch.setattr(ui, "is_pid_alive", lambda _pid: True)
+
+    ui.cmd_status_external(as_json=True)
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["runtime_status"] == "running"
+    assert report["runtime"]["endpoint"] == "real_s100p"
+    assert report["runtime"]["data_source"] == "real_s100p"
+    assert report["runtime"]["command_sink"] == "hardware_driver_after_cmd_vel_mux"
+    assert report["runtime"]["topic_allowed_frame_ids"]["/nav/map_cloud"] == [
+        "map"
+    ]
+    assert report["runtime"]["frames"]["axis_convention"] == "x_forward_y_left_z_up"
+    assert report["runtime"]["topic_default_frame_ids"]["/nav/cmd_vel"] == "body"
+    assert report["runtime"]["resolved_runtime_data_flow"][-1]["outputs"] == [
+        "hardware_driver_after_cmd_vel_mux"
+    ]
+    assert report["runtime"]["validation"] == {"ok": True, "blockers": []}
+
+
+def test_stop_force_falls_back_when_sigkill_is_unavailable(monkeypatch, capsys):
+    from cli import ui
+
+    sent_signals: list[tuple[int, int]] = []
+    cleared = {"called": False}
+
+    monkeypatch.setattr(ui, "read_run_state", lambda: {"pid": 1234, "profile": "stub"})
+    monkeypatch.setattr(ui, "is_pid_alive", lambda _pid: True)
+    monkeypatch.delattr(ui.signal, "SIGKILL", raising=False)
+    monkeypatch.setattr(
+        ui.os,
+        "kill",
+        lambda pid, sig: sent_signals.append((pid, sig)),
+    )
+    monkeypatch.setattr(ui, "clear_run_state", lambda: cleared.__setitem__("called", True))
+
+    ui.cmd_stop(force=True)
+
+    assert sent_signals == [(1234, ui.signal.SIGTERM)]
+    assert cleared["called"] is True
+    assert "Force killed." in capsys.readouterr().out

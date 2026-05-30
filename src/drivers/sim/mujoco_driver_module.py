@@ -32,7 +32,7 @@ from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat, PointCloud2
 from core.registry import register
-from core.runtime_interface import FRAMES
+from core.runtime_interface import FRAMES, TOPICS, topic_default_frame_id
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,11 @@ _POLICY_CANDIDATES = (
 )
 _POLICY_ONNX = _POLICY_CANDIDATES[-1]
 _DEFAULT_START_POS = (0.0, 0.0, 0.55)
+MUJOCO_MODULE_ODOM_FRAME_ID = topic_default_frame_id(TOPICS.odometry)
+MUJOCO_MODULE_BODY_FRAME_ID = topic_default_frame_id(TOPICS.registered_cloud)
+# In-process MuJoCo does not own a map->odom localizer; its live map cloud is odom-frame.
+MUJOCO_MODULE_MAP_CLOUD_FRAME_ID = MUJOCO_MODULE_ODOM_FRAME_ID
+MUJOCO_MODULE_CAMERA_FRAME_ID = FRAMES.camera
 
 
 def _first_existing_path(paths: tuple[Path, ...]) -> str:
@@ -196,8 +201,8 @@ class MujocoDriverModule(Module, layer=1):
         max_angular_vel: float | None = None,
         start_pos: tuple = _DEFAULT_START_POS,
         obstacles: list | None = None,
-        odom_frame_id: str = FRAMES.odom,
-        child_frame_id: str = FRAMES.body,
+        odom_frame_id: str = MUJOCO_MODULE_ODOM_FRAME_ID,
+        child_frame_id: str = MUJOCO_MODULE_BODY_FRAME_ID,
         **kw,
     ):
         super().__init__(**kw)
@@ -422,12 +427,12 @@ class MujocoDriverModule(Module, layer=1):
                             )
                             self.lidar_cloud.publish(PointCloud2(
                                 points=pts_body,
-                                frame_id=FRAMES.body,
+                                frame_id=MUJOCO_MODULE_BODY_FRAME_ID,
                                 ts=ts,
                             ))
                             world_cloud = PointCloud2(
                                 points=pts_world,
-                                frame_id=FRAMES.odom,
+                                frame_id=MUJOCO_MODULE_MAP_CLOUD_FRAME_ID,
                                 ts=ts,
                             )
                             self.map_cloud.publish(world_cloud)
@@ -445,14 +450,14 @@ class MujocoDriverModule(Module, layer=1):
                                 data=cam.rgb,
                                 format=ImageFormat.RGB,
                                 ts=ts,
-                                frame_id="camera_link",
+                                frame_id=MUJOCO_MODULE_CAMERA_FRAME_ID,
                             ))
                             if cam.depth is not None:
                                 self.depth_image.publish(Image(
                                     data=cam.depth,
                                     format=ImageFormat.DEPTH_F32,
                                     ts=ts,
-                                    frame_id="camera_link",
+                                    frame_id=MUJOCO_MODULE_CAMERA_FRAME_ID,
                                 ))
                             fx, fy, cx, cy = cam.intrinsics
                             self.camera_info.publish(CameraIntrinsics(

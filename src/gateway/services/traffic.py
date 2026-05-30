@@ -37,6 +37,8 @@ SSE_EVENT_TYPES = (
     "exploring",
     "tare_stats",
     "exploration_supervisor",
+    "traversable_frontiers",
+    "frontier_candidate",
     "global_path",
     "local_path",
     "costmap",

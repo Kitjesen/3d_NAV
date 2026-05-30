@@ -1,15 +1,17 @@
-# LingTu Topic Interface Contract
+# LingTu Runtime Stream Token Contract
 #
 # This file mirrors the canonical Python runtime contract in
 # src/core/runtime_interface.py. Keep simulator adapters and real robot
 # adapters aligned to that module; this YAML is the human-readable operations
-# contract used by docs, diagnostics, and static validation.
+# contract used by docs, diagnostics, and static validation. The historical
+# field names still use "topic" for API compatibility, but these entries are
+# canonical runtime stream tokens, not ROS2 topic names.
 #
 # Rules:
-#   - High-level LingTu modules consume the canonical /nav/* topics.
+#   - High-level LingTu modules consume canonical runtime stream tokens.
 #   - Endpoint adapters are responsible for remapping simulator or hardware
-#     native topics into this contract.
-#   - Do not change existing topic names without a full migration.
+#     native streams or topics into this contract.
+#   - Do not change existing stream token names without a full migration.
 #   - Keep comments in English to avoid encoding drift across Windows/Linux.
 
 sensor:
@@ -43,6 +45,8 @@ exploration:
   stop: /exploration/stop
   way_point: /exploration/way_point      # strategy waypoint from TARE/exploration
   exploration_grid: /nav/exploration_grid # nav_msgs/OccupancyGrid
+  traversable_frontiers: /nav/traversable_frontiers # read-only candidate list
+  frontier_candidate: /nav/frontier_candidate # read-only best candidate
   status: /exploration/status
 
 planning:
@@ -190,6 +194,10 @@ tf:
       parent: body
       child: lidar_link
       required: true
+    body_to_camera:
+      parent: body
+      child: camera_link
+      required: true
 
 extrinsics:
   # All entries are body -> LiDAR static transforms in metres/radians.
@@ -257,6 +265,11 @@ data_formats:
     topic: /nav/cmd_vel
     ros_type: geometry_msgs/msg/TwistStamped
     frame_role: body
+  traversable_frontier_candidates:
+    topic: /nav/traversable_frontiers
+    ros_type: application/json
+    frame_role: map
+    required_fields: [id, centroid_3d, reachable_score, support_type, esdf_clearance_m, semantic_value, evidence_layers, reasons]
 
 topic_formats:
   /points_raw: [raw_livox_custom, raw_timed_pointcloud2]
@@ -270,8 +283,14 @@ topic_formats:
   /nav/cumulative_map_cloud: [map_cloud]
   /nav/saved_map_cloud: [map_cloud]
   /nav/exploration_grid: [nav_msgs/msg/OccupancyGrid]
+  /nav/traversable_frontiers: [traversable_frontier_candidates]
+  /nav/frontier_candidate: [traversable_frontier_candidates]
   /nav/save_map: [service]
+  /nav/localization_quality: [std_msgs/msg/Float32]
   /nav/localization_health: [std_msgs/msg/String]
+  /nav/relocalize: [service]
+  /nav/global_relocalize: [service]
+  /nav/relocalize_check: [service]
   /nav/global_path: [nav_msgs/msg/Path]
   /nav/local_path: [nav_msgs/msg/Path]
   /nav/terrain_map: [map_cloud]
@@ -308,6 +327,7 @@ topic_formats:
   /Odometry: [odometry]
   /cloud_registered: [registered_cloud]
   /cloud_map: [map_cloud]
+  /localization_quality: [std_msgs/msg/Float32]
   /map_clearing: [std_msgs/msg/Bool]
   /cloud_clearing: [std_msgs/msg/Bool]
   /path: [nav_msgs/msg/Path]
@@ -319,43 +339,525 @@ topic_formats:
   /check_obstacle: [std_msgs/msg/Bool]
   /planner_status: [std_msgs/msg/String]
 
+topic_allowed_frame_ids:
+  /nav/lidar_scan: [lidar_link]
+  /nav/imu: [lidar_link]
+  /nav/odometry: [odom, map]
+  /nav/state_estimation_at_scan: [odom]
+  /nav/registered_cloud: [body]
+  /nav/map_cloud: [map, odom]
+  /nav/cumulative_map_cloud: [map, odom]
+  /nav/saved_map_cloud: [map, odom]
+  /nav/exploration_grid: [map, odom]
+  /nav/traversable_frontiers: [map, odom]
+  /nav/frontier_candidate: [map, odom]
+  /nav/terrain_map: [map, odom]
+  /nav/terrain_map_ext: [map, odom]
+  /nav/global_path: [map, odom]
+  /nav/local_path: [map, odom, body]
+  /nav/cmd_vel: [body]
+
+topic_default_frame_ids:
+  /nav/lidar_scan: lidar_link
+  /nav/imu: lidar_link
+  /nav/odometry: odom
+  /nav/state_estimation_at_scan: odom
+  /nav/registered_cloud: body
+  /nav/map_cloud: map
+  /nav/cumulative_map_cloud: map
+  /nav/saved_map_cloud: map
+  /nav/exploration_grid: map
+  /nav/traversable_frontiers: map
+  /nav/frontier_candidate: map
+  /nav/terrain_map: map
+  /nav/terrain_map_ext: map
+  /nav/global_path: map
+  /nav/local_path: map
+  /nav/cmd_vel: body
+
+real_runtime_topic_allowed_frame_ids:
+  /nav/lidar_scan: [lidar_link]
+  /nav/imu: [lidar_link]
+  /nav/odometry: [odom, map]
+  /nav/state_estimation_at_scan: [odom]
+  /nav/registered_cloud: [body]
+  /nav/map_cloud: [map]
+  /nav/cumulative_map_cloud: [map, odom]
+  /nav/saved_map_cloud: [map, odom]
+  /nav/exploration_grid: [map, odom]
+  /nav/traversable_frontiers: [map]
+  /nav/frontier_candidate: [map]
+  /nav/terrain_map: [map, odom]
+  /nav/terrain_map_ext: [map, odom]
+  /nav/global_path: [map]
+  /nav/local_path: [map, odom, body]
+  /nav/cmd_vel: [body]
+
+real_runtime_topic_default_frame_ids:
+  /nav/lidar_scan: lidar_link
+  /nav/imu: lidar_link
+  /nav/odometry: odom
+  /nav/state_estimation_at_scan: odom
+  /nav/registered_cloud: body
+  /nav/map_cloud: map
+  /nav/cumulative_map_cloud: map
+  /nav/saved_map_cloud: map
+  /nav/exploration_grid: map
+  /nav/traversable_frontiers: map
+  /nav/frontier_candidate: map
+  /nav/terrain_map: map
+  /nav/terrain_map_ext: map
+  /nav/global_path: map
+  /nav/local_path: map
+  /nav/cmd_vel: body
+
+real_runtime_required_topic_frame_ids:
+  - /nav/lidar_scan
+  - /nav/imu
+  - /nav/odometry
+  - /nav/registered_cloud
+  - /nav/map_cloud
+  - /nav/global_path
+  - /nav/local_path
+  - /nav/cmd_vel
+
+real_runtime_required_endpoint_input_topics:
+  - /nav/lidar_scan
+  - /nav/imu
+
+runtime_data_flow_topics:
+  in_process_stub: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/exploration_grid, /nav/terrain_map_ext, /exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate, /nav/global_path, /nav/local_path, /nav/cmd_vel, /nav/added_obstacles, /nav/check_obstacle, /nav/planner_status]
+  real_s100p: [/nav/lidar_scan, /nav/imu, /nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/localization_health, /nav/localization_quality, /nav/exploration_grid, /nav/terrain_map_ext, /exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate, /nav/global_path, /nav/local_path, /nav/cmd_vel, /nav/added_obstacles, /nav/check_obstacle, /nav/planner_status]
+  mujoco_module_graph: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/exploration_grid, /nav/terrain_map_ext, /exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate, /nav/global_path, /nav/local_path, /nav/cmd_vel, /nav/added_obstacles, /nav/check_obstacle, /nav/planner_status]
+  mujoco_fastlio2_live: [/points_raw, /imu_raw, /nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/exploration_grid, /nav/terrain_map_ext, /exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate, /nav/global_path, /nav/local_path, /nav/cmd_vel, /nav/added_obstacles, /nav/check_obstacle, /nav/planner_status]
+  rosbag_fastlio2_replay: [/points_raw, /imu_raw, /nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/exploration_grid, /nav/terrain_map_ext, /exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate, /nav/global_path, /nav/local_path, /nav/cmd_vel, /nav/added_obstacles, /nav/check_obstacle, /nav/planner_status]
+  gazebo_industrial: [/model/thunder/odometry, /lingtu/gazebo/raw/lidar_points, /lingtu/gazebo/raw/lidar_scan, /nav/odometry, /nav/state_estimation_at_scan, /nav/registered_cloud, /nav/map_cloud, /nav/exploration_grid, /nav/terrain_map_ext, /exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate, /nav/global_path, /nav/local_path, /nav/cmd_vel, /nav/added_obstacles, /nav/check_obstacle, /nav/planner_status, /lingtu/gazebo/cmd_vel]
+  cmu_unity_external: [/state_estimation, /state_estimation_at_scan, /registered_scan, /terrain_map, /terrain_map_ext, /way_point, /nav/odometry, /nav/state_estimation_at_scan, /nav/registered_cloud, /nav/map_cloud, /nav/terrain_map_ext, /exploration/way_point, /nav/exploration_grid, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate, /nav/global_path, /nav/local_path, /nav/cmd_vel, /nav/added_obstacles, /nav/check_obstacle, /nav/planner_status, /cmd_vel]
+
 algorithm_interfaces:
   fastlio_mapping:
     inputs: [/nav/lidar_scan, /nav/imu]
     outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
     owner: slam
+    map_dependency: none_live_canonical_sensor_slam
   fastlio_raw_validation:
     inputs: [/points_raw, /imu_raw]
     outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
     owner: slam_sim_validation
+    map_dependency: none_live_raw_sensor_slam
   exploration_strategy:
     inputs: [/nav/odometry, /nav/map_cloud, /nav/exploration_grid]
     outputs: [/exploration/way_point]
     owner: tare_or_frontier
+    map_dependency: live_map_or_occupancy_grid
   wavefront_frontier_exploration:
     inputs: [/nav/odometry, /nav/exploration_grid]
     outputs: [/nav/goal_pose]
     owner: lingtu_frontier
+    map_dependency: live_occupancy_grid_unknown_free_boundary
+  traversable_frontier_preview:
+    inputs: [/nav/odometry, /nav/exploration_grid, module:TraversableFrontierModule.fused_cost, module:TraversableFrontierModule.slope_grid, module:TraversableFrontierModule.esdf_field, module:TraversableFrontierModule.elevation_map]
+    outputs: [/nav/traversable_frontiers, /nav/frontier_candidate]
+    owner: lingtu_traversable_frontier
+    map_dependency: live_occupancy_grid_and_traversability_layers_read_only_preview
   tare_exploration:
     inputs: [/nav/odometry, /nav/map_cloud, /nav/terrain_map_ext]
     outputs: [/exploration/way_point]
     owner: tare_external_or_lingtu_tare_adapter
+    map_dependency: live_registered_scan_or_terrain_map_ext
   global_planning:
     inputs: [/nav/odometry, /nav/map_cloud, /exploration/way_point, /nav/goal_pose]
     outputs: [/nav/global_path]
     owner: lingtu_navigation
+    map_dependency: planner_specific_pct_saved_tomogram_or_astar_occupancy_grid
   astar_global_planning:
     inputs: [/nav/odometry, /nav/exploration_grid, /nav/goal_pose]
     outputs: [/nav/global_path]
     owner: lingtu_navigation
+    map_dependency: live_or_saved_occupancy_grid
   pct_global_planning:
     inputs: [/nav/odometry, artifact:tomogram, /nav/goal_pose]
     outputs: [/nav/global_path]
     owner: lingtu_pct
+    map_dependency: same_source_saved_tomogram_required
   local_planning_and_following:
     inputs: [/nav/odometry, /nav/registered_cloud, /nav/global_path]
     outputs: [/nav/local_path, /nav/cmd_vel]
     owner: lingtu_autonomy
+    map_dependency: current_registered_cloud_and_path
+
+runtime_data_flow_stage_algorithm_interfaces:
+  slam_or_relayed_localization_map: [fastlio_mapping, fastlio_raw_validation]
+  map_layers_and_exploration: [exploration_strategy, wavefront_frontier_exploration, traversable_frontier_preview, tare_exploration]
+  global_planning: [global_planning, astar_global_planning, pct_global_planning]
+  local_planning_and_following: [local_planning_and_following]
+
+runtime_data_flow:
+  - name: endpoint_adapter
+    inputs: [source:data_source.source_outputs]
+    outputs: [source:data_source.normalized_outputs]
+    owner: endpoint_adapter
+    frame_role: native_to_canonical
+    map_dependency: declared_by_data_source
+  - name: slam_or_relayed_localization_map
+    inputs:
+      - /nav/lidar_scan
+      - /nav/imu
+      - /points_raw
+      - /imu_raw
+      - source:data_source.algorithm_entry_outputs
+    outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    owner: slam_or_source_adapter
+    frame_role: map_odom_body
+    map_dependency: declared_by_data_source
+  - name: map_layers_and_exploration
+    inputs:
+      - /nav/odometry
+      - /nav/registered_cloud
+      - /nav/map_cloud
+      - /nav/exploration_grid
+      - /nav/terrain_map_ext
+      - module:TraversableFrontierModule.fused_cost
+      - module:TraversableFrontierModule.slope_grid
+      - module:TraversableFrontierModule.esdf_field
+      - module:TraversableFrontierModule.elevation_map
+    outputs: [/exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate]
+    owner: maps_frontier_or_tare_adapter
+    frame_role: map
+    map_dependency: live_map_or_occupancy_grid
+  - name: global_planning
+    inputs:
+      - /nav/odometry
+      - /nav/map_cloud
+      - /nav/exploration_grid
+      - /exploration/way_point
+      - /nav/goal_pose
+      - artifact:tomogram
+    outputs: [/nav/global_path]
+    owner: lingtu_navigation_or_pct
+    frame_role: map
+    map_dependency: pct_uses_same_source_saved_tomogram;astar_or_frontier_may_use_live_occupancy_grid
+  - name: local_planning_and_following
+    inputs: [/nav/odometry, /nav/registered_cloud, /nav/global_path]
+    outputs: [/nav/local_path, /nav/cmd_vel]
+    owner: lingtu_autonomy
+    frame_role: odom_body_registered_cloud
+    map_dependency: current_registered_cloud_and_path
+  - name: dynamic_obstacle_gate
+    inputs: [/nav/added_obstacles, /nav/local_path, /nav/cmd_vel]
+    outputs: [/nav/check_obstacle, /nav/planner_status]
+    owner: local_planner_dynamic_obstacle_gate
+    frame_role: odom_body_registered_cloud
+    map_dependency: current_registered_cloud_and_added_obstacles
+  - name: command_boundary
+    inputs: [/nav/cmd_vel]
+    outputs: [sink:data_source.command_sink]
+    owner: cmd_vel_mux_to_endpoint_sink
+    frame_role: body_twist
+    map_dependency: none
+
+resolved_runtime_data_flow:
+  in_process_stub:
+    - name: endpoint_adapter
+      inputs: []
+      outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+      owner: endpoint_adapter
+      frame_role: native_to_canonical
+      map_dependency: declared_by_data_source
+    - name: slam_or_relayed_localization_map
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+      outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+      owner: slam_or_source_adapter
+      frame_role: map_odom_body
+      map_dependency: declared_by_data_source
+    - name: map_layers_and_exploration
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/exploration_grid, /nav/terrain_map_ext, module:TraversableFrontierModule.fused_cost, module:TraversableFrontierModule.slope_grid, module:TraversableFrontierModule.esdf_field, module:TraversableFrontierModule.elevation_map]
+      outputs: [/exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate]
+      owner: maps_frontier_or_tare_adapter
+      frame_role: map
+      map_dependency: live_map_or_occupancy_grid
+    - name: global_planning
+      inputs: [/nav/odometry, /nav/map_cloud, /nav/exploration_grid, /exploration/way_point, /nav/goal_pose, artifact:tomogram]
+      outputs: [/nav/global_path]
+      owner: lingtu_navigation_or_pct
+      frame_role: map
+      map_dependency: pct_uses_same_source_saved_tomogram;astar_or_frontier_may_use_live_occupancy_grid
+    - name: local_planning_and_following
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/global_path]
+      outputs: [/nav/local_path, /nav/cmd_vel]
+      owner: lingtu_autonomy
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_path
+    - name: dynamic_obstacle_gate
+      inputs: [/nav/added_obstacles, /nav/local_path, /nav/cmd_vel]
+      outputs: [/nav/check_obstacle, /nav/planner_status]
+      owner: local_planner_dynamic_obstacle_gate
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_added_obstacles
+    - name: command_boundary
+      inputs: [/nav/cmd_vel]
+      outputs: [module_graph_driver_cmd_vel]
+      owner: cmd_vel_mux_to_endpoint_sink
+      frame_role: body_twist
+      map_dependency: none
+  real_s100p:
+    - name: endpoint_adapter
+      inputs: [/nav/lidar_scan, /nav/imu]
+      outputs: [/nav/lidar_scan, /nav/imu]
+      owner: endpoint_adapter
+      frame_role: native_to_canonical
+      map_dependency: declared_by_data_source
+    - name: slam_or_relayed_localization_map
+      inputs: [/nav/lidar_scan, /nav/imu]
+      outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/localization_health, /nav/localization_quality]
+      owner: slam_or_source_adapter
+      frame_role: map_odom_body
+      map_dependency: declared_by_data_source
+    - name: map_layers_and_exploration
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/localization_health, /nav/localization_quality, /nav/exploration_grid, /nav/terrain_map_ext, module:TraversableFrontierModule.fused_cost, module:TraversableFrontierModule.slope_grid, module:TraversableFrontierModule.esdf_field, module:TraversableFrontierModule.elevation_map]
+      outputs: [/exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate]
+      owner: maps_frontier_or_tare_adapter
+      frame_role: map
+      map_dependency: live_map_or_occupancy_grid
+    - name: global_planning
+      inputs: [/nav/odometry, /nav/map_cloud, /nav/exploration_grid, /exploration/way_point, /nav/goal_pose, artifact:tomogram]
+      outputs: [/nav/global_path]
+      owner: lingtu_navigation_or_pct
+      frame_role: map
+      map_dependency: pct_uses_same_source_saved_tomogram;astar_or_frontier_may_use_live_occupancy_grid
+    - name: local_planning_and_following
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/global_path]
+      outputs: [/nav/local_path, /nav/cmd_vel]
+      owner: lingtu_autonomy
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_path
+    - name: dynamic_obstacle_gate
+      inputs: [/nav/added_obstacles, /nav/local_path, /nav/cmd_vel]
+      outputs: [/nav/check_obstacle, /nav/planner_status]
+      owner: local_planner_dynamic_obstacle_gate
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_added_obstacles
+    - name: command_boundary
+      inputs: [/nav/cmd_vel]
+      outputs: [hardware_driver_after_cmd_vel_mux]
+      owner: cmd_vel_mux_to_endpoint_sink
+      frame_role: body_twist
+      map_dependency: none
+  mujoco_module_graph:
+    - name: endpoint_adapter
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+      outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+      owner: endpoint_adapter
+      frame_role: native_to_canonical
+      map_dependency: declared_by_data_source
+    - name: slam_or_relayed_localization_map
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+      outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+      owner: slam_or_source_adapter
+      frame_role: map_odom_body
+      map_dependency: declared_by_data_source
+    - name: map_layers_and_exploration
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/exploration_grid, /nav/terrain_map_ext, module:TraversableFrontierModule.fused_cost, module:TraversableFrontierModule.slope_grid, module:TraversableFrontierModule.esdf_field, module:TraversableFrontierModule.elevation_map]
+      outputs: [/exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate]
+      owner: maps_frontier_or_tare_adapter
+      frame_role: map
+      map_dependency: live_map_or_occupancy_grid
+    - name: global_planning
+      inputs: [/nav/odometry, /nav/map_cloud, /nav/exploration_grid, /exploration/way_point, /nav/goal_pose, artifact:tomogram]
+      outputs: [/nav/global_path]
+      owner: lingtu_navigation_or_pct
+      frame_role: map
+      map_dependency: pct_uses_same_source_saved_tomogram;astar_or_frontier_may_use_live_occupancy_grid
+    - name: local_planning_and_following
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/global_path]
+      outputs: [/nav/local_path, /nav/cmd_vel]
+      owner: lingtu_autonomy
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_path
+    - name: dynamic_obstacle_gate
+      inputs: [/nav/added_obstacles, /nav/local_path, /nav/cmd_vel]
+      outputs: [/nav/check_obstacle, /nav/planner_status]
+      owner: local_planner_dynamic_obstacle_gate
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_added_obstacles
+    - name: command_boundary
+      inputs: [/nav/cmd_vel]
+      outputs: [mujoco_driver_module_cmd_vel]
+      owner: cmd_vel_mux_to_endpoint_sink
+      frame_role: body_twist
+      map_dependency: none
+  mujoco_fastlio2_live:
+    - name: endpoint_adapter
+      inputs: [/points_raw, /imu_raw]
+      outputs: [/points_raw, /imu_raw]
+      owner: endpoint_adapter
+      frame_role: native_to_canonical
+      map_dependency: declared_by_data_source
+    - name: slam_or_relayed_localization_map
+      inputs: [/points_raw, /imu_raw]
+      outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+      owner: slam_or_source_adapter
+      frame_role: map_odom_body
+      map_dependency: declared_by_data_source
+    - name: map_layers_and_exploration
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/exploration_grid, /nav/terrain_map_ext, module:TraversableFrontierModule.fused_cost, module:TraversableFrontierModule.slope_grid, module:TraversableFrontierModule.esdf_field, module:TraversableFrontierModule.elevation_map]
+      outputs: [/exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate]
+      owner: maps_frontier_or_tare_adapter
+      frame_role: map
+      map_dependency: live_map_or_occupancy_grid
+    - name: global_planning
+      inputs: [/nav/odometry, /nav/map_cloud, /nav/exploration_grid, /exploration/way_point, /nav/goal_pose, artifact:tomogram]
+      outputs: [/nav/global_path]
+      owner: lingtu_navigation_or_pct
+      frame_role: map
+      map_dependency: pct_uses_same_source_saved_tomogram;astar_or_frontier_may_use_live_occupancy_grid
+    - name: local_planning_and_following
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/global_path]
+      outputs: [/nav/local_path, /nav/cmd_vel]
+      owner: lingtu_autonomy
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_path
+    - name: dynamic_obstacle_gate
+      inputs: [/nav/added_obstacles, /nav/local_path, /nav/cmd_vel]
+      outputs: [/nav/check_obstacle, /nav/planner_status]
+      owner: local_planner_dynamic_obstacle_gate
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_added_obstacles
+    - name: command_boundary
+      inputs: [/nav/cmd_vel]
+      outputs: [mujoco_velocity_adapter]
+      owner: cmd_vel_mux_to_endpoint_sink
+      frame_role: body_twist
+      map_dependency: none
+  rosbag_fastlio2_replay:
+    - name: endpoint_adapter
+      inputs: [/points_raw, /imu_raw]
+      outputs: [/points_raw, /imu_raw]
+      owner: endpoint_adapter
+      frame_role: native_to_canonical
+      map_dependency: declared_by_data_source
+    - name: slam_or_relayed_localization_map
+      inputs: [/points_raw, /imu_raw]
+      outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+      owner: slam_or_source_adapter
+      frame_role: map_odom_body
+      map_dependency: declared_by_data_source
+    - name: map_layers_and_exploration
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/exploration_grid, /nav/terrain_map_ext, module:TraversableFrontierModule.fused_cost, module:TraversableFrontierModule.slope_grid, module:TraversableFrontierModule.esdf_field, module:TraversableFrontierModule.elevation_map]
+      outputs: [/exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate]
+      owner: maps_frontier_or_tare_adapter
+      frame_role: map
+      map_dependency: live_map_or_occupancy_grid
+    - name: global_planning
+      inputs: [/nav/odometry, /nav/map_cloud, /nav/exploration_grid, /exploration/way_point, /nav/goal_pose, artifact:tomogram]
+      outputs: [/nav/global_path]
+      owner: lingtu_navigation_or_pct
+      frame_role: map
+      map_dependency: pct_uses_same_source_saved_tomogram;astar_or_frontier_may_use_live_occupancy_grid
+    - name: local_planning_and_following
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/global_path]
+      outputs: [/nav/local_path, /nav/cmd_vel]
+      owner: lingtu_autonomy
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_path
+    - name: dynamic_obstacle_gate
+      inputs: [/nav/added_obstacles, /nav/local_path, /nav/cmd_vel]
+      outputs: [/nav/check_obstacle, /nav/planner_status]
+      owner: local_planner_dynamic_obstacle_gate
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_added_obstacles
+    - name: command_boundary
+      inputs: [/nav/cmd_vel]
+      outputs: [no_actuation_replay_sink]
+      owner: cmd_vel_mux_to_endpoint_sink
+      frame_role: body_twist
+      map_dependency: none
+  gazebo_industrial:
+    - name: endpoint_adapter
+      inputs: [/model/thunder/odometry, /lingtu/gazebo/raw/lidar_points, /lingtu/gazebo/raw/lidar_scan]
+      outputs: [/nav/odometry, /nav/state_estimation_at_scan, /nav/registered_cloud, /nav/map_cloud, /nav/exploration_grid]
+      owner: endpoint_adapter
+      frame_role: native_to_canonical
+      map_dependency: declared_by_data_source
+    - name: slam_or_relayed_localization_map
+      inputs: [/nav/odometry, /nav/state_estimation_at_scan, /nav/registered_cloud, /nav/map_cloud, /nav/exploration_grid]
+      outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+      owner: slam_or_source_adapter
+      frame_role: map_odom_body
+      map_dependency: declared_by_data_source
+    - name: map_layers_and_exploration
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/state_estimation_at_scan, /nav/exploration_grid, /nav/terrain_map_ext, module:TraversableFrontierModule.fused_cost, module:TraversableFrontierModule.slope_grid, module:TraversableFrontierModule.esdf_field, module:TraversableFrontierModule.elevation_map]
+      outputs: [/exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate]
+      owner: maps_frontier_or_tare_adapter
+      frame_role: map
+      map_dependency: live_map_or_occupancy_grid
+    - name: global_planning
+      inputs: [/nav/odometry, /nav/map_cloud, /nav/exploration_grid, /exploration/way_point, /nav/goal_pose, artifact:tomogram]
+      outputs: [/nav/global_path]
+      owner: lingtu_navigation_or_pct
+      frame_role: map
+      map_dependency: pct_uses_same_source_saved_tomogram;astar_or_frontier_may_use_live_occupancy_grid
+    - name: local_planning_and_following
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/global_path]
+      outputs: [/nav/local_path, /nav/cmd_vel]
+      owner: lingtu_autonomy
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_path
+    - name: dynamic_obstacle_gate
+      inputs: [/nav/added_obstacles, /nav/local_path, /nav/cmd_vel]
+      outputs: [/nav/check_obstacle, /nav/planner_status]
+      owner: local_planner_dynamic_obstacle_gate
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_added_obstacles
+    - name: command_boundary
+      inputs: [/nav/cmd_vel]
+      outputs: [/lingtu/gazebo/cmd_vel]
+      owner: cmd_vel_mux_to_endpoint_sink
+      frame_role: body_twist
+      map_dependency: none
+  cmu_unity_external:
+    - name: endpoint_adapter
+      inputs: [/state_estimation, /state_estimation_at_scan, /registered_scan, /terrain_map, /terrain_map_ext, /way_point]
+      outputs: [/nav/odometry, /nav/state_estimation_at_scan, /nav/registered_cloud, /nav/map_cloud, /nav/terrain_map_ext, /exploration/way_point]
+      owner: endpoint_adapter
+      frame_role: native_to_canonical
+      map_dependency: declared_by_data_source
+    - name: slam_or_relayed_localization_map
+      inputs: [/nav/odometry, /nav/state_estimation_at_scan, /nav/registered_cloud, /nav/map_cloud, /nav/terrain_map_ext, /exploration/way_point]
+      outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+      owner: slam_or_source_adapter
+      frame_role: map_odom_body
+      map_dependency: declared_by_data_source
+    - name: map_layers_and_exploration
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/state_estimation_at_scan, /nav/terrain_map_ext, /exploration/way_point, /nav/exploration_grid, module:TraversableFrontierModule.fused_cost, module:TraversableFrontierModule.slope_grid, module:TraversableFrontierModule.esdf_field, module:TraversableFrontierModule.elevation_map]
+      outputs: [/exploration/way_point, /nav/goal_pose, /nav/traversable_frontiers, /nav/frontier_candidate]
+      owner: maps_frontier_or_tare_adapter
+      frame_role: map
+      map_dependency: live_map_or_occupancy_grid
+    - name: global_planning
+      inputs: [/nav/odometry, /nav/map_cloud, /nav/exploration_grid, /exploration/way_point, /nav/goal_pose, artifact:tomogram]
+      outputs: [/nav/global_path]
+      owner: lingtu_navigation_or_pct
+      frame_role: map
+      map_dependency: pct_uses_same_source_saved_tomogram;astar_or_frontier_may_use_live_occupancy_grid
+    - name: local_planning_and_following
+      inputs: [/nav/odometry, /nav/registered_cloud, /nav/global_path]
+      outputs: [/nav/local_path, /nav/cmd_vel]
+      owner: lingtu_autonomy
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_path
+    - name: dynamic_obstacle_gate
+      inputs: [/nav/added_obstacles, /nav/local_path, /nav/cmd_vel]
+      outputs: [/nav/check_obstacle, /nav/planner_status]
+      owner: local_planner_dynamic_obstacle_gate
+      frame_role: odom_body_registered_cloud
+      map_dependency: current_registered_cloud_and_added_obstacles
+    - name: command_boundary
+      inputs: [/nav/cmd_vel]
+      outputs: [/cmd_vel]
+      owner: cmd_vel_mux_to_endpoint_sink
+      frame_role: body_twist
+      map_dependency: none
 
 adapter_aliases:
   # Native/third-party names are adapter-only. LingTu modules must consume the
@@ -377,6 +879,10 @@ adapter_aliases:
     - {source: /cloud_registered, target: /nav/registered_cloud, msg_format: registered_cloud, scope: adapter_only}
     - {source: /Odometry, target: /nav/odometry, msg_format: odometry, scope: adapter_only}
     - {source: map_cloud, target: /nav/saved_map_cloud, msg_format: map_cloud, scope: adapter_only}
+    - {source: /localization_quality, target: /nav/localization_quality, msg_format: std_msgs/msg/Float32, scope: adapter_only}
+    - {source: relocalize, target: /nav/relocalize, msg_format: service, scope: adapter_only}
+    - {source: relocalize_check, target: /nav/relocalize_check, msg_format: service, scope: adapter_only}
+    - {source: global_relocalize, target: /nav/global_relocalize, msg_format: service, scope: adapter_only}
   pointlio:
     - {source: cloud_registered_body, target: /nav/registered_cloud, msg_format: registered_cloud, scope: adapter_only}
     - {source: cloud_registered, target: /nav/map_cloud, msg_format: map_cloud, scope: adapter_only}
@@ -437,46 +943,88 @@ data_sources:
   # LingTu modules above the adapter consume the same canonical topics.
   in_process_stub:
     provider: in_process
+    owns: [mock_odometry, mock_map, mock_commands]
     normalized_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    command_sink: module_graph_driver_cmd_vel
     source_outputs: []
     algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
     algorithm_context_outputs: []
     lidar_extrinsic_profile:
+    slam_source: none
+    localization_source: mock_or_in_process_odometry
+    mapping_source: mock_or_in_process_map
   real_s100p:
     provider: hardware
+    owns: [mid360_lidar, imu, robot_actuation]
     normalized_outputs: [/nav/lidar_scan, /nav/imu]
+    command_sink: hardware_driver_after_cmd_vel_mux
     source_outputs: [/nav/lidar_scan, /nav/imu]
-    algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud, /nav/localization_health, /nav/localization_quality]
     algorithm_context_outputs: []
     lidar_extrinsic_profile: real_mid360
+    slam_source: lingtu_fastlio_or_external_robot_slam
+    localization_source: slam_localizer
+    mapping_source: slam_map_cloud
   mujoco_module_graph:
     provider: mujoco
+    owns: [physics, rendered_lidar, simulation_actuation]
     normalized_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    command_sink: mujoco_driver_module_cmd_vel
     source_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
     algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
     algorithm_context_outputs: []
     lidar_extrinsic_profile: mujoco_thunder_v3
+    slam_source: none
+    localization_source: mujoco_sim_odometry
+    mapping_source: mujoco_rendered_lidar_map_cloud
   mujoco_fastlio2_live:
     provider: mujoco
+    owns: [physics, mid360_pattern_lidar, imu]
     normalized_outputs: [/points_raw, /imu_raw]
+    command_sink: mujoco_velocity_adapter
     source_outputs: [/points_raw, /imu_raw]
     algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
     algorithm_context_outputs: []
     lidar_extrinsic_profile: mujoco_thunder_v3
+    slam_source: lingtu_fastlio2
+    localization_source: fastlio2_odometry
+    mapping_source: fastlio2_map_cloud
+  rosbag_fastlio2_replay:
+    provider: replay
+    owns: [recorded_lidar_imu, recorded_slam_outputs, no_actuation]
+    normalized_outputs: [/points_raw, /imu_raw]
+    command_sink: no_actuation_replay_sink
+    source_outputs: [/points_raw, /imu_raw]
+    algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
+    algorithm_context_outputs: []
+    lidar_extrinsic_profile: mujoco_thunder_v3
+    slam_source: fastlio2_replay_or_recorded_slam
+    localization_source: replayed_fastlio2_odometry
+    mapping_source: replayed_fastlio2_map_cloud
   gazebo_industrial:
     provider: gazebo
+    owns: [world_geometry, physics, rendered_lidar, simulation_actuation]
     normalized_outputs: [/nav/odometry, /nav/state_estimation_at_scan, /nav/registered_cloud, /nav/map_cloud, /nav/exploration_grid]
+    command_sink: /lingtu/gazebo/cmd_vel
     source_outputs: [/model/thunder/odometry, /lingtu/gazebo/raw/lidar_points, /lingtu/gazebo/raw/lidar_scan]
     algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
     algorithm_context_outputs: [/nav/state_estimation_at_scan, /nav/exploration_grid]
     lidar_extrinsic_profile: gazebo_proxy
+    slam_source: none
+    localization_source: gazebo_sim_odometry
+    mapping_source: gazebo_lidar_derived_map
   cmu_unity_external:
     provider: cmu_unity
+    owns: [world_geometry, physics, external_registered_scan, external_tare]
     normalized_outputs: [/nav/odometry, /nav/state_estimation_at_scan, /nav/registered_cloud, /nav/map_cloud, /nav/terrain_map_ext, /exploration/way_point]
+    command_sink: /cmd_vel
     source_outputs: [/state_estimation, /state_estimation_at_scan, /registered_scan, /terrain_map, /terrain_map_ext, /way_point]
     algorithm_entry_outputs: [/nav/odometry, /nav/registered_cloud, /nav/map_cloud]
     algorithm_context_outputs: [/nav/state_estimation_at_scan, /nav/terrain_map_ext, /exploration/way_point]
     lidar_extrinsic_profile:
+    slam_source: external_cmu_registered_scan
+    localization_source: cmu_state_estimation
+    mapping_source: cmu_registered_scan_and_terrain_map_ext
 
 profile_data_sources:
   stub: {data_source: in_process_stub, mode: framework_test}

@@ -7,7 +7,9 @@ All tests are pure-Python, no ROS2 / hardware / MuJoCo required.
 from __future__ import annotations
 
 import math
+import sys
 import time
+import types
 import unittest
 from unittest.mock import patch
 
@@ -23,6 +25,7 @@ from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import OccupancyGrid, Odometry, Path
 from core.msgs.semantic import ExecutionEval, SafetyState
 from core.msgs.sensor import PointCloud2
+from core.runtime_interface import TOPICS, topic_default_frame_id
 
 # ---------------------------------------------------------------------------
 # 1. WaypointTracker
@@ -148,6 +151,19 @@ class TestWaypointTracker(unittest.TestCase):
         status = tracker.update(np.array([0.0, 0.0, 0.0]))
         self.assertIsNone(status.event)
         self.assertEqual(status.wp_total, 0)
+
+    def test_z_threshold_blocks_same_xy_different_floor(self):
+        tracker = WaypointTracker(threshold=1.0, z_threshold=0.5)
+        tracker.reset([np.array([5.0, 0.0, 3.0])], np.array([0.0, 0.0, 0.0]))
+
+        status = tracker.update(np.array([5.0, 0.0, 0.0]))
+
+        self.assertIsNone(status.event)
+        self.assertEqual(status.wp_index, 0)
+
+        status = tracker.update(np.array([5.0, 0.0, 2.75]))
+
+        self.assertEqual(status.event, EV_PATH_COMPLETE)
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +333,64 @@ class TestPathFollowerModule(unittest.TestCase):
         self.assertAlmostEqual(last.x, 10.0)
         self.assertAlmostEqual(last.y, 1.0)
         self.assertAlmostEqual(last.z, 1.5)
+        self.assertEqual(m._x_rec, 0.0)
+        self.assertEqual(m._y_rec, 0.0)
+        self.assertEqual(m._yaw_rec, 0.0)
+
+    def test_nav_core_normalizes_fixed_frame_path_id(self):
+        from base_autonomy.modules.path_follower_module import PathFollowerModule
+
+        m = PathFollowerModule(backend="nav_core")
+        m._nc = _FakeNavCore
+
+        m._on_odom(
+            Odometry(
+                pose=Pose(position=Vector3(10.0, -2.0, 0.0)),
+                frame_id="map",
+            )
+        )
+
+        path = Path(
+            poses=[
+                PoseStamped(pose=Pose(position=Vector3(10.0, -2.0, 0.5))),
+                PoseStamped(pose=Pose(position=Vector3(10.0, 1.0, 1.5))),
+            ],
+            frame_id="/map",
+        )
+        m._on_path(path)
+
+        first = m._nc_path[0]
+        self.assertAlmostEqual(first.x, 10.0)
+        self.assertAlmostEqual(first.y, -2.0)
+        self.assertEqual(m._x_rec, 0.0)
+        self.assertEqual(m._y_rec, 0.0)
+        self.assertEqual(m._yaw_rec, 0.0)
+
+    def test_nav_core_keeps_simulator_world_path_in_fixed_reference(self):
+        from base_autonomy.modules.path_follower_module import PathFollowerModule
+
+        m = PathFollowerModule(backend="nav_core")
+        m._nc = _FakeNavCore
+
+        m._on_odom(
+            Odometry(
+                pose=Pose(position=Vector3(10.0, -2.0, 0.0)),
+                frame_id="map",
+            )
+        )
+
+        path = Path(
+            poses=[
+                PoseStamped(pose=Pose(position=Vector3(10.0, -2.0, 0.5))),
+                PoseStamped(pose=Pose(position=Vector3(10.0, 1.0, 1.5))),
+            ],
+            frame_id="world",
+        )
+        m._on_path(path)
+
+        first = m._nc_path[0]
+        self.assertAlmostEqual(first.x, 10.0)
+        self.assertAlmostEqual(first.y, -2.0)
         self.assertEqual(m._x_rec, 0.0)
         self.assertEqual(m._y_rec, 0.0)
         self.assertEqual(m._yaw_rec, 0.0)
@@ -537,6 +611,11 @@ class TestOccupancyGridModule(unittest.TestCase):
         m.setup()
         return m
 
+    def test_default_frame_comes_from_exploration_grid_contract(self):
+        m = self._make_module()
+
+        self.assertEqual(m._frame_id, topic_default_frame_id(TOPICS.exploration_grid))
+
     def test_points_create_occupied_cells(self):
         """Deliver known XY points and verify occupied cells in costmap."""
         m = self._make_module()
@@ -562,7 +641,7 @@ class TestOccupancyGridModule(unittest.TestCase):
         grid = costmap["grid"]
         # Verify at least some cells are occupied (100)
         self.assertTrue(np.any(grid == 100), "Expected occupied cells in costmap")
-        self.assertEqual(costmap["frame_id"], "map")
+        self.assertEqual(costmap["frame_id"], topic_default_frame_id(TOPICS.exploration_grid))
 
     def test_height_filter(self):
         """Points outside z_min/z_max are ignored."""
@@ -667,7 +746,7 @@ class TestOccupancyGridModule(unittest.TestCase):
         self.assertTrue(np.any(emap["grid"] == 0), "Exploration grid must contain free cells")
         self.assertTrue(np.any(emap["grid"] == 100), "Exploration grid must contain occupied cells")
         self.assertFalse(np.any(costmaps[0]["grid"] < 0), "Navigation costmap must not contain unknown negatives")
-        self.assertEqual(emap["frame_id"], "map")
+        self.assertEqual(emap["frame_id"], topic_default_frame_id(TOPICS.exploration_grid))
         self.assertEqual(emap["accumulation"], "rolling_local_window")
         self.assertEqual(emap["semantic"], "frontier_input_grid")
         self.assertEqual(costmaps[0]["unknown_as_obstacle"], True)
@@ -703,6 +782,170 @@ class TestOccupancyGridModule(unittest.TestCase):
             return int(exploration[0]["counts"]["free"])
 
         self.assertGreater(free_count(0.5), free_count(0.0))
+
+
+class _FakeROSHeader:
+    def __init__(self):
+        self.frame_id = ""
+        self.stamp = None
+
+
+class _FakeROSPoint:
+    def __init__(self):
+        self.x = 0.0
+        self.y = 0.0
+        self.z = 0.0
+
+
+class _FakeROSQuaternion:
+    def __init__(self):
+        self.x = 0.0
+        self.y = 0.0
+        self.z = 0.0
+        self.w = 1.0
+
+
+class _FakeROSPose:
+    def __init__(self):
+        self.position = _FakeROSPoint()
+        self.orientation = _FakeROSQuaternion()
+
+
+class _FakeROSPoseStamped:
+    def __init__(self):
+        self.header = _FakeROSHeader()
+        self.pose = _FakeROSPose()
+
+
+class _FakeROSPath:
+    def __init__(self):
+        self.header = _FakeROSHeader()
+        self.poses = []
+
+
+class _FakeROSMapMetaData:
+    def __init__(self):
+        self.resolution = 0.0
+        self.width = 0
+        self.height = 0
+        self.origin = _FakeROSPose()
+
+
+class _FakeROSOccupancyGrid:
+    def __init__(self):
+        self.header = _FakeROSHeader()
+        self.info = _FakeROSMapMetaData()
+        self.data = []
+
+
+class TestROS2PathBridgeModule(unittest.TestCase):
+    def test_defaults_come_from_runtime_topic_contract(self):
+        from nav.ros2_path_bridge_module import ROS2PathBridgeModule
+
+        bridge = ROS2PathBridgeModule()
+
+        self.assertEqual(bridge._global_path_topic, TOPICS.global_path)
+        self.assertEqual(bridge._local_path_topic, TOPICS.local_path)
+        self.assertEqual(
+            bridge._global_default_frame_id,
+            topic_default_frame_id(TOPICS.global_path),
+        )
+        self.assertEqual(
+            bridge._local_default_frame_id,
+            topic_default_frame_id(TOPICS.local_path),
+        )
+
+    def test_explicit_default_frame_applies_to_both_path_topics(self):
+        from nav.ros2_path_bridge_module import ROS2PathBridgeModule
+
+        bridge = ROS2PathBridgeModule(default_frame_id="odom")
+
+        self.assertEqual(bridge._global_default_frame_id, "odom")
+        self.assertEqual(bridge._local_default_frame_id, "odom")
+
+    def test_global_path_conversion_uses_global_topic_frame_default(self):
+        from nav.ros2_path_bridge_module import ROS2PathBridgeModule
+
+        fake_nav_msgs = types.SimpleNamespace(Path=_FakeROSPath)
+        fake_geometry_msgs = types.SimpleNamespace(PoseStamped=_FakeROSPoseStamped)
+        fake_modules = {
+            "nav_msgs": types.SimpleNamespace(msg=fake_nav_msgs),
+            "nav_msgs.msg": fake_nav_msgs,
+            "geometry_msgs": types.SimpleNamespace(msg=fake_geometry_msgs),
+            "geometry_msgs.msg": fake_geometry_msgs,
+        }
+        bridge = ROS2PathBridgeModule()
+
+        with patch.dict(sys.modules, fake_modules):
+            msg = bridge._to_ros_path(
+                [(1.0, 2.0, 0.0)],
+                default_frame_id=bridge._global_default_frame_id,
+            )
+
+        self.assertEqual(msg.header.frame_id, topic_default_frame_id(TOPICS.global_path))
+        self.assertEqual(msg.poses[0].header.frame_id, msg.header.frame_id)
+        self.assertEqual(msg.poses[0].pose.position.x, 1.0)
+        self.assertEqual(msg.poses[0].pose.position.y, 2.0)
+
+
+class TestROS2GridBridgeModule(unittest.TestCase):
+    def test_default_frame_comes_from_exploration_grid_contract(self):
+        from nav.ros2_grid_bridge_module import ROS2GridBridgeModule
+
+        bridge = ROS2GridBridgeModule()
+
+        self.assertEqual(bridge._exploration_grid_topic, TOPICS.exploration_grid)
+        self.assertEqual(
+            bridge._default_frame_id,
+            topic_default_frame_id(TOPICS.exploration_grid),
+        )
+
+    def test_grid_conversion_uses_contract_frame_when_input_lacks_frame(self):
+        from nav.ros2_grid_bridge_module import ROS2GridBridgeModule
+
+        fake_nav_msgs = types.SimpleNamespace(OccupancyGrid=_FakeROSOccupancyGrid)
+        fake_modules = {
+            "nav_msgs": types.SimpleNamespace(msg=fake_nav_msgs),
+            "nav_msgs.msg": fake_nav_msgs,
+        }
+        bridge = ROS2GridBridgeModule()
+        grid = {
+            "grid": np.array([[0, 100]], dtype=np.int16),
+            "resolution": 0.5,
+            "origin": (1.0, 2.0),
+        }
+
+        with patch.dict(sys.modules, fake_modules):
+            msg = bridge._to_ros_grid(grid)
+
+        self.assertEqual(
+            msg.header.frame_id,
+            topic_default_frame_id(TOPICS.exploration_grid),
+        )
+        self.assertEqual(msg.info.width, 2)
+        self.assertEqual(msg.info.height, 1)
+        self.assertEqual(msg.info.origin.position.x, 1.0)
+        self.assertEqual(msg.info.origin.position.y, 2.0)
+        self.assertEqual(msg.data, [0, 100])
+
+    def test_grid_conversion_preserves_explicit_input_frame(self):
+        from nav.ros2_grid_bridge_module import ROS2GridBridgeModule
+
+        fake_nav_msgs = types.SimpleNamespace(OccupancyGrid=_FakeROSOccupancyGrid)
+        fake_modules = {
+            "nav_msgs": types.SimpleNamespace(msg=fake_nav_msgs),
+            "nav_msgs.msg": fake_nav_msgs,
+        }
+        bridge = ROS2GridBridgeModule()
+        grid = {
+            "grid": np.array([[0]], dtype=np.int16),
+            "frame_id": "odom",
+        }
+
+        with patch.dict(sys.modules, fake_modules):
+            msg = bridge._to_ros_grid(grid)
+
+        self.assertEqual(msg.header.frame_id, "odom")
 
 
 # ---------------------------------------------------------------------------
@@ -789,8 +1032,25 @@ class TestVoxelGridModule(unittest.TestCase):
         self.assertEqual(len(cloud_payloads), 1)
         self.assertEqual(stats_payloads[0]["total_voxels"], 2)
         self.assertEqual(stats_payloads[0]["column_count"], 1)
+        self.assertEqual(stats_payloads[0]["frame_id"], topic_default_frame_id(TOPICS.map_cloud))
         self.assertEqual(cloud_payloads[0].points.shape, (2, 3))
+        self.assertEqual(cloud_payloads[0].frame_id, topic_default_frame_id(TOPICS.map_cloud))
         self.assertEqual(m.query_voxel(1.1, 1.1, 0.1)["count"], 0.0)
+
+    def test_voxel_publish_uses_normalized_input_cloud_frame(self):
+        m = self._make_module(publish_interval=0.0)
+        stats_payloads = []
+        cloud_payloads = []
+        m.voxel_map._add_callback(stats_payloads.append)
+        m.voxel_cloud._add_callback(cloud_payloads.append)
+
+        pts = np.array([[0.25, 0.25, 0.25]], dtype=np.float32)
+        m.map_cloud._deliver(PointCloud2.from_numpy(pts, frame_id="/odom"))
+
+        self.assertEqual(len(stats_payloads), 1)
+        self.assertEqual(len(cloud_payloads), 1)
+        self.assertEqual(stats_payloads[0]["frame_id"], "odom")
+        self.assertEqual(cloud_payloads[0].frame_id, "odom")
 
 
 # ---------------------------------------------------------------------------
@@ -832,7 +1092,7 @@ class TestElevationMapModule(unittest.TestCase):
 
         self.assertEqual(len(results), 1)
         emap = results[0]
-        self.assertEqual(emap["frame_id"], "map")
+        self.assertEqual(emap["frame_id"], topic_default_frame_id(TOPICS.map_cloud))
 
         # Find the cell that got hit
         valid = emap["valid"]
@@ -867,6 +1127,26 @@ class TestElevationMapModule(unittest.TestCase):
         # Should not publish because all points are filtered
         self.assertEqual(len(results), 0,
                          "Expected no elevation map when all points are below z_floor")
+
+    def test_elevation_map_uses_normalized_input_cloud_frame(self):
+        m = self._make_module()
+        m.odometry._deliver(
+            Odometry(
+                pose=Pose(
+                    position=Vector3(0, 0, 0),
+                    orientation=Quaternion(0, 0, 0, 1),
+                )
+            )
+        )
+        pts = np.array([[1.0, 1.0, 0.5]], dtype=np.float32)
+        cloud = PointCloud2.from_numpy(pts, frame_id="/odom")
+
+        results = []
+        m.elevation_map._add_callback(results.append)
+        m.map_cloud._deliver(cloud)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["frame_id"], "odom")
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@
 | 文件 | 用途 | 关键字段 |
 |------|------|---------|
 | `robot_config.yaml` | 机器人物理参数和传感器配置 | 相机内参/外参、LiDAR 外参、运动控制增益、端口、标定参数 |
-| `topic_contract.yaml` | ROS2 话题名称合约 | 所有模块间通信的标准话题名，launch 时 remap 到此 |
+| `topic_contract.yaml` | Canonical runtime stream/topic 合约 | ModulePort/Gateway/endpoint adapter 共享的标准 stream token；ROS2 只是可选 adapter 传输 |
 | `layer_contract.yaml` | 模块层次架构合约 | L0-L6 六层架构定义、模块依赖关系、端口类型 |
 
 ### 导航与规划
@@ -114,5 +114,5 @@ llm:
 
 - 修改后运行 `python lingtu.py doctor` 自检
 - 标定参数不要手改，用 `calibration/apply_calibration.py`
-- `topic_contract.yaml` 和 `layer_contract.yaml` 是架构合约，修改前确认影响范围
+- `topic_contract.yaml` 和 `layer_contract.yaml` 是架构合约，修改前确认影响范围；不要把 canonical topic token 等同于 ROS2-only 通信边界
 - DDS 配置只在跨机通信或 Docker 部署时需要调整

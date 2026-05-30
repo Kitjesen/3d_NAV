@@ -14,6 +14,11 @@ from typing import Any, Dict, List
 
 import numpy as np
 
+from core.runtime_interface import body_frame_id, map_frame_id
+
+GEOMETRY_MAP_FRAME_ID = map_frame_id()
+GEOMETRY_BODY_FRAME_ID = body_frame_id()
+
 # ---------------------------------------------------------------------------
 # Vector3
 # ---------------------------------------------------------------------------
@@ -551,7 +556,7 @@ class PoseStamped:
         self,
         pose: Pose | None = None,
         ts: float = 0.0,
-        frame_id: str = "map",
+        frame_id: str = GEOMETRY_MAP_FRAME_ID,
     ) -> None:
         self.pose: Pose = pose if pose is not None else Pose()
         self.ts: float = ts if ts != 0.0 else time.time()
@@ -616,7 +621,7 @@ class PoseStamped:
         return cls(
             pose=Pose.from_dict(d.get("pose", {})),
             ts=float(d.get("ts", 0)),
-            frame_id=str(d.get("frame_id", "map")),
+            frame_id=str(d.get("frame_id", GEOMETRY_MAP_FRAME_ID)),
         )
 
     # Binary header: ts (double 8B) + frame_id length (uint32 4B) = 12 bytes
@@ -728,7 +733,7 @@ class TwistStamped(Twist):
         linear: Any = None,
         angular: Any = None,
         ts: float = 0.0,
-        frame_id: str = "body",
+        frame_id: str = GEOMETRY_BODY_FRAME_ID,
     ) -> None:
         super().__init__(linear, angular)
         self.ts: float = ts if ts != 0.0 else time.time()
@@ -764,7 +769,7 @@ class TwistStamped(Twist):
             Vector3.from_dict(d.get("linear", {})),
             Vector3.from_dict(d.get("angular", {})),
             ts=d.get("ts", 0.0),
-            frame_id=d.get("frame_id", "body"),
+            frame_id=d.get("frame_id", GEOMETRY_BODY_FRAME_ID),
         )
 
     _HEADER = struct.Struct("<dH")  # ts (8) + frame_id len (2) = 10 bytes
@@ -800,8 +805,8 @@ class Transform:
         self,
         translation: Any = None,
         rotation: Any = None,
-        frame_id: str = "map",
-        child_frame_id: str = "body",
+        frame_id: str = GEOMETRY_MAP_FRAME_ID,
+        child_frame_id: str = GEOMETRY_BODY_FRAME_ID,
         ts: float = 0.0,
     ) -> None:
         self.translation: Vector3 = (
@@ -893,8 +898,8 @@ class Transform:
         return cls(
             translation=Vector3.from_dict(d.get("translation", {})),
             rotation=Quaternion.from_dict(d.get("rotation", {})),
-            frame_id=d.get("frame_id", "map"),
-            child_frame_id=d.get("child_frame_id", "body"),
+            frame_id=d.get("frame_id", GEOMETRY_MAP_FRAME_ID),
+            child_frame_id=d.get("child_frame_id", GEOMETRY_BODY_FRAME_ID),
             ts=d.get("ts", 0.0),
         )
 

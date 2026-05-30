@@ -1,7 +1,8 @@
 """RerunBridgeModule — on-demand Rerun visualization as a Module.
 
-Subscribes to ROS2 topics and logs to Rerun web viewer. Can be dynamically
-started/stopped at runtime via REPL or MCP.
+Logs ModulePort data to the Rerun web viewer and can optionally subscribe to
+ROS2 topics for visualization-only overlays. It is not the product runtime
+communication boundary.
 
 Usage in blueprint:
     bp.add(RerunBridgeModule, web_port=9090, grpc_port=9877)
@@ -39,8 +40,9 @@ _VOXEL_SIZE = 0.08
 class RerunBridgeModule(Module, layer=6):
     """On-demand Rerun visualization bridge.
 
-    Subscribes to Module ports (odometry, map_cloud) AND optionally to
-    ROS2 topics (TF, costmap, detections, camera) for a full dashboard.
+    Subscribes to Module ports (odometry, map_cloud) and optionally to ROS2
+    topics (TF, costmap, detections, camera) for visualization overlays.
+    Runtime product dataflow remains Gateway + ModulePorts.
 
     The Rerun server is lazy — only started when start_rerun() is called.
     """
@@ -77,7 +79,7 @@ class RerunBridgeModule(Module, layer=6):
         self._counts = {"odom": 0, "cloud": 0}
         self._last_odom_t = 0.0
 
-        # ROS2 node for camera/TF/costmap (optional, created on start_rerun)
+        # Optional visualization-only ROS2 node, created on start_rerun.
         self._ros2_node = None
         self._ros2_subs = []
 
@@ -115,7 +117,7 @@ class RerunBridgeModule(Module, layer=6):
             self._active = True
             self.rerun_active.publish(True)
 
-            # Start ROS2 subscriptions for camera/TF/costmap
+            # Start optional ROS2 subscriptions for camera/TF/costmap overlays.
             self._start_ros2_subs()
 
             url = f"http://localhost:{self._web_port}"
@@ -260,10 +262,10 @@ class RerunBridgeModule(Module, layer=6):
         except Exception as e:
             logger.debug("rerun goal marker log failed: %s", e)
 
-    # ── ROS2 subscriptions (camera, TF, costmap, detections, path) ───────
+    # ── Optional ROS2 visualization subscriptions ────────────────────────
 
     def _start_ros2_subs(self) -> None:
-        """Subscribe to ROS2 topics for camera/TF/costmap visualization."""
+        """Subscribe to ROS2 topics for optional visualization overlays only."""
         try:
             from core.ros2_context import ensure_rclpy, get_shared_executor
             ensure_rclpy()

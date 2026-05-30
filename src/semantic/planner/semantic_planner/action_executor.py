@@ -29,9 +29,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from core.runtime_interface import map_frame_id
 from core.utils.sanitize import safe_json_loads
 
 logger = logging.getLogger(__name__)
+ACTION_COMMAND_MAP_FRAME_ID = map_frame_id()
 
 
 class ActionStatus(Enum):
@@ -65,7 +67,7 @@ class ActionCommand:
     # 参数
     timeout_sec: float = 30.0
     approach_speed: float = 0.3     # m/s (APPROACH 时减速)
-    frame_id: str = "map"
+    frame_id: str = ACTION_COMMAND_MAP_FRAME_ID
 
 
 class ActionExecutor:

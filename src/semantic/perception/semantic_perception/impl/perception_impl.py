@@ -11,6 +11,8 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from core.runtime_interface import map_frame_id
+
 from ..api.detector_api import DetectorAPI
 from ..api.encoder_api import EncoderAPI
 from ..api.exceptions import InvalidDepthError, InvalidImageError, PerceptionAPIError
@@ -28,6 +30,7 @@ from ..api.types import (
 )
 
 logger = logging.getLogger(__name__)
+PERCEPTION_IMPL_MAP_FRAME_ID = map_frame_id()
 
 
 class PerceptionImpl(PerceptionAPI):
@@ -306,6 +309,7 @@ class PerceptionImpl(PerceptionAPI):
                 objects=[],
                 relations=[],
                 regions=[],
+                frame_id=PERCEPTION_IMPL_MAP_FRAME_ID,
                 timestamp=time.time()
             )
             return
@@ -322,7 +326,7 @@ class PerceptionImpl(PerceptionAPI):
             relations=relations,
             regions=regions,
             timestamp=time.time(),
-            frame_id="map"
+            frame_id=PERCEPTION_IMPL_MAP_FRAME_ID
         )
 
     def _compute_relations(self, objects: list[Detection3D]) -> list[Relation]:
@@ -409,6 +413,7 @@ class PerceptionImpl(PerceptionAPI):
                 objects=[],
                 relations=[],
                 regions=[],
+                frame_id=PERCEPTION_IMPL_MAP_FRAME_ID,
                 timestamp=time.time()
             )
         return self._scene_graph

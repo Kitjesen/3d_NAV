@@ -1,4 +1,9 @@
-"""Perception stack: semantic perception + optional encoder + reconstruction."""
+"""Scene perception stack.
+
+PerceptionModule is the default RGB-D scene-perception boundary. It owns the
+detector, encoder, projection, and tracker capabilities needed to publish
+scene_graph and detections_3d.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,7 @@ _NATIVE_CAMERA_DRIVERS = {"MujocoDriverModule"}  # Only MuJoCo has built-in came
 
 
 def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -> Blueprint:
-    """Visual perception: RGB-D semantic perception + optional encoder + 3D reconstruction."""
+    """RGB-D scene perception plus optional reconstruction and standalone tools."""
     bp = Blueprint()
     if config.get("manage_services", True):
         try:
@@ -44,12 +49,12 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
         pass
 
     try:
-        from semantic.perception.semantic_perception.encoder_module import EncoderModule
         from semantic.perception.semantic_perception.perception_module import PerceptionModule
 
         bp.add(
             PerceptionModule,
             detector_type=detector,
+            encoder_type=encoder,
             confidence_threshold=config.get("confidence", 0.3),
             tracking_iou_threshold=config.get(
                 "tracking_iou_threshold",
@@ -76,9 +81,18 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
             skip_frames=config.get("perception_skip_frames", 1),
             world=config.get("world", ""),
         )
-        bp.add(EncoderModule, encoder=encoder)
     except ImportError as e:
         logger.warning("Perception modules not available: %s", e)
+
+    if config.get("enable_standalone_encoder", False):
+        try:
+            from semantic.perception.semantic_perception.encoder_module import EncoderModule
+
+            # Experimental tool module; the full-stack scene graph path uses
+            # PerceptionModule's internal encoder capability.
+            bp.add(EncoderModule, encoder=encoder)
+        except ImportError as e:
+            logger.warning("Standalone encoder module not available: %s", e)
 
     try:
         from semantic.reconstruction.reconstruction_module import ReconstructionModule

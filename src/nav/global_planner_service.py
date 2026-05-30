@@ -8,11 +8,16 @@ from __future__ import annotations
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
+from core.runtime_interface import TOPICS, topic_default_frame_id
 from nav.plan_safety import evaluate_backend_path_safety
+from nav.services.nav_services.same_source_map_artifacts import (
+    validate_saved_map_artifact_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +47,13 @@ class GlobalPlannerService:
         self._backend = None
         self._fallback_backend = None
         self._last_plan_report: dict[str, Any] = {}
+        self._map_artifact_gate: dict[str, Any] = self._default_map_artifact_gate()
         self._last_map_update: tuple[np.ndarray, float, np.ndarray | None] | None = None
         self._warned_no_grid: bool = False
 
     def setup(self) -> None:
         """Create the planner backend. Must be called before plan()."""
+        self._map_artifact_gate = self._validate_map_artifact_gate()
         self._backend = self._create_backend()
 
     @property
@@ -59,6 +66,10 @@ class GlobalPlannerService:
             return False
         grid = getattr(self._backend, "_grid", None)
         return grid is not None and hasattr(grid, "shape") and getattr(grid, "size", 0) > 0
+
+    @property
+    def map_artifact_gate(self) -> dict[str, Any]:
+        return dict(self._map_artifact_gate)
 
     def plan(
         self,
@@ -78,6 +89,24 @@ class GlobalPlannerService:
         """
         if self._backend is None:
             raise RuntimeError("GlobalPlannerService: backend not set up")
+        if self._map_artifact_gate_blocks():
+            reason = self._map_artifact_gate_failure_reason()
+            self._last_plan_report = {
+                "primary_planner": self._planner_name,
+                "selected_planner": self._planner_name,
+                "selected_path_safety": None,
+                "rejected_plans": [
+                    {
+                        "planner": self._planner_name,
+                        "reason": reason,
+                        "artifact_gate": self.map_artifact_gate,
+                    }
+                ],
+                "fallback_reason": reason,
+                "policy": self._plan_safety_policy,
+                "reached_goal": False,
+            }
+            raise RuntimeError(f"GlobalPlannerService: {reason}")
 
         requested_goal = np.asarray(goal[:3], dtype=float).copy()
 
@@ -129,7 +158,10 @@ class GlobalPlannerService:
         primary_replan: dict[str, Any] | None = None
         fallback_reason = ""
         if not raw_path:
-            empty_path_reason = "primary planner returned empty path"
+            backend_plan_error = str(
+                getattr(self._backend, "_last_plan_error", "") or ""
+            ).strip()
+            empty_path_reason = backend_plan_error or "primary planner returned empty path"
             if self._plan_safety_policy == "reject":
                 self._last_plan_report = {
                     "primary_planner": self._planner_name,
@@ -175,7 +207,7 @@ class GlobalPlannerService:
                     "policy": self._plan_safety_policy,
                     "reached_goal": False,
                 }
-                raise RuntimeError("GlobalPlannerService: planner returned empty path")
+                raise RuntimeError(f"GlobalPlannerService: {empty_path_reason}")
             (
                 repaired_goal,
                 repaired_path,
@@ -893,6 +925,83 @@ class GlobalPlannerService:
     def last_plan_report(self) -> dict[str, Any]:
         return dict(self._last_plan_report)
 
+    def _is_pct_planner(self, name: str | None = None) -> bool:
+        return (name or self._planner_name).lower() == "pct"
+
+    def _default_map_artifact_gate(self) -> dict[str, Any]:
+        return {
+            "required": self._is_pct_planner(),
+            "ok": True,
+            "reason": "not_checked",
+            "blockers": [],
+        }
+
+    def _resolve_tomogram_path(self) -> str:
+        tomogram_path = self._tomogram
+        if not tomogram_path or not os.path.exists(tomogram_path):
+            active_tomo = os.path.join(
+                os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps")),
+                "active", "tomogram.pickle",
+            )
+            if os.path.exists(active_tomo):
+                tomogram_path = active_tomo
+                logger.info(
+                    "GlobalPlannerService: using active map: %s", tomogram_path
+                )
+        return tomogram_path
+
+    def _validate_map_artifact_gate(self) -> dict[str, Any]:
+        if not self._is_pct_planner():
+            return {
+                "required": False,
+                "ok": True,
+                "reason": "not_required_for_planner",
+                "planner": self._planner_name,
+                "blockers": [],
+            }
+        tomogram_path = self._resolve_tomogram_path()
+        expected_frame_id = topic_default_frame_id(TOPICS.saved_map_cloud)
+        if not tomogram_path:
+            return {
+                "schema_version": "lingtu.saved_map_artifacts.gate.v1",
+                "required": True,
+                "ok": False,
+                "reason": "tomogram_required_for_pct_planner",
+                "planner": self._planner_name,
+                "tomogram": "",
+                "expected_frame_id": expected_frame_id,
+                "blockers": ["tomogram required for pct planner"],
+            }
+        gate = validate_saved_map_artifact_dir(
+            Path(tomogram_path).resolve().parent,
+            require_tomogram=True,
+            expected_frame_id=expected_frame_id,
+        )
+        gate["required"] = True
+        gate["planner"] = self._planner_name
+        gate["tomogram"] = str(tomogram_path)
+        gate["expected_frame_id"] = expected_frame_id
+        if gate.get("ok") is True:
+            gate["reason"] = "saved_map_artifact_ok"
+        else:
+            gate["reason"] = "saved_map_artifact_missing_or_invalid"
+        return gate
+
+    def _map_artifact_gate_blocks(self) -> bool:
+        return (
+            bool(self._map_artifact_gate.get("required", False))
+            and self._map_artifact_gate.get("ok") is not True
+        )
+
+    def _map_artifact_gate_failure_reason(self) -> str:
+        blockers = [
+            str(item)
+            for item in (self._map_artifact_gate.get("blockers") or [])
+            if str(item)
+        ]
+        detail = "; ".join(blockers) if blockers else "unknown blocker"
+        return f"saved map artifact gate failed: {detail}"
+
     def _create_backend(self, name: str | None = None):
         from core.registry import get
         name = (name or self._planner_name).lower()
@@ -910,17 +1019,7 @@ class GlobalPlannerService:
                 f"Unknown planner: '{name}'. Available: {available}"
             ) from err
 
-        tomogram_path = self._tomogram
-        if not tomogram_path or not os.path.exists(tomogram_path):
-            active_tomo = os.path.join(
-                os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps")),
-                "active", "tomogram.pickle",
-            )
-            if os.path.exists(active_tomo):
-                tomogram_path = active_tomo
-                logger.info(
-                    "GlobalPlannerService: using active map: %s", tomogram_path
-                )
+        tomogram_path = self._resolve_tomogram_path()
 
         return BackendCls(tomogram_path, self._obstacle_thr)
 

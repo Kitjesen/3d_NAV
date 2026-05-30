@@ -34,7 +34,7 @@ DENSITY_POINT_SPACING_M = {
     "dense": 0.05,
 }
 DEFAULT_INSPECTION_GOALS = "0.5,0.05;1.0,0.1;1.5,0.15"
-DEFAULT_INSPECTION_TOMOGRAM = "artifacts/server_sim_closure/large_terrain_odom/tomogram.pickle"
+DEFAULT_INSPECTION_TOMOGRAM = "artifacts/server_sim_closure/large_terrain/tomogram.pickle"
 
 
 def _safe_float(value: Any, *, default: float | None = None) -> float | None:
@@ -583,6 +583,172 @@ def _latest_report(run_root: Path) -> Path | None:
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
+def _rooted_path(path: Path | str) -> Path:
+    candidate = Path(path)
+    return candidate if candidate.is_absolute() else ROOT / candidate
+
+
+def _path_like(value: Path | str | None) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    return (
+        "/" in text
+        or "\\" in text
+        or text.startswith(".")
+        or bool(Path(text).suffix)
+    )
+
+
+def run_matrix_preflight(
+    *,
+    launch_script: Path,
+    world: Path | str | None,
+    inspection_tomogram: Path | str | None,
+) -> dict[str, Any]:
+    environment_blockers: list[str] = []
+    artifact_blockers: list[str] = []
+    warnings: list[str] = []
+
+    launch_path = _rooted_path(launch_script)
+    launch_exists = launch_path.is_file()
+    if not launch_exists:
+        environment_blockers.append(f"launch_script missing: {launch_path}")
+
+    world_path: Path | None = None
+    world_exists: bool | None = None
+    if _path_like(world):
+        world_path = _rooted_path(str(world))
+        world_exists = world_path.is_file()
+        if not world_exists:
+            artifact_blockers.append(f"world file missing: {world_path}")
+
+    tomogram_path: Path | None = None
+    tomogram_exists: bool | None = None
+    if inspection_tomogram:
+        tomogram_path = _rooted_path(str(inspection_tomogram))
+        tomogram_exists = tomogram_path.is_file()
+        if not tomogram_exists:
+            artifact_blockers.append(f"inspection_tomogram missing: {tomogram_path}")
+
+    metadata_path: Path | None = None
+    if world_path is not None and tomogram_path is not None:
+        if world_exists and tomogram_exists:
+            if world_path.parent != tomogram_path.parent:
+                artifact_blockers.append(
+                    "world/tomogram are not from the same source directory: "
+                    f"{world_path.parent} != {tomogram_path.parent}"
+                )
+            metadata_path = world_path.parent / "metadata.json"
+            if not metadata_path.is_file():
+                warnings.append(f"same-source metadata.json missing: {metadata_path}")
+
+    blockers = [*environment_blockers, *artifact_blockers]
+    blocking_subsystems = []
+    if environment_blockers:
+        blocking_subsystems.append("environment_runtime")
+    if artifact_blockers:
+        blocking_subsystems.append("artifact_contract")
+
+    return {
+        "ok": not blockers,
+        "launch_script": {
+            "path": str(launch_path),
+            "exists": launch_exists,
+        },
+        "world": {
+            "value": "" if world is None else str(world),
+            "path": "" if world_path is None else str(world_path),
+            "exists": world_exists,
+            "path_checked": world_path is not None,
+        },
+        "inspection_tomogram": {
+            "value": "" if inspection_tomogram is None else str(inspection_tomogram),
+            "path": "" if tomogram_path is None else str(tomogram_path),
+            "exists": tomogram_exists,
+            "path_checked": tomogram_path is not None,
+        },
+        "same_source": {
+            "checked": world_path is not None and tomogram_path is not None,
+            "metadata_path": "" if metadata_path is None else str(metadata_path),
+            "metadata_exists": None if metadata_path is None else metadata_path.is_file(),
+        },
+        "environment_blockers": environment_blockers,
+        "artifact_blockers": artifact_blockers,
+        "blocking_subsystems": blocking_subsystems,
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_action_hint": (
+            "fix run-matrix preflight blockers before launching the long "
+            "moving-obstacle sweep"
+        ),
+    }
+
+
+def preflight_failure_summary(
+    *,
+    preflight: Mapping[str, Any],
+    required_speed_bins: Sequence[str],
+    required_density_bins: Sequence[str],
+    min_clearance_m: float,
+    require_video: bool,
+    require_video_file: bool,
+    require_live_nav_chain: bool,
+    required_scan_time_profile: str,
+) -> dict[str, Any]:
+    required_pairs = _required_pairs(required_speed_bins, required_density_bins)
+    blockers = [str(item) for item in preflight.get("blockers") or []]
+    return {
+        "schema_version": "lingtu.moving_obstacle_sweep_gate.v1",
+        "ok": False,
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "case_count": 0,
+        "passed_case_count": 0,
+        "failed_case_count": 0,
+        "passed_pair_count": 0,
+        "required_speed_bins": list(required_speed_bins),
+        "required_density_bins": list(required_density_bins),
+        "covered_speed_bins": [],
+        "covered_density_bins": [],
+        "required_pairs": required_pairs,
+        "covered_pairs": [],
+        "missing_speed_bins": list(required_speed_bins),
+        "missing_density_bins": list(required_density_bins),
+        "missing_pairs": required_pairs,
+        "min_clearance_m": float(min_clearance_m),
+        "require_video": bool(require_video),
+        "require_video_file": bool(require_video_file),
+        "required_live_nav_chain": bool(require_live_nav_chain),
+        "required_scan_time_profile": str(required_scan_time_profile or ""),
+        "minimal_red_defect": {
+            "blocking_subsystem": next(
+                iter(preflight.get("blocking_subsystems") or []),
+                "environment_runtime",
+            ),
+            "blockers": blockers,
+        },
+        "blocking_subsystems": list(preflight.get("blocking_subsystems") or []),
+        "environment_blockers": list(preflight.get("environment_blockers") or []),
+        "artifact_blockers": list(preflight.get("artifact_blockers") or []),
+        "preflight": dict(preflight),
+        "next_action_hint": str(preflight.get("next_action_hint") or ""),
+        "blockers": blockers,
+        "cases": [],
+        "run_matrix": {
+            "enabled": True,
+            "preflight": dict(preflight),
+            "case_count": 0,
+            "cases": [],
+            "blockers": blockers,
+            "warnings": list(preflight.get("warnings") or []),
+        },
+    }
+
+
 Runner = Callable[..., subprocess.CompletedProcess[Any]]
 
 
@@ -931,6 +1097,31 @@ def main() -> int:
     report_paths = _discover_reports(args.report, args.report_glob)
     run_results: list[dict[str, Any]] = []
     if args.run_matrix:
+        preflight = run_matrix_preflight(
+            launch_script=args.launch_script,
+            world=str(args.world) if args.world else None,
+            inspection_tomogram=str(args.inspection_tomogram)
+            if args.inspection_tomogram
+            else None,
+        )
+        if preflight.get("ok") is not True:
+            summary = preflight_failure_summary(
+                preflight=preflight,
+                required_speed_bins=required_speed_bins,
+                required_density_bins=required_density_bins,
+                min_clearance_m=float(args.min_clearance_m),
+                require_video=not bool(args.allow_missing_video),
+                require_video_file=bool(args.require_video_file or args.strict),
+                require_live_nav_chain=not bool(args.allow_weak_nav_chain),
+                required_scan_time_profile=str(args.required_scan_time_profile),
+            )
+            text = json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True)
+            print(text)
+            if args.json_out:
+                output = args.json_out if args.json_out.is_absolute() else ROOT / args.json_out
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(text + "\n", encoding="utf-8")
+            return 0 if not args.strict else 1
         matrix_cases = sweep_matrix_cases(
             required_speed_bins=required_speed_bins,
             required_density_bins=required_density_bins,

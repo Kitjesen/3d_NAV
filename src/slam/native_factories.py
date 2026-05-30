@@ -25,8 +25,12 @@ from core.native_install import DDS_ENV, exe, share
 
 _IS_AARCH64 = platform.machine() in ("aarch64", "arm64")
 from core.native_module import NativeModule, NativeModuleConfig
-from core.runtime_interface import FRAMES, TOPICS, adapter_remappings
+from core.runtime_interface import TOPICS, adapter_remappings, topic_default_frame_id
 from core.utils.livox_config import ensure_mid360_config_file
+
+
+GENZ_ODOM_FRAME_ID = topic_default_frame_id(TOPICS.odometry)
+GENZ_BASE_FRAME_ID = topic_default_frame_id(TOPICS.cmd_vel)
 
 
 def livox_driver(cfg: RobotConfig | None = None) -> NativeModule:
@@ -178,8 +182,8 @@ def slam_genz_icp(cfg: RobotConfig | None = None) -> NativeModule:
         name="slam_genz_icp",
         parameters={
             "config_file": config_path,
-            "odom_frame": FRAMES.odom,
-            "base_frame": FRAMES.body,
+            "odom_frame": GENZ_ODOM_FRAME_ID,
+            "base_frame": GENZ_BASE_FRAME_ID,
             "publish_odom_tf": "false",  # Fast-LIO2 handles TF
             "deskew": "true",
             "visualize": "false",

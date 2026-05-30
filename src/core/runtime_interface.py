@@ -2,14 +2,20 @@
 
 This module is the Python source of truth for the runtime boundary shared by
 real robot drivers and simulator adapters.  Different endpoints may own
-different data sources, but they must normalize into the same frames, topics,
-message formats, and algorithm surfaces before entering LingTu modules.
+different data sources, but they must normalize into the same frames, canonical
+runtime stream tokens, message formats, and algorithm surfaces before entering
+LingTu modules.  These stream tokens may be carried by ROS 2 at adapter
+boundaries, but they are not the product acceptance interface.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
+from typing import Any, Mapping
+
+
+REAL_RUNTIME_CONTRACT = "real_s100p"
 
 
 @dataclass(frozen=True)
@@ -67,7 +73,7 @@ class RuntimeFrames:
 
 @dataclass(frozen=True)
 class RuntimeTopics:
-    """Canonical topic names for LingTu runtime modules."""
+    """Canonical stream tokens for LingTu runtime modules."""
 
     raw_lidar_points: str = "/points_raw"
     raw_imu: str = "/imu_raw"
@@ -92,6 +98,8 @@ class RuntimeTopics:
     exploration_stop: str = "/exploration/stop"
     exploration_way_point: str = "/exploration/way_point"
     exploration_grid: str = "/nav/exploration_grid"
+    traversable_frontiers: str = "/nav/traversable_frontiers"
+    frontier_candidate: str = "/nav/frontier_candidate"
     exploration_status: str = "/exploration/status"
 
     global_path: str = "/nav/global_path"
@@ -185,6 +193,27 @@ class Transform3D:
     @property
     def rotation_xyzw(self) -> tuple[float, float, float, float]:
         return rpy_to_quaternion_xyzw(self.roll, self.pitch, self.yaw)
+
+
+@dataclass(frozen=True)
+class FrameLinkContract:
+    """Runtime TF edge that endpoint adapters must provide or preserve."""
+
+    parent: str
+    child: str
+    required: bool = True
+
+
+@dataclass(frozen=True)
+class RuntimeDataFlowStage:
+    """Canonical runtime data-flow stage crossing endpoint and module boundaries."""
+
+    name: str
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+    owner: str
+    frame_role: str
+    map_dependency: str
 
 
 @dataclass(frozen=True)
@@ -283,6 +312,119 @@ CORE_REQUIRED_TOPICS = (
     TOPICS.goal_pose,
 )
 
+FRAME_LINKS = {
+    "map_to_odom": FrameLinkContract(
+        parent=FRAMES.map,
+        child=FRAMES.odom,
+        required=True,
+    ),
+    "odom_to_body": FrameLinkContract(
+        parent=FRAMES.odom,
+        child=FRAMES.body,
+        required=True,
+    ),
+    "body_to_lidar": FrameLinkContract(
+        parent=FRAMES.body,
+        child=FRAMES.lidar,
+        required=True,
+    ),
+    "body_to_camera": FrameLinkContract(
+        parent=FRAMES.body,
+        child=FRAMES.camera,
+        required=True,
+    ),
+}
+
+RUNTIME_DATA_FLOW = (
+    RuntimeDataFlowStage(
+        name="endpoint_adapter",
+        inputs=("source:data_source.source_outputs",),
+        outputs=("source:data_source.normalized_outputs",),
+        owner="endpoint_adapter",
+        frame_role="native_to_canonical",
+        map_dependency="declared_by_data_source",
+    ),
+    RuntimeDataFlowStage(
+        name="slam_or_relayed_localization_map",
+        inputs=(
+            TOPICS.lidar_scan,
+            TOPICS.imu,
+            TOPICS.raw_lidar_points,
+            TOPICS.raw_imu,
+            "source:data_source.algorithm_entry_outputs",
+        ),
+        outputs=(TOPICS.odometry, TOPICS.registered_cloud, TOPICS.map_cloud),
+        owner="slam_or_source_adapter",
+        frame_role="map_odom_body",
+        map_dependency="declared_by_data_source",
+    ),
+    RuntimeDataFlowStage(
+        name="map_layers_and_exploration",
+        inputs=(
+            TOPICS.odometry,
+            TOPICS.registered_cloud,
+            TOPICS.map_cloud,
+            TOPICS.exploration_grid,
+            TOPICS.terrain_map_ext,
+            "module:TraversableFrontierModule.fused_cost",
+            "module:TraversableFrontierModule.slope_grid",
+            "module:TraversableFrontierModule.esdf_field",
+            "module:TraversableFrontierModule.elevation_map",
+        ),
+        outputs=(
+            TOPICS.exploration_way_point,
+            TOPICS.goal_pose,
+            TOPICS.traversable_frontiers,
+            TOPICS.frontier_candidate,
+        ),
+        owner="maps_frontier_or_tare_adapter",
+        frame_role=FRAMES.map,
+        map_dependency="live_map_or_occupancy_grid",
+    ),
+    RuntimeDataFlowStage(
+        name="global_planning",
+        inputs=(
+            TOPICS.odometry,
+            TOPICS.map_cloud,
+            TOPICS.exploration_grid,
+            TOPICS.exploration_way_point,
+            TOPICS.goal_pose,
+            "artifact:tomogram",
+        ),
+        outputs=(TOPICS.global_path,),
+        owner="lingtu_navigation_or_pct",
+        frame_role=FRAMES.map,
+        map_dependency=(
+            "pct_uses_same_source_saved_tomogram;"
+            "astar_or_frontier_may_use_live_occupancy_grid"
+        ),
+    ),
+    RuntimeDataFlowStage(
+        name="local_planning_and_following",
+        inputs=(TOPICS.odometry, TOPICS.registered_cloud, TOPICS.global_path),
+        outputs=(TOPICS.local_path, TOPICS.cmd_vel),
+        owner="lingtu_autonomy",
+        frame_role="odom_body_registered_cloud",
+        map_dependency="current_registered_cloud_and_path",
+    ),
+    RuntimeDataFlowStage(
+        name="dynamic_obstacle_gate",
+        inputs=(TOPICS.added_obstacles, TOPICS.local_path, TOPICS.cmd_vel),
+        outputs=(TOPICS.check_obstacle, TOPICS.planner_status),
+        owner="local_planner_dynamic_obstacle_gate",
+        frame_role="odom_body_registered_cloud",
+        map_dependency="current_registered_cloud_and_added_obstacles",
+    ),
+    RuntimeDataFlowStage(
+        name="command_boundary",
+        inputs=(TOPICS.cmd_vel,),
+        outputs=("sink:data_source.command_sink",),
+        owner="cmd_vel_mux_to_endpoint_sink",
+        frame_role="body_twist",
+        map_dependency="none",
+    ),
+)
+
 LIDAR_EXTRINSICS = {
     "real_mid360": Transform3D(
         parent=FRAMES.body,
@@ -354,6 +496,22 @@ MESSAGE_FORMATS = {
         frame_role=FRAMES.body,
         note="Muxed command; endpoint adapters decide whether to relay it.",
     ),
+    "traversable_frontier_candidates": MessageFormat(
+        name="traversable_frontier_candidates",
+        ros_type="application/json",
+        frame_role=FRAMES.map,
+        required_fields=(
+            "id",
+            "centroid_3d",
+            "reachable_score",
+            "support_type",
+            "esdf_clearance_m",
+            "semantic_value",
+            "evidence_layers",
+            "reasons",
+        ),
+        note="Read-only traversability-scored frontier preview; never a command.",
+    ),
 }
 
 TOPIC_FORMATS = {
@@ -368,8 +526,14 @@ TOPIC_FORMATS = {
     TOPICS.cumulative_map_cloud: ("map_cloud",),
     TOPICS.saved_map_cloud: ("map_cloud",),
     TOPICS.exploration_grid: ("nav_msgs/msg/OccupancyGrid",),
+    TOPICS.traversable_frontiers: ("traversable_frontier_candidates",),
+    TOPICS.frontier_candidate: ("traversable_frontier_candidates",),
     TOPICS.save_map_service: ("service",),
+    TOPICS.localization_quality: ("std_msgs/msg/Float32",),
     TOPICS.localization_health: ("std_msgs/msg/String",),
+    TOPICS.relocalize_service: ("service",),
+    TOPICS.global_relocalize_service: ("service",),
+    TOPICS.relocalize_check_service: ("service",),
     TOPICS.global_path: ("nav_msgs/msg/Path",),
     TOPICS.local_path: ("nav_msgs/msg/Path",),
     TOPICS.terrain_map: ("map_cloud",),
@@ -406,6 +570,7 @@ TOPIC_FORMATS = {
     "/Odometry": ("odometry",),
     "/cloud_registered": ("registered_cloud",),
     "/cloud_map": ("map_cloud",),
+    "/localization_quality": ("std_msgs/msg/Float32",),
     "/map_clearing": ("std_msgs/msg/Bool",),
     "/cloud_clearing": ("std_msgs/msg/Bool",),
     "/path": ("nav_msgs/msg/Path",),
@@ -417,6 +582,49 @@ TOPIC_FORMATS = {
     "/check_obstacle": ("std_msgs/msg/Bool",),
     "/planner_status": ("std_msgs/msg/String",),
 }
+
+TOPIC_ALLOWED_FRAME_IDS = {
+    TOPICS.lidar_scan: (FRAMES.lidar,),
+    TOPICS.imu: (FRAMES.lidar,),
+    TOPICS.odometry: (FRAMES.odom, FRAMES.map),
+    TOPICS.state_estimation_at_scan: (FRAMES.odom,),
+    TOPICS.registered_cloud: (FRAMES.body,),
+    TOPICS.map_cloud: (FRAMES.map, FRAMES.odom),
+    TOPICS.cumulative_map_cloud: (FRAMES.map, FRAMES.odom),
+    TOPICS.saved_map_cloud: (FRAMES.map, FRAMES.odom),
+    TOPICS.exploration_grid: (FRAMES.map, FRAMES.odom),
+    TOPICS.traversable_frontiers: (FRAMES.map, FRAMES.odom),
+    TOPICS.frontier_candidate: (FRAMES.map, FRAMES.odom),
+    TOPICS.terrain_map: (FRAMES.map, FRAMES.odom),
+    TOPICS.terrain_map_ext: (FRAMES.map, FRAMES.odom),
+    TOPICS.global_path: (FRAMES.map, FRAMES.odom),
+    TOPICS.local_path: (FRAMES.map, FRAMES.odom, FRAMES.body),
+    TOPICS.cmd_vel: (FRAMES.body,),
+}
+
+REAL_RUNTIME_TOPIC_ALLOWED_FRAME_IDS = {
+    **TOPIC_ALLOWED_FRAME_IDS,
+    TOPICS.map_cloud: (FRAMES.map,),
+    TOPICS.traversable_frontiers: (FRAMES.map,),
+    TOPICS.frontier_candidate: (FRAMES.map,),
+    TOPICS.global_path: (FRAMES.map,),
+}
+
+REAL_RUNTIME_REQUIRED_TOPIC_FRAME_IDS = (
+    TOPICS.lidar_scan,
+    TOPICS.imu,
+    TOPICS.odometry,
+    TOPICS.registered_cloud,
+    TOPICS.map_cloud,
+    TOPICS.global_path,
+    TOPICS.local_path,
+    TOPICS.cmd_vel,
+)
+
+REAL_RUNTIME_REQUIRED_ENDPOINT_INPUT_TOPICS = (
+    TOPICS.lidar_scan,
+    TOPICS.imu,
+)
 
 ARTIFACT_FORMATS = {
     "map_pcd": ArtifactFormat(
@@ -508,6 +716,22 @@ ALGORITHM_INTERFACES = {
         owner="lingtu_frontier",
         map_dependency="live_occupancy_grid_unknown_free_boundary",
     ),
+    "traversable_frontier_preview": AlgorithmInterface(
+        name="traversable_frontier_preview",
+        inputs=(
+            TOPICS.odometry,
+            TOPICS.exploration_grid,
+            "module:TraversableFrontierModule.fused_cost",
+            "module:TraversableFrontierModule.slope_grid",
+            "module:TraversableFrontierModule.esdf_field",
+            "module:TraversableFrontierModule.elevation_map",
+        ),
+        outputs=(TOPICS.traversable_frontiers, TOPICS.frontier_candidate),
+        owner="lingtu_traversable_frontier",
+        map_dependency=(
+            "live_occupancy_grid_and_traversability_layers_read_only_preview"
+        ),
+    ),
     "tare_exploration": AlgorithmInterface(
         name="tare_exploration",
         inputs=(TOPICS.odometry, TOPICS.map_cloud, TOPICS.terrain_map_ext),
@@ -520,7 +744,9 @@ ALGORITHM_INTERFACES = {
         inputs=(TOPICS.odometry, TOPICS.map_cloud, TOPICS.exploration_way_point, TOPICS.goal_pose),
         outputs=(TOPICS.global_path,),
         owner="lingtu_navigation",
-        map_dependency="live_or_saved_map_cloud",
+        map_dependency=(
+            "planner_specific_pct_saved_tomogram_or_astar_occupancy_grid"
+        ),
     ),
     "astar_global_planning": AlgorithmInterface(
         name="astar_global_planning",
@@ -545,6 +771,27 @@ ALGORITHM_INTERFACES = {
     ),
 }
 
+RUNTIME_DATA_FLOW_STAGE_ALGORITHM_INTERFACES = {
+    "slam_or_relayed_localization_map": (
+        "fastlio_mapping",
+        "fastlio_raw_validation",
+    ),
+    "map_layers_and_exploration": (
+        "exploration_strategy",
+        "wavefront_frontier_exploration",
+        "traversable_frontier_preview",
+        "tare_exploration",
+    ),
+    "global_planning": (
+        "global_planning",
+        "astar_global_planning",
+        "pct_global_planning",
+    ),
+    "local_planning_and_following": (
+        "local_planning_and_following",
+    ),
+}
+
 DATA_SOURCE_CONTRACTS = {
     "in_process_stub": DataSourceContract(
         name="in_process_stub",
@@ -560,14 +807,20 @@ DATA_SOURCE_CONTRACTS = {
         localization_source="mock_or_in_process_odometry",
         mapping_source="mock_or_in_process_map",
     ),
-    "real_s100p": DataSourceContract(
-        name="real_s100p",
+    REAL_RUNTIME_CONTRACT: DataSourceContract(
+        name=REAL_RUNTIME_CONTRACT,
         provider="hardware",
         owns=("mid360_lidar", "imu", "robot_actuation"),
         normalized_outputs=(TOPICS.lidar_scan, TOPICS.imu),
         command_sink="hardware_driver_after_cmd_vel_mux",
         source_outputs=(TOPICS.lidar_scan, TOPICS.imu),
-        algorithm_entry_outputs=(TOPICS.odometry, TOPICS.registered_cloud, TOPICS.map_cloud),
+        algorithm_entry_outputs=(
+            TOPICS.odometry,
+            TOPICS.registered_cloud,
+            TOPICS.map_cloud,
+            TOPICS.localization_health,
+            TOPICS.localization_quality,
+        ),
         algorithm_context_outputs=(),
         lidar_extrinsic_profile="real_mid360",
         slam_source="lingtu_fastlio_or_external_robot_slam",
@@ -601,6 +854,20 @@ DATA_SOURCE_CONTRACTS = {
         slam_source="lingtu_fastlio2",
         localization_source="fastlio2_odometry",
         mapping_source="fastlio2_map_cloud",
+    ),
+    "rosbag_fastlio2_replay": DataSourceContract(
+        name="rosbag_fastlio2_replay",
+        provider="replay",
+        owns=("recorded_lidar_imu", "recorded_slam_outputs", "no_actuation"),
+        normalized_outputs=(TOPICS.raw_lidar_points, TOPICS.raw_imu),
+        command_sink="no_actuation_replay_sink",
+        source_outputs=(TOPICS.raw_lidar_points, TOPICS.raw_imu),
+        algorithm_entry_outputs=(TOPICS.odometry, TOPICS.registered_cloud, TOPICS.map_cloud),
+        algorithm_context_outputs=(),
+        lidar_extrinsic_profile="mujoco_thunder_v3",
+        slam_source="fastlio2_replay_or_recorded_slam",
+        localization_source="replayed_fastlio2_odometry",
+        mapping_source="replayed_fastlio2_map_cloud",
     ),
     "gazebo_industrial": DataSourceContract(
         name="gazebo_industrial",
@@ -670,6 +937,74 @@ DATA_SOURCE_CONTRACTS = {
         mapping_source="cmu_registered_scan_and_terrain_map_ext",
     ),
 }
+
+
+def _dedupe_runtime_tokens(tokens: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(token for token in tokens if token))
+
+
+def _data_source_contract(data_source: str | DataSourceContract) -> DataSourceContract:
+    if isinstance(data_source, DataSourceContract):
+        return data_source
+    try:
+        return DATA_SOURCE_CONTRACTS[data_source]
+    except KeyError as exc:
+        available = ", ".join(sorted(DATA_SOURCE_CONTRACTS))
+        raise ValueError(f"unknown data source {data_source!r}; available: {available}") from exc
+
+
+def resolved_runtime_data_flow(
+    data_source: str | DataSourceContract,
+) -> tuple[RuntimeDataFlowStage, ...]:
+    """Return concrete runtime data flow for one endpoint data source.
+
+    RUNTIME_DATA_FLOW is the shared template used by evidence validators. This
+    resolver expands the source-owned boundary so operators can inspect actual
+    topics and command sinks instead of template placeholders.
+    """
+
+    source = _data_source_contract(data_source)
+    stages: list[RuntimeDataFlowStage] = []
+
+    for stage in RUNTIME_DATA_FLOW:
+        inputs = stage.inputs
+        outputs = stage.outputs
+
+        if stage.name == "endpoint_adapter":
+            inputs = source.source_outputs
+            outputs = source.normalized_outputs
+        elif stage.name == "slam_or_relayed_localization_map":
+            inputs = source.normalized_outputs
+            outputs = source.algorithm_entry_outputs
+        elif stage.name == "map_layers_and_exploration":
+            inputs = _dedupe_runtime_tokens(
+                source.algorithm_entry_outputs
+                + source.algorithm_context_outputs
+                + (
+                    TOPICS.exploration_grid,
+                    TOPICS.terrain_map_ext,
+                    "module:TraversableFrontierModule.fused_cost",
+                    "module:TraversableFrontierModule.slope_grid",
+                    "module:TraversableFrontierModule.esdf_field",
+                    "module:TraversableFrontierModule.elevation_map",
+                )
+            )
+        elif stage.name == "command_boundary":
+            outputs = (source.command_sink,)
+
+        stages.append(
+            RuntimeDataFlowStage(
+                name=stage.name,
+                inputs=_dedupe_runtime_tokens(inputs),
+                outputs=_dedupe_runtime_tokens(outputs),
+                owner=stage.owner,
+                frame_role=stage.frame_role,
+                map_dependency=stage.map_dependency,
+            )
+        )
+
+    return tuple(stages)
+
 
 ADAPTER_TOPIC_ALIASES = {
     "livox_driver": (
@@ -752,6 +1087,30 @@ ADAPTER_TOPIC_ALIASES = {
             target=TOPICS.saved_map_cloud,
             msg_format="map_cloud",
             note="Static saved map from localizer; never the live map cloud.",
+        ),
+        AdapterTopicAlias(
+            source="/localization_quality",
+            target=TOPICS.localization_quality,
+            msg_format="std_msgs/msg/Float32",
+            note="Localizer ICP quality score normalized for LingTu diagnostics.",
+        ),
+        AdapterTopicAlias(
+            source="relocalize",
+            target=TOPICS.relocalize_service,
+            msg_format="service",
+            note="Seeded localizer relocalization service.",
+        ),
+        AdapterTopicAlias(
+            source="relocalize_check",
+            target=TOPICS.relocalize_check_service,
+            msg_format="service",
+            note="Localizer relocalization status service.",
+        ),
+        AdapterTopicAlias(
+            source="global_relocalize",
+            target=TOPICS.global_relocalize_service,
+            msg_format="service",
+            note="Global localizer relocalization service.",
         ),
     ),
     "pointlio": (
@@ -937,32 +1296,32 @@ PROFILE_DATA_SOURCE_BINDINGS = {
     ),
     "map": ProfileDataSourceBinding(
         profile="map",
-        data_source="real_s100p",
+        data_source=REAL_RUNTIME_CONTRACT,
         mode="real_robot_mapping",
     ),
     "nav": ProfileDataSourceBinding(
         profile="nav",
-        data_source="real_s100p",
+        data_source=REAL_RUNTIME_CONTRACT,
         mode="real_robot_saved_map_navigation",
     ),
     "explore": ProfileDataSourceBinding(
         profile="explore",
-        data_source="real_s100p",
+        data_source=REAL_RUNTIME_CONTRACT,
         mode="real_robot_live_exploration",
     ),
     "tare_explore": ProfileDataSourceBinding(
         profile="tare_explore",
-        data_source="real_s100p",
+        data_source=REAL_RUNTIME_CONTRACT,
         mode="real_robot_tare_exploration",
     ),
     "super_lio": ProfileDataSourceBinding(
         profile="super_lio",
-        data_source="real_s100p",
+        data_source=REAL_RUNTIME_CONTRACT,
         mode="real_robot_super_lio_mapping",
     ),
     "super_lio_relocation": ProfileDataSourceBinding(
         profile="super_lio_relocation",
-        data_source="real_s100p",
+        data_source=REAL_RUNTIME_CONTRACT,
         mode="real_robot_super_lio_relocalization",
     ),
 }
@@ -982,6 +1341,19 @@ def adapter_remappings(surface: str) -> dict[str, str]:
     """Return source->target remappings for a native launch/service surface."""
 
     return {alias.source: alias.target for alias in adapter_aliases(surface)}
+
+
+def adapter_source_for_target(surface: str, target: str) -> str:
+    """Return the native source topic or service remapped to one target."""
+
+    for alias in adapter_aliases(surface):
+        if alias.target == target:
+            return alias.source
+    available = ", ".join(alias.target for alias in adapter_aliases(surface))
+    raise ValueError(
+        f"surface {surface!r} has no adapter alias targeting {target!r}; "
+        f"available targets: {available}"
+    )
 
 
 def adapter_relay_aliases(surface: str) -> tuple[AdapterTopicAlias, ...]:
@@ -1007,6 +1379,120 @@ def topic_formats(topic: str) -> tuple[str, ...]:
         return TOPIC_FORMATS[topic]
     except KeyError as exc:
         raise ValueError(f"topic {topic!r} has no declared runtime format") from exc
+
+
+def topic_allowed_frame_ids(topic: str) -> tuple[str, ...]:
+    """Return the general allowed frame_ids for a runtime topic."""
+
+    try:
+        return TOPIC_ALLOWED_FRAME_IDS[topic]
+    except KeyError as exc:
+        raise ValueError(f"topic {topic!r} has no declared frame_id contract") from exc
+
+
+def runtime_topic_default_frame_id(runtime_contract: str | None, topic: str) -> str:
+    """Return the first declared frame_id for a topic in one runtime contract."""
+
+    frames = runtime_topic_allowed_frame_ids(runtime_contract).get(topic)
+    if not frames:
+        raise ValueError(f"topic {topic!r} has no declared runtime frame_id contract")
+    return frames[0]
+
+
+def runtime_topic_default_frame_ids(runtime_contract: str | None) -> dict[str, str]:
+    """Return the default frame_id for every framed topic in one runtime contract."""
+
+    return {
+        topic: frames[0]
+        for topic, frames in runtime_topic_allowed_frame_ids(runtime_contract).items()
+        if frames
+    }
+
+
+def runtime_frames_contract() -> dict[str, Any]:
+    """Return canonical runtime frames as JSON-ready contract data."""
+
+    return normalize_runtime_frames_contract(asdict(FRAMES))
+
+
+def normalize_runtime_frames_contract(
+    frames: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Return JSON-ready runtime frame contract data."""
+
+    if not isinstance(frames, Mapping):
+        return {}
+    return {
+        str(key): list(value) if isinstance(value, tuple) else value
+        for key, value in frames.items()
+    }
+
+
+def runtime_topic_default_frame_contract(
+    runtime_contract: str | None,
+) -> dict[str, str]:
+    """Return JSON-ready default frame_id contract for one runtime."""
+
+    return dict(runtime_topic_default_frame_ids(runtime_contract))
+
+
+def runtime_topic_allowed_frame_contract(
+    runtime_contract: str | None,
+) -> dict[str, list[str]]:
+    """Return JSON-ready allowed frame_id contract for one runtime."""
+
+    return {
+        topic: list(frames)
+        for topic, frames in runtime_topic_allowed_frame_ids(runtime_contract).items()
+    }
+
+
+def normalize_algorithm_interface_contract(
+    interfaces: Mapping[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Return JSON-ready algorithm interface contract data."""
+
+    if not isinstance(interfaces, Mapping):
+        return {}
+    normalized: dict[str, dict[str, Any]] = {}
+    for name, interface in interfaces.items():
+        if isinstance(interface, AlgorithmInterface):
+            source: Mapping[str, Any] = asdict(interface)
+        elif isinstance(interface, Mapping):
+            source = interface
+        else:
+            continue
+        normalized[str(name)] = {
+            "name": str(source.get("name") or ""),
+            "inputs": _jsonable_string_list(source.get("inputs")),
+            "outputs": _jsonable_string_list(source.get("outputs")),
+            "owner": str(source.get("owner") or ""),
+            "map_dependency": str(source.get("map_dependency") or ""),
+        }
+    return normalized
+
+
+def runtime_algorithm_interface_contract() -> dict[str, dict[str, Any]]:
+    """Return JSON-ready algorithm interface contract data."""
+
+    return normalize_algorithm_interface_contract(ALGORITHM_INTERFACES)
+
+
+def runtime_stage_algorithm_interface_contract() -> dict[str, list[str]]:
+    """Return JSON-ready runtime data-flow stage to algorithm interface binding."""
+
+    return {
+        stage: list(interfaces)
+        for stage, interfaces in RUNTIME_DATA_FLOW_STAGE_ALGORITHM_INTERFACES.items()
+    }
+
+
+def _jsonable_string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    return []
 
 
 def map_frame_id() -> str:
@@ -1045,10 +1531,125 @@ def camera_frame_id() -> str:
     return FRAMES.camera
 
 
+def topic_default_frame_id(topic: str) -> str:
+    """Return the default frame_id for a topic in the general runtime contract."""
+
+    return runtime_topic_default_frame_id(None, topic)
+
+
 def simulator_world_frame_id() -> str:
     """Return the simulator fixed-world frame used at runtime boundaries."""
 
     return FRAMES.simulator_world
+
+
+def runtime_topic_allowed_frame_ids(runtime_contract: str | None) -> dict[str, tuple[str, ...]]:
+    """Return the topic frame_id contract for one resolved runtime contract."""
+
+    if runtime_contract == REAL_RUNTIME_CONTRACT:
+        return dict(REAL_RUNTIME_TOPIC_ALLOWED_FRAME_IDS)
+    return dict(TOPIC_ALLOWED_FRAME_IDS)
+
+
+def normalize_frame_id(frame_id: str | None) -> str | None:
+    """Return a canonical frame_id string without a leading slash."""
+
+    if frame_id is None:
+        return None
+    normalized = str(frame_id).strip().lstrip("/")
+    return normalized or None
+
+
+def dedupe_frame_ids(frame_ids: tuple[str | None, ...]) -> tuple[str, ...]:
+    """Return normalized frame_ids in first-seen order."""
+
+    values: list[str] = []
+    seen: set[str] = set()
+    for frame_id in frame_ids:
+        normalized = normalize_frame_id(frame_id)
+        if normalized is None or normalized in seen:
+            continue
+        seen.add(normalized)
+        values.append(normalized)
+    return tuple(values)
+
+
+def frame_id_aliases(frame_id: str | None) -> tuple[str, ...]:
+    """Return normalized frame_id plus accepted runtime aliases."""
+
+    normalized = normalize_frame_id(frame_id)
+    if normalized is None:
+        return ()
+    aliases: list[str | None] = [normalized]
+    if normalized == FRAMES.body:
+        aliases.extend(FRAMES.body_aliases)
+    if normalized == FRAMES.lidar:
+        aliases.extend(FRAMES.lidar_aliases)
+    return dedupe_frame_ids(tuple(aliases))
+
+
+def expand_frame_id_aliases(frame_ids: tuple[str | None, ...]) -> tuple[str, ...]:
+    """Expand canonical frame_ids to their accepted runtime aliases."""
+
+    expanded: list[str | None] = []
+    for frame_id in frame_ids:
+        expanded.extend(frame_id_aliases(frame_id))
+    return dedupe_frame_ids(tuple(expanded))
+
+
+def runtime_topic_expected_frame_ids(
+    runtime_contract: str | None,
+    topic: str,
+    *additional_frame_ids: str | None,
+) -> tuple[str, ...]:
+    """Return normalized frame_ids accepted for one topic in one runtime.
+
+    Callers may prepend local context such as the active planning frame. This
+    keeps topic-specific contract frames and local planner context in one
+    canonical order for diagnostics.
+    """
+
+    contract_frames = runtime_topic_allowed_frame_ids(runtime_contract).get(topic, ())
+    return dedupe_frame_ids((*additional_frame_ids, *contract_frames))
+
+
+def runtime_fixed_path_frame_ids(
+    *additional_frame_ids: str | None,
+) -> tuple[str, ...]:
+    """Return path frame_ids that are already expressed in a fixed reference."""
+
+    return dedupe_frame_ids(
+        (
+            FRAMES.map,
+            FRAMES.odom,
+            FRAMES.simulator_world,
+            *additional_frame_ids,
+        )
+    )
+
+
+def runtime_required_topic_frame_ids(runtime_contract: str | None) -> tuple[str, ...]:
+    """Return topics whose frame_id evidence is mandatory for one runtime."""
+
+    if runtime_contract == REAL_RUNTIME_CONTRACT:
+        return REAL_RUNTIME_REQUIRED_TOPIC_FRAME_IDS
+    return ()
+
+
+def runtime_data_flow_topics(runtime_contract: str) -> tuple[str, ...]:
+    """Return unique canonical runtime stream tokens in one resolved data-flow."""
+
+    topics: list[str] = []
+    seen: set[str] = set()
+    for stage in resolved_runtime_data_flow(runtime_contract):
+        for token in (*stage.inputs, *stage.outputs):
+            if not isinstance(token, str) or not token.startswith("/"):
+                continue
+            if token in seen:
+                continue
+            seen.add(token)
+            topics.append(token)
+    return tuple(topics)
 
 
 def profile_data_source(profile: str) -> ProfileDataSourceBinding:
@@ -1066,9 +1667,24 @@ def runtime_contract_manifest() -> dict[str, object]:
 
     return {
         "schema_version": "lingtu.runtime_interface.v1",
-        "frames": asdict(FRAMES),
+        "frames": runtime_frames_contract(),
         "topics": asdict(TOPICS),
         "core_required_topics": CORE_REQUIRED_TOPICS,
+        "frame_links": {
+            name: asdict(link)
+            for name, link in FRAME_LINKS.items()
+        },
+        "runtime_data_flow": [
+            asdict(stage)
+            for stage in RUNTIME_DATA_FLOW
+        ],
+        "resolved_runtime_data_flow": {
+            name: [
+                asdict(stage)
+                for stage in resolved_runtime_data_flow(name)
+            ]
+            for name in DATA_SOURCE_CONTRACTS
+        },
         "lidar_extrinsics": {
             name: asdict(transform)
             for name, transform in LIDAR_EXTRINSICS.items()
@@ -1081,14 +1697,30 @@ def runtime_contract_manifest() -> dict[str, object]:
             topic: formats
             for topic, formats in TOPIC_FORMATS.items()
         },
+        "topic_allowed_frame_ids": runtime_topic_allowed_frame_contract(None),
+        "topic_default_frame_ids": runtime_topic_default_frame_ids(None),
+        "real_runtime_topic_allowed_frame_ids": runtime_topic_allowed_frame_contract(
+            REAL_RUNTIME_CONTRACT
+        ),
+        "real_runtime_topic_default_frame_ids": runtime_topic_default_frame_ids(
+            REAL_RUNTIME_CONTRACT
+        ),
+        "real_runtime_required_topic_frame_ids": REAL_RUNTIME_REQUIRED_TOPIC_FRAME_IDS,
+        "real_runtime_required_endpoint_input_topics": (
+            REAL_RUNTIME_REQUIRED_ENDPOINT_INPUT_TOPICS
+        ),
+        "runtime_data_flow_topics": {
+            name: runtime_data_flow_topics(name)
+            for name in DATA_SOURCE_CONTRACTS
+        },
         "artifact_formats": {
             name: asdict(format_spec)
             for name, format_spec in ARTIFACT_FORMATS.items()
         },
-        "algorithm_interfaces": {
-            name: asdict(interface)
-            for name, interface in ALGORITHM_INTERFACES.items()
-        },
+        "algorithm_interfaces": runtime_algorithm_interface_contract(),
+        "runtime_data_flow_stage_algorithm_interfaces": (
+            runtime_stage_algorithm_interface_contract()
+        ),
         "data_sources": {
             name: asdict(source)
             for name, source in DATA_SOURCE_CONTRACTS.items()

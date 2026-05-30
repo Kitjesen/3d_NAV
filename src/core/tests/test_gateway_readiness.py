@@ -215,6 +215,178 @@ def test_readiness_snapshot_includes_navigation_blockers():
     ]
 
 
+def test_readiness_snapshot_includes_runtime_boundary_blockers(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.readiness import build_readiness_snapshot
+
+    monkeypatch.setenv("LINGTU_PROFILE", "explore")
+    monkeypatch.setenv("LINGTU_ENDPOINT", "mujoco_live")
+    monkeypatch.setenv("LINGTU_DATA_SOURCE", "mujoco_fastlio2_live")
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+    monkeypatch.setenv("LINGTU_COMMAND_SINK", "hardware_driver_after_cmd_vel_mux")
+    monkeypatch.setenv("LINGTU_SIMULATION_ONLY", "1")
+
+    gateway = GatewayModule()
+    gateway._all_modules = {"NavigationModule": _HealthyModule()}
+    gateway._session_mode = "navigating"
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0, "frame_id": "map"}
+        gateway._mission = {
+            "state": "IDLE",
+            "planning_frame_id": "map",
+            "costmap_frame_id": "map",
+            "goal_frame_id": "map",
+        }
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.028,
+            "odom_age_ms": 100.0,
+            "localizer_health": "RECOVERED",
+        }
+
+    payload, status_code = build_readiness_snapshot(gateway, now=128.25)
+
+    assert status_code == 503
+    assert payload["data_ready"] is False
+    assert payload["motion_ready"] is False
+    assert "runtime_blocked:runtime_contract_data_source_mismatch" in payload["reasons"]
+    assert "runtime_blocked:command_sink_mismatch" in payload["reasons"]
+    assert payload["runtime"]["boundary"]["ok"] is False
+    assert payload["runtime"]["boundary"]["expected_command_sink"] == (
+        "mujoco_velocity_adapter"
+    )
+    assert payload["runtime"]["boundary"]["frames"]["axis_convention"] == (
+        "x_forward_y_left_z_up"
+    )
+    assert payload["runtime"]["boundary"]["frame_links"]["body_to_lidar"] == {
+        "parent": "body",
+        "child": "lidar_link",
+        "required": True,
+    }
+    assert payload["runtime"]["boundary"]["topic_allowed_frame_ids"][
+        "/nav/map_cloud"
+    ] == ["map"]
+    assert payload["runtime"]["boundary"]["topic_default_frame_ids"][
+        "/nav/map_cloud"
+    ] == "map"
+    assert payload["runtime"]["boundary"]["required_topic_frame_ids"] == [
+        "/nav/lidar_scan",
+        "/nav/imu",
+        "/nav/odometry",
+        "/nav/registered_cloud",
+        "/nav/map_cloud",
+        "/nav/global_path",
+        "/nav/local_path",
+        "/nav/cmd_vel",
+    ]
+    assert payload["runtime"]["boundary"]["runtime_data_flow_topics"][:2] == [
+        "/points_raw",
+        "/imu_raw",
+    ]
+    flow = {
+        stage["name"]: stage
+        for stage in payload["runtime"]["boundary"]["resolved_runtime_data_flow"]
+    }
+    assert flow["endpoint_adapter"]["inputs"] == ["/points_raw", "/imu_raw"]
+    assert flow["command_boundary"]["outputs"] == ["mujoco_velocity_adapter"]
+    assert payload["runtime"]["boundary"][
+        "runtime_data_flow_stage_algorithm_interfaces"
+    ]["global_planning"] == [
+        "global_planning",
+        "astar_global_planning",
+        "pct_global_planning",
+    ]
+    assert payload["runtime"]["summary"]["data_blockers"] == [
+        "runtime_blocked:runtime_contract_data_source_mismatch",
+        "runtime_blocked:command_sink_mismatch",
+    ]
+
+
+def test_readiness_snapshot_includes_localization_frame_contract(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.readiness import build_readiness_snapshot
+
+    monkeypatch.setenv("LINGTU_PROFILE", "nav")
+    monkeypatch.setenv("LINGTU_ENDPOINT", "real_s100p")
+    monkeypatch.setenv("LINGTU_DATA_SOURCE", "real_s100p")
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+    monkeypatch.setenv("LINGTU_COMMAND_SINK", "hardware_driver_after_cmd_vel_mux")
+    monkeypatch.setenv("LINGTU_SIMULATION_ONLY", "0")
+
+    gateway = GatewayModule()
+    gateway._all_modules = {"NavigationModule": _HealthyModule()}
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0, "frame_id": "odom"}
+        gateway._mission = {
+            "state": "IDLE",
+            "planning_frame_id": "map",
+            "costmap_frame_id": "map",
+            "goal_frame_id": "map",
+        }
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.028,
+            "odom_age_ms": 100.0,
+            "cloud_age_ms": 80.0,
+            "registered_cloud_frame_id": "body",
+            "map_cloud_frame_id": "map",
+            "map_cloud_fresh": True,
+            "localizer_health": "RECOVERED",
+        }
+
+    payload, status_code = build_readiness_snapshot(gateway, now=128.35)
+
+    assert status_code == 503
+    assert "navigation_blocked:frame_mismatch_odometry" in payload["reasons"]
+    assert (
+        "navigation_blocked:real_runtime_evidence_missing_or_stale"
+        in payload["reasons"]
+    )
+    localization = payload["runtime"]["localization"]
+    assert localization["runtime_contract"] == "real_s100p"
+    assert localization["topic_default_frame_ids"]["/nav/map_cloud"] == "map"
+    assert localization["required_topic_frame_ids"] == [
+        "/nav/lidar_scan",
+        "/nav/imu",
+        "/nav/odometry",
+        "/nav/registered_cloud",
+        "/nav/map_cloud",
+        "/nav/global_path",
+        "/nav/local_path",
+        "/nav/cmd_vel",
+    ]
+    assert "/nav/odometry" in localization["runtime_data_flow_topics"]
+    assert localization["runtime_data_flow_stage_algorithm_interfaces"][
+        "local_planning_and_following"
+    ] == [
+        "local_planning_and_following",
+    ]
+    frames = localization["frames"]
+    assert frames["runtime_contract"] == "real_s100p"
+    assert frames["odometry_frame_id"] == "odom"
+    assert frames["registered_cloud_frame_id"] == "body"
+    assert frames["map_cloud_frame_id"] == "map"
+    assert frames["observed_topic_frame_ids"] == {
+        "/nav/odometry": "odom",
+        "/nav/registered_cloud": "body",
+        "/nav/map_cloud": "map",
+    }
+    assert frames["missing_required_topic_frame_ids"] == []
+    assert frames["mismatches"] == []
+    assert frames["ok"] is True
+    navigation = payload["runtime"]["navigation"]
+    assert navigation["tf_ok"] is False
+    assert navigation["planning_frame_id"] == "map"
+    assert navigation["odom_frame_id"] == "odom"
+    assert navigation["real_runtime_evidence_ok"] is False
+
+
 def test_readiness_snapshot_blocks_motion_but_not_data_when_safety_stop_active():
     from gateway.gateway_module import GatewayModule
     from gateway.services.readiness import build_readiness_snapshot

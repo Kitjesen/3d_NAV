@@ -81,6 +81,7 @@ class VectorMemoryModule(Module, layer=3):
         self._np_metadata: deque = deque(maxlen=self._max_np_entries)
 
         self._robot_xy = (0.0, 0.0)
+        self._robot_z = 0.0
         self._latest_labels: list[str] = []
         self._latest_image: np.ndarray | None = None
         self._last_store_time = 0.0
@@ -185,6 +186,7 @@ class VectorMemoryModule(Module, layer=3):
 
     def _on_odom(self, odom: Odometry) -> None:
         self._robot_xy = (odom.x, odom.y)
+        self._robot_z = getattr(odom, "z", 0.0)
 
     def _on_image(self, img: np.ndarray) -> None:
         self._latest_image = img
@@ -211,6 +213,7 @@ class VectorMemoryModule(Module, layer=3):
         return {
             "x": float(self._robot_xy[0]),
             "y": float(self._robot_xy[1]),
+            "z": float(self._robot_z),
             "labels": text,
             "ts": time.time(),
             "encoder_type": self._encoder_type,
@@ -363,6 +366,7 @@ class VectorMemoryModule(Module, layer=3):
                     hits.append({
                         "x": meta["x"],
                         "y": meta["y"],
+                        "z": meta.get("z", 0.0),
                         "labels": meta.get("labels", ""),
                         "score": 1.0 - results["distances"][0][i],  # cosine → similarity
                         "ts": meta.get("ts", 0),
@@ -437,6 +441,7 @@ class VectorMemoryModule(Module, layer=3):
             "query": text,
             "found": True,
             "best": {"x": results[0]["x"], "y": results[0]["y"],
+                     "z": results[0].get("z", 0.0),
                      "labels": results[0]["labels"], "score": results[0]["score"]},
             "results": results[:3],
             "encoder_type": self._encoder_type,

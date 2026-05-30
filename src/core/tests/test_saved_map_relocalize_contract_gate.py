@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from sim.scripts.saved_map_relocalize_contract_gate import run_gate
 
@@ -29,6 +30,22 @@ def test_saved_map_relocalize_runtime_gate_defaults_to_product_mujoco_live():
     assert kidnapped.bbs3d_num_threads >= 1
     assert kidnapped.bbs3d_timeout_ms >= 30000
     assert _live_feed_timeout_s(args) >= 120.0
+
+
+def test_saved_map_relocalize_runtime_gate_uses_runtime_contract_boundaries():
+    source = Path("sim/scripts/saved_map_relocalize_runtime_gate.py").read_text(
+        encoding="utf-8",
+    )
+
+    assert "adapter_source_for_target" in source
+    assert "TOPICS.saved_map_cloud" in source
+    assert "TOPICS.relocalize_service" in source
+    assert "TOPICS.global_relocalize_service" in source
+    assert "MAP_TO_ODOM_LINK.parent" in source
+    assert '"/nav/' not in source
+    assert "'/nav/" not in source
+    assert 'frame_id != "map"' not in source
+    assert 'child_frame_id != "odom"' not in source
 
 
 def test_saved_map_relocalize_runtime_gate_uses_same_source_metadata(tmp_path):

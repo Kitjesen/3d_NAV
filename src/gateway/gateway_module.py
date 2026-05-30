@@ -283,6 +283,9 @@ class GatewayModule(Module, layer=6):
     supervisor_state:   In[dict]  # from ExplorationSupervisorModule — watchdog
 
     # -- Outputs (client commands → modules) --------------------------------
+    traversable_frontiers: In[list]  # read-only TraversableFrontierModule candidates
+    frontier_candidate:    In[dict]  # read-only best traversable frontier
+
     goal_pose:   Out[PoseStamped]
     cmd_vel:     Out[Twist]
     stop_cmd:    Out[int]    # 0=clear, 1=soft, 2=hard
@@ -467,6 +470,8 @@ class GatewayModule(Module, layer=6):
         self._tare_explorer: Any = None
         self._last_tare_stats: dict[str, Any] | None = None
         self._exploration_supervisor_state: dict[str, Any] | None = None
+        self._last_traversable_frontiers: list[Any] | None = None
+        self._last_frontier_candidate: dict[str, Any] | None = None
 
         # TaggedLocationsModule ref (set by on_system_modules)
         self._tagged_loc_module: Any = None
@@ -508,6 +513,10 @@ class GatewayModule(Module, layer=6):
         self.localization_status.set_policy("latest")
         self.tare_stats.subscribe(self._on_tare_stats)
         self.supervisor_state.subscribe(self._on_exploration_supervisor)
+        self.traversable_frontiers.subscribe(self._on_traversable_frontiers)
+        self.traversable_frontiers.set_policy("latest")
+        self.frontier_candidate.subscribe(self._on_frontier_candidate)
+        self.frontier_candidate.set_policy("latest")
         self._app = self._build_app()
 
     def start(self) -> None:
@@ -1921,6 +1930,26 @@ class GatewayModule(Module, layer=6):
         with self._state_lock:
             self._exploration_supervisor_state = dict(d)
         self.push_event({"type": "exploration_supervisor", "data": d})
+
+    def _json_payload(self, value: Any) -> Any:
+        try:
+            return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+        except Exception:
+            return {"raw": str(value)}
+
+    def _on_traversable_frontiers(self, candidates: list) -> None:
+        """Forward read-only traversable frontier candidates to Gateway clients."""
+        data = self._json_payload(candidates if isinstance(candidates, list) else [])
+        with self._state_lock:
+            self._last_traversable_frontiers = list(data) if isinstance(data, list) else []
+        self.push_event({"type": "traversable_frontiers", "data": data})
+
+    def _on_frontier_candidate(self, candidate: dict) -> None:
+        """Forward the current best traversable frontier without issuing a command."""
+        data = self._json_payload(candidate if isinstance(candidate, dict) else {"raw": str(candidate)})
+        with self._state_lock:
+            self._last_frontier_candidate = dict(data) if isinstance(data, dict) else {"raw": str(data)}
+        self.push_event({"type": "frontier_candidate", "data": data})
 
     def _on_global_path(self, path: list) -> None:
         # path is list of np.ndarray [x, y, z] from NavigationModule

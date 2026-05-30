@@ -146,6 +146,48 @@ def test_inspect_pct_runtime_rejects_missing_shared_libraries(tmp_path):
     assert "Shared library gaps" in report["error"]
 
 
+def test_inspect_pct_runtime_reports_linux_native_host_boundary(tmp_path, monkeypatch):
+    monkeypatch.setattr(pct_runtime.platform, "system", lambda: "Windows")
+
+    report = inspect_pct_runtime(tmp_path, machine="x86_64")
+
+    assert report["native_binary_format"] == "linux_elf"
+    assert report["platform_system"] == "windows"
+    assert report["host_platform_supported"] is False
+    assert "Linux" in report["host_platform_blocker"]
+
+
+def test_inspect_pct_runtime_reports_wrong_abi_candidate_extensions(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path
+    lib_dir = repo / "src/global_planning/PCT_planner/planner/lib/x86_64"
+    lib_dir.mkdir(parents=True)
+    for name in ("a_star", "ele_planner", "traj_opt"):
+        (lib_dir / f"{name}.cpython-310-x86_64-linux-gnu.so").write_bytes(b"")
+    _touch_pct_shared_libs(lib_dir)
+    monkeypatch.setattr(pct_runtime, "_python_tag", lambda: "py313")
+
+    report = inspect_pct_runtime(repo, machine="x86_64")
+
+    candidate = next(
+        item
+        for item in report["candidate_diagnostics"]
+        if item["path"] == str(lib_dir)
+    )
+    assert candidate["exists"] is True
+    assert candidate["has_current_abi_extensions"] is False
+    assert sorted(candidate["available_extension_modules"]) == [
+        "a_star.cpython-310-x86_64-linux-gnu.so",
+        "ele_planner.cpython-310-x86_64-linux-gnu.so",
+        "traj_opt.cpython-310-x86_64-linux-gnu.so",
+    ]
+    assert report["python_abi_matches_known_good"] is False
+    assert report["known_good_python_tag"] == "py310"
+    assert "build_host_x86_64.sh" in report["recommended_build_command"]
+
+
 def test_prepare_tomogram_for_pct_transposes_builder_axes(tmp_path):
     source = tmp_path / "tomogram.pickle"
     data = np.zeros((5, 2, 3, 4), dtype=np.float32)

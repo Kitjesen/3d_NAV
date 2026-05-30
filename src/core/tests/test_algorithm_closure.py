@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from core.msgs.geometry import Pose, PoseStamped, Twist, Vector3
+from core.runtime_interface import TOPICS, topic_default_frame_id
 from nav.cmd_vel_mux_module import CmdVelMux
 from nav.global_planner_service import GlobalPlannerService
 from nav.navigation_module import NavigationModule
@@ -373,10 +374,10 @@ def test_traversability_fusion_preserves_hard_costs_and_relays_esdf():
     assert relayed_esdf == [esdf]
     assert len(fused) == 1
     assert np.allclose(fused[0]["grid"], [[50.0, 100.0], [99.0, 0.0]])
-    assert fused[0]["frame_id"] == "map"
+    assert fused[0]["frame_id"] == topic_default_frame_id(TOPICS.exploration_grid)
 
 
-def test_traversability_slope_grid_propagates_costmap_frame_id():
+def test_traversability_slope_grid_normalizes_costmap_frame_id():
     module = TraversabilityCostModule(max_slope_deg=45.0, publish_hz=1000.0)
     slopes: list[dict] = []
     fused: list[dict] = []
@@ -394,13 +395,13 @@ def test_traversability_slope_grid_propagates_costmap_frame_id():
         "grid": np.zeros((2, 2), dtype=np.float32),
         "resolution": 1.0,
         "origin": [0.0, 0.0],
-        "frame_id": "map",
+        "frame_id": "/odom",
     })
 
     assert len(slopes) == 1
     assert len(fused) == 1
-    assert slopes[0]["frame_id"] == "map"
-    assert fused[0]["frame_id"] == "map"
+    assert slopes[0]["frame_id"] == "odom"
+    assert fused[0]["frame_id"] == "odom"
 
 
 def test_traversability_storage_inputs_keep_latest_without_changing_costmap_clock():

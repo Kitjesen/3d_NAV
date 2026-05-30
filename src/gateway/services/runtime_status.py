@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import json
 import math
 import time
+from dataclasses import asdict
 from collections.abc import Mapping
 from typing import Any
 
 from core.runtime_policy import (
     backend_capability_defaults as _backend_capability_defaults,
 )
+from core.runtime_interface import REAL_RUNTIME_CONTRACT, map_frame_id
 from gateway.services.safety_status import (
     SAFETY_STOP_BLOCKER,
     safety_stop_active,
@@ -20,6 +23,7 @@ from gateway.services.safety_status import (
 
 LOCALIZATION_STATUS_SCHEMA_VERSION = 1
 NAVIGATION_STATUS_SCHEMA_VERSION = 1
+STATUS_MAP_FRAME_ID = map_frame_id()
 
 PATH_ENDPOINT = "/api/v1/path"
 
@@ -106,7 +110,7 @@ def _session_mode(session: Mapping[str, Any]) -> str:
 def _point_payload(
     value: Any,
     *,
-    frame_id: str = "map",
+    frame_id: str = STATUS_MAP_FRAME_ID,
     ts: float | None = None,
 ) -> dict[str, Any] | None:
     if value is None:
@@ -454,6 +458,12 @@ def build_localization_status_from_parts(
     map_save_source = diagnostics.get("map_save_source")
     if map_save_source is None:
         map_save_source = capability_defaults["map_save_source"]
+    runtime_boundary = _runtime_boundary_status()
+    frames = _localization_frame_summary(
+        odometry,
+        diagnostics,
+        runtime_boundary,
+    )
     return {
         "schema_version": LOCALIZATION_STATUS_SCHEMA_VERSION,
         "state": state,
@@ -511,6 +521,8 @@ def build_localization_status_from_parts(
         "ts": diagnostics.get("ts"),
         "diag_received_ts": _as_float(diagnostics.get("_gateway_received_ts")),
         "diag_age_ms": diag_age_ms,
+        "runtime": runtime_boundary,
+        "frames": frames,
         "can_relocalize": (
             saved_map_relocalization_supported
             and state in {"degraded", "lost"}
@@ -845,6 +857,8 @@ def _navigation_reason_codes(
     localization: Mapping[str, Any],
     control: Mapping[str, Any],
     frames: Mapping[str, Any],
+    map_artifact_gate: Mapping[str, Any],
+    real_runtime_evidence: Mapping[str, Any],
 ) -> list[str]:
     codes: list[str] = []
     if not has_odometry:
@@ -891,6 +905,16 @@ def _navigation_reason_codes(
         codes.append(f"control_preempted_by_{control.get('active_cmd_source')}")
     if not control.get("mux_available", False):
         codes.append("cmd_vel_mux_unavailable")
+    if (
+        map_artifact_gate.get("required") is True
+        and map_artifact_gate.get("ok") is not True
+    ):
+        codes.append("map_artifact_gate_failed")
+    if (
+        real_runtime_evidence.get("required") is True
+        and real_runtime_evidence.get("ok") is not True
+    ):
+        codes.append("real_runtime_evidence_missing_or_stale")
 
     return list(dict.fromkeys(codes))
 
@@ -909,7 +933,59 @@ _NAVIGATION_BLOCKER_CODES = {
     "localization_initializing",
     "localization_recovery_active",
     "pose_stale",
+    "map_artifact_gate_failed",
+    "real_runtime_evidence_missing_or_stale",
 }
+
+
+def _map_artifact_gate_status(nav_runtime: Mapping[str, Any]) -> dict[str, Any]:
+    gate = _mapping(nav_runtime.get("map_artifact_gate"))
+    if not gate:
+        return {
+            "required": False,
+            "ok": True,
+            "reason": "not_reported",
+            "blockers": [],
+        }
+    gate.setdefault("required", False)
+    gate.setdefault("ok", True if not gate.get("required") else False)
+    gate.setdefault("blockers", [])
+    return gate
+
+
+def _real_runtime_evidence_status(session: Mapping[str, Any]) -> dict[str, Any]:
+    runtime_contract = (
+        os.environ.get("LINGTU_RUNTIME_CONTRACT")
+        or os.environ.get("LINGTU_DATA_SOURCE")
+    )
+    required = (
+        runtime_contract == REAL_RUNTIME_CONTRACT
+        and _session_mode(session) in {"navigating", "exploring"}
+    )
+    if not required:
+        return {
+            "required": False,
+            "ok": None,
+            "runtime_contract": runtime_contract,
+            "reason": "not_required_for_current_runtime",
+            "blockers": [],
+        }
+    try:
+        from gateway.routes.diagnostics import (
+            build_real_runtime_evidence_latest_summary,
+        )
+
+        evidence = build_real_runtime_evidence_latest_summary()
+        evidence["required"] = True
+        return evidence
+    except Exception as exc:
+        return {
+            "required": True,
+            "ok": False,
+            "runtime_contract": runtime_contract,
+            "reason": "real_runtime_evidence_status_error",
+            "blockers": [f"real-runtime-evidence status error: {exc}"],
+        }
 
 
 def _frame_id(value: Any) -> str | None:
@@ -931,13 +1007,43 @@ def _frame_from_payload(value: Any) -> str | None:
     return None
 
 
+def _frame_mismatch(
+    source: str,
+    frame: str | None,
+    expected_frames: tuple[str, ...],
+) -> dict[str, str] | None:
+    from core.runtime_interface import normalize_frame_id
+
+    normalized = normalize_frame_id(frame)
+    if not normalized or normalized == "unknown" or normalized in expected_frames:
+        return None
+    expected = ",".join(expected_frames) if expected_frames else "unknown"
+    return {
+        "source": source,
+        "expected_frame": expected,
+        "received_frame": normalized,
+    }
+
+
 def _navigation_frame_summary(
     mission: Mapping[str, Any],
     odometry: Any,
 ) -> dict[str, Any]:
+    from core.runtime_interface import TOPICS
+    from core.runtime_interface import normalize_frame_id
+    from core.runtime_interface import runtime_topic_default_frame_id
+
+    runtime_contract = (
+        os.environ.get("LINGTU_RUNTIME_CONTRACT")
+        or os.environ.get("LINGTU_DATA_SOURCE")
+    )
+    default_planning_frame = runtime_topic_default_frame_id(
+        runtime_contract,
+        TOPICS.global_path,
+    )
     planning_frame_id = (
         _frame_id(mission.get("planning_frame_id") or mission.get("frame_id"))
-        or "map"
+        or default_planning_frame
     )
     odom_frame_id = (
         _frame_id(mission.get("odom_frame_id"))
@@ -949,26 +1055,231 @@ def _navigation_frame_summary(
         _frame_id(mission.get("goal_frame_id"))
         or _frame_from_payload(mission.get("goal"))
     )
+    planning_frame = normalize_frame_id(planning_frame_id) or default_planning_frame
+    odometry_expected = (planning_frame,)
+    planning_expected = (planning_frame,)
     mismatches: list[dict[str, str]] = []
-    for source, frame in (
-        ("odometry", odom_frame_id),
-        ("costmap", costmap_frame_id),
-        ("goal", goal_frame_id),
+    for source, frame, expected_frames in (
+        ("odometry", odom_frame_id, odometry_expected),
+        ("costmap", costmap_frame_id, planning_expected),
+        ("goal", goal_frame_id, planning_expected),
     ):
-        if frame and frame != "unknown" and frame != planning_frame_id:
-            mismatches.append(
-                {
-                    "source": source,
-                    "expected_frame": planning_frame_id,
-                    "received_frame": frame,
-                }
-            )
+        mismatch = _frame_mismatch(source, frame, expected_frames)
+        if mismatch:
+            mismatches.append(mismatch)
     return {
         "planning_frame_id": planning_frame_id,
         "odom_frame_id": odom_frame_id,
         "costmap_frame_id": costmap_frame_id,
         "goal_frame_id": goal_frame_id,
+        "odometry_expected_frame_ids": list(odometry_expected),
         "ok": not mismatches,
+        "mismatches": mismatches,
+    }
+
+
+def _runtime_boundary_status() -> dict[str, Any]:
+    from core.runtime_interface import FRAMES
+    from core.runtime_interface import RUNTIME_DATA_FLOW_STAGE_ALGORITHM_INTERFACES
+    from core.runtime_interface import resolved_runtime_data_flow
+    from core.runtime_interface import runtime_data_flow_topics
+    from core.runtime_interface import runtime_contract_manifest
+    from core.runtime_interface import runtime_required_topic_frame_ids
+    from core.runtime_interface import runtime_topic_allowed_frame_ids
+    from core.runtime_interface import runtime_topic_default_frame_ids
+
+    env = {
+        "profile": os.environ.get("LINGTU_PROFILE"),
+        "endpoint": os.environ.get("LINGTU_ENDPOINT"),
+        "data_source": os.environ.get("LINGTU_DATA_SOURCE"),
+        "runtime_contract": os.environ.get("LINGTU_RUNTIME_CONTRACT"),
+        "command_sink": os.environ.get("LINGTU_COMMAND_SINK"),
+        "simulation_only": os.environ.get("LINGTU_SIMULATION_ONLY"),
+    }
+    declared = any(value not in (None, "") for value in env.values())
+    data_source = env["data_source"]
+    runtime_contract = env["runtime_contract"]
+    command_sink = env["command_sink"]
+    blockers: list[str] = []
+    manifest: dict[str, Any] = {}
+    data_sources: Mapping[str, Any] = {}
+    source: dict[str, Any] = {}
+    expected_command_sink: str | None = None
+    resolved_flow: list[dict[str, Any]] = []
+    stage_algorithm_interfaces: dict[str, list[str]] = {}
+    data_flow_topics: list[str] = []
+    topic_allowed_frames: dict[str, list[str]] = {}
+    topic_default_frames: dict[str, str] = {}
+    required_topic_frame_ids: list[str] = []
+
+    if declared and not data_source:
+        blockers.append("data_source_missing")
+    if runtime_contract and data_source and runtime_contract != data_source:
+        blockers.append("runtime_contract_data_source_mismatch")
+
+    if data_source or runtime_contract:
+        manifest = runtime_contract_manifest()
+        raw_data_sources = manifest.get("data_sources", {})
+        if isinstance(raw_data_sources, Mapping):
+            data_sources = raw_data_sources
+
+    if data_source:
+        source = _mapping(data_sources.get(data_source))
+        if source:
+            expected_command_sink = str(source.get("command_sink") or "")
+            resolved_flow = [
+                asdict(stage)
+                for stage in resolved_runtime_data_flow(data_source)
+            ]
+            stage_algorithm_interfaces = {
+                name: list(interfaces)
+                for name, interfaces in (
+                    RUNTIME_DATA_FLOW_STAGE_ALGORITHM_INTERFACES.items()
+                )
+            }
+            data_flow_topics = list(runtime_data_flow_topics(data_source))
+        else:
+            blockers.append("data_source_unknown")
+
+    topic_contract = runtime_contract or data_source
+    if topic_contract:
+        if topic_contract in data_sources:
+            topic_allowed_frames = {
+                topic: list(frame_ids)
+                for topic, frame_ids in runtime_topic_allowed_frame_ids(
+                    topic_contract
+                ).items()
+            }
+            topic_default_frames = dict(runtime_topic_default_frame_ids(topic_contract))
+            required_topic_frame_ids = list(
+                runtime_required_topic_frame_ids(topic_contract)
+            )
+        else:
+            blockers.append("topic_frame_contract_unavailable")
+
+    if command_sink and expected_command_sink and command_sink != expected_command_sink:
+        blockers.append("command_sink_mismatch")
+
+    return {
+        "ok": not blockers,
+        "declared": declared,
+        "profile": env["profile"],
+        "endpoint": env["endpoint"],
+        "data_source": data_source,
+        "runtime_contract": runtime_contract,
+        "simulation_only": _as_optional_bool(env["simulation_only"]),
+        "command_sink": command_sink or expected_command_sink,
+        "expected_command_sink": expected_command_sink,
+        "slam_source": source.get("slam_source"),
+        "localization_source": source.get("localization_source"),
+        "mapping_source": source.get("mapping_source"),
+        "frames": manifest.get("frames", asdict(FRAMES)),
+        "frame_links": manifest.get("frame_links", {}),
+        "topic_allowed_frame_ids": topic_allowed_frames,
+        "topic_default_frame_ids": topic_default_frames,
+        "required_topic_frame_ids": required_topic_frame_ids,
+        "runtime_data_flow_topics": data_flow_topics,
+        "resolved_runtime_data_flow": resolved_flow,
+        "runtime_data_flow_stage_algorithm_interfaces": stage_algorithm_interfaces,
+        "blockers": blockers,
+    }
+
+
+def _diagnostic_frame_id(
+    diagnostics: Mapping[str, Any],
+    *keys: str,
+) -> str | None:
+    from core.runtime_interface import normalize_frame_id
+
+    for key in keys:
+        frame = normalize_frame_id(_frame_id(diagnostics.get(key)))
+        if frame:
+            return frame
+    return None
+
+
+def _localization_frame_summary(
+    odometry: Any,
+    diagnostics: Mapping[str, Any],
+    runtime_boundary: Mapping[str, Any],
+) -> dict[str, Any]:
+    from core.runtime_interface import TOPICS
+    from core.runtime_interface import normalize_frame_id
+    from core.runtime_interface import runtime_required_topic_frame_ids
+    from core.runtime_interface import runtime_topic_expected_frame_ids
+
+    runtime_contract = (
+        runtime_boundary.get("runtime_contract")
+        or runtime_boundary.get("data_source")
+        or os.environ.get("LINGTU_RUNTIME_CONTRACT")
+        or os.environ.get("LINGTU_DATA_SOURCE")
+    )
+    odometry_frame_id = (
+        normalize_frame_id(_frame_from_payload(odometry))
+        or _diagnostic_frame_id(diagnostics, "odometry_frame_id", "odom_frame_id")
+        or "unknown"
+    )
+    registered_cloud_frame_id = _diagnostic_frame_id(
+        diagnostics,
+        "registered_cloud_frame_id",
+        "registered_frame_id",
+        "cloud_frame_id",
+    )
+    map_cloud_frame_id = _diagnostic_frame_id(
+        diagnostics,
+        "map_cloud_frame_id",
+        "map_frame_id",
+        "world_frame_id",
+    )
+    odometry_expected = runtime_topic_expected_frame_ids(
+        runtime_contract,
+        TOPICS.odometry,
+    )
+    registered_cloud_expected = runtime_topic_expected_frame_ids(
+        runtime_contract,
+        TOPICS.registered_cloud,
+    )
+    map_cloud_expected = runtime_topic_expected_frame_ids(
+        runtime_contract,
+        TOPICS.map_cloud,
+    )
+    observations = (
+        (TOPICS.odometry, "odometry", odometry_frame_id, odometry_expected),
+        (
+            TOPICS.registered_cloud,
+            "registered_cloud",
+            registered_cloud_frame_id,
+            registered_cloud_expected,
+        ),
+        (TOPICS.map_cloud, "map_cloud", map_cloud_frame_id, map_cloud_expected),
+    )
+    required_topics = set(
+        runtime_boundary.get("required_topic_frame_ids")
+        or runtime_required_topic_frame_ids(runtime_contract)
+    )
+    mismatches: list[dict[str, str]] = []
+    missing_required_topic_frame_ids: list[str] = []
+    observed_topic_frame_ids: dict[str, str] = {}
+    for topic, source, frame_id, expected_frames in observations:
+        normalized = normalize_frame_id(frame_id)
+        if normalized and normalized != "unknown":
+            observed_topic_frame_ids[topic] = normalized
+        elif topic in required_topics:
+            missing_required_topic_frame_ids.append(topic)
+        mismatch = _frame_mismatch(source, normalized, expected_frames)
+        if mismatch:
+            mismatches.append(mismatch)
+    return {
+        "runtime_contract": runtime_contract,
+        "odometry_frame_id": odometry_frame_id,
+        "registered_cloud_frame_id": registered_cloud_frame_id,
+        "map_cloud_frame_id": map_cloud_frame_id,
+        "odometry_expected_frame_ids": list(odometry_expected),
+        "registered_cloud_expected_frame_ids": list(registered_cloud_expected),
+        "map_cloud_expected_frame_ids": list(map_cloud_expected),
+        "observed_topic_frame_ids": observed_topic_frame_ids,
+        "missing_required_topic_frame_ids": missing_required_topic_frame_ids,
+        "ok": not mismatches and not missing_required_topic_frame_ids,
         "mismatches": mismatches,
     }
 
@@ -984,14 +1295,33 @@ def _readiness_summary(
     session: Mapping[str, Any],
     localization: Mapping[str, Any],
     control: Mapping[str, Any],
+    frames: Mapping[str, Any],
+    map_artifact_gate: Mapping[str, Any],
+    real_runtime_evidence: Mapping[str, Any],
 ) -> dict[str, Any]:
     blockers = _navigation_blockers(reason_codes)
     advisories = [code for code in reason_codes if code not in blockers]
+    map_required = map_artifact_gate.get("required") is True
+    real_required = real_runtime_evidence.get("required") is True
     return {
         "can_accept_goal": can_accept_goal,
         "can_execute_autonomy": not blockers,
         "blockers": blockers,
         "advisories": advisories,
+        "tf_ok": bool(frames.get("ok", False)),
+        "map_artifacts_ok": (
+            map_artifact_gate.get("ok") is True if map_required else True
+        ),
+        "real_runtime_evidence_ok": (
+            real_runtime_evidence.get("ok") is True if real_required else None
+        ),
+        "planning_frame_id": frames.get("planning_frame_id"),
+        "odom_frame_id": frames.get("odom_frame_id"),
+        "observed_frame_links": _mapping(
+            real_runtime_evidence.get("checked_frame_link_evidence")
+        ),
+        "map_artifact_gate": dict(map_artifact_gate),
+        "real_runtime_evidence": dict(real_runtime_evidence),
         "localization_ready": bool(localization.get("ready", False)),
         "control_owner": control.get("command_owner", "unknown"),
         "session_mode": _session_mode(session),
@@ -1058,6 +1388,9 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         if value:
             frame_mission[key] = value
     frames = _navigation_frame_summary(frame_mission, odometry)
+    map_artifact_gate = _map_artifact_gate_status(nav_runtime)
+    real_runtime_evidence = _real_runtime_evidence_status(session)
+    runtime_boundary = _runtime_boundary_status()
     reason_codes = _navigation_reason_codes(
         state=state,
         failure_reason=failure_reason,
@@ -1068,6 +1401,8 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         localization=localization,
         control=control,
         frames=frames,
+        map_artifact_gate=map_artifact_gate,
+        real_runtime_evidence=real_runtime_evidence,
     )
     can_accept_goal = base_can_accept_goal and not _navigation_blockers(reason_codes)
     readiness = _readiness_summary(
@@ -1076,6 +1411,9 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         session=session,
         localization=localization,
         control=control,
+        frames=frames,
+        map_artifact_gate=map_artifact_gate,
+        real_runtime_evidence=real_runtime_evidence,
     )
     target = _target_summary(
         mission,
@@ -1123,6 +1461,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
             "points": path_len,
             "endpoint": PATH_ENDPOINT,
         },
+        "runtime": runtime_boundary,
         "frames": frames,
         "control": control,
         "localization": {
@@ -1148,6 +1487,8 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
             "safety": safety_summary(safety),
             "plan_safety_policy": plan_safety_policy,
             "last_plan_report": last_plan_report,
+            "map_artifact_gate": map_artifact_gate,
+            "real_runtime_evidence": real_runtime_evidence,
         },
         "mission": {
             "state": state,

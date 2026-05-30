@@ -7,6 +7,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from core.runtime_interface import map_frame_id
+
+
+GATEWAY_MAP_FRAME_ID = map_frame_id()
+MapFrameId = Literal["map"]
+
 
 class GatewayResponseModel(BaseModel):
     """Base model that documents known fields without stripping future additions."""
@@ -70,6 +76,70 @@ class RoutecheckLatestResponse(GatewayResponseModel):
     ts: float
 
 
+class RealRuntimeEvidenceLatestResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool
+    artifacts_root: str
+    count: int = 0
+    artifact_dir: str | None = None
+    report_path: str | None = None
+    validation_path: str | None = None
+    report_mtime: float | None = None
+    report_age_s: float | None = None
+    max_age_s: float
+    runtime_contract: str | None = None
+    runtime_evidence_ok: bool = False
+    simulation_only: bool | None = None
+    real_robot_motion: bool | None = None
+    cmd_vel_sent_to_hardware: bool | None = None
+    checked_real_motion_evidence: dict[str, Any] = Field(default_factory=dict)
+    checked_hardware_boundary_evidence: dict[str, Any] = Field(default_factory=dict)
+    checked_live_topic_freshness: dict[str, Any] = Field(default_factory=dict)
+    checked_runtime_data_flow_evidence: dict[str, Any] = Field(default_factory=dict)
+    blockers: list[str] = Field(default_factory=list)
+    reason: str | None = None
+    ts: float
+
+
+class AlgorithmBenchmarkLatestResponse(GatewayResponseModel):
+    schema_version: Literal["lingtu.algorithm_benchmark_latest.v1"] = (
+        "lingtu.algorithm_benchmark_latest.v1"
+    )
+    ok: bool
+    read_only: bool = True
+    ros2_topic_required: bool = False
+    publishes: list[str] = Field(default_factory=list)
+    artifacts_root: str
+    count: int = 0
+    summary_path: str | None = None
+    report_mtime: float | None = None
+    report_age_s: float | None = None
+    max_age_s: float
+    preset: str = "dimos_benchmark"
+    source: str = "server_sim_closure"
+    active_product_profile: str = "inspection_mvp"
+    strict_benchmark_profile: str = "dimos_benchmark"
+    summary_schema_version: str | None = None
+    claim_allowed: bool = False
+    missing_or_failed: list[str] = Field(default_factory=list)
+    required_gate_sequence: list[str] = Field(default_factory=list)
+    validation_flow: list[dict[str, Any]] = Field(default_factory=list)
+    claim_boundary: dict[str, Any] = Field(default_factory=dict)
+    product_profiles: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    blocking_categories: dict[str, list[str]] = Field(default_factory=dict)
+    blockers: list[str] = Field(default_factory=list)
+    reason: str | None = None
+    latest: dict[str, Any] | None = None
+    ts: float
+
+
+class RuntimeContractResponse(GatewayResponseModel):
+    schema_version: int = 1
+    source: str
+    manifest: RuntimeContractManifest
+    ts: float
+
+
 class BitrateRequest(BaseModel):
     bps: int
 
@@ -97,7 +167,7 @@ class GoalRequest(BaseModel):
     y: float
     z: float = 0.0
     yaw: float = 0.0
-    frame_id: Literal["map"] = "map"
+    frame_id: MapFrameId = GATEWAY_MAP_FRAME_ID
     instruction: str | None = None
     source: GoalSource = "coordinate"
     target_type: GoalTargetType = "coordinate"
@@ -122,7 +192,7 @@ class ClickNavRequest(BaseModel):
     x: float
     y: float
     z: float = 0.0
-    frame_id: Literal["map"] = "map"
+    frame_id: MapFrameId = GATEWAY_MAP_FRAME_ID
     source: GoalSource = "map_click"
     target_type: GoalTargetType = "map_point"
     label: str | None = Field(default=None, max_length=128)
@@ -146,7 +216,7 @@ class PlanPreviewRequest(BaseModel):
     x: float
     y: float
     z: float = 0.0
-    frame_id: Literal["map"] = "map"
+    frame_id: MapFrameId = GATEWAY_MAP_FRAME_ID
     client_id: str = Field(default="unknown", max_length=128)
 
     @field_validator("x", "y", "z")
@@ -164,7 +234,7 @@ class GoalCandidateRequest(BaseModel):
     y: float | None = None
     z: float = 0.0
     yaw: float | None = None
-    frame_id: Literal["map"] = "map"
+    frame_id: MapFrameId = GATEWAY_MAP_FRAME_ID
     source: GoalSource = "coordinate"
     target_type: GoalTargetType = "coordinate"
     label: str | None = Field(default=None, max_length=128)
@@ -362,6 +432,404 @@ class ReadinessModuleStatus(GatewayResponseModel):
     error: str | None = None
 
 
+class NavigationFrameMismatch(GatewayResponseModel):
+    source: str
+    expected_frame: str
+    received_frame: str
+
+
+class RuntimeDataFlowStageSummary(GatewayResponseModel):
+    name: str
+    inputs: list[str] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+    owner: str
+    frame_role: str
+    map_dependency: str
+
+
+class RuntimeFrameSummary(GatewayResponseModel):
+    map: str = "map"
+    odom: str = "odom"
+    body: str = "body"
+    model_base: str = "base_link"
+    lidar: str = "lidar_link"
+    real_lidar: str = "livox_frame"
+    camera: str = "camera_link"
+    simulator_world: str = "world"
+    axis_convention: str = "x_forward_y_left_z_up"
+    body_aliases: list[str] = Field(default_factory=lambda: ["base_link"])
+    lidar_aliases: list[str] = Field(default_factory=lambda: ["livox_frame"])
+
+
+class RuntimeFrameLinkSummary(GatewayResponseModel):
+    parent: str
+    child: str
+    required: bool = True
+
+
+class RuntimeTransform3D(GatewayResponseModel):
+    parent: str
+    child: str
+    x: float
+    y: float
+    z: float
+    roll: float = 0.0
+    pitch: float = 0.0
+    yaw: float = 0.0
+
+
+class RuntimeMessageFormatSummary(GatewayResponseModel):
+    name: str
+    ros_type: str
+    frame_role: str
+    required_fields: list[str] = Field(default_factory=list)
+    note: str = ""
+
+
+class RuntimeArtifactFormatSummary(GatewayResponseModel):
+    name: str
+    path: str
+    artifact_type: str
+    frame_role: str
+    required_fields: list[str] = Field(default_factory=list)
+    required_metadata: list[str] = Field(default_factory=list)
+    note: str = ""
+
+
+class RuntimeDataSourceSummary(GatewayResponseModel):
+    name: str
+    provider: str
+    owns: list[str] = Field(default_factory=list)
+    normalized_outputs: list[str] = Field(default_factory=list)
+    command_sink: str
+    source_outputs: list[str] = Field(default_factory=list)
+    algorithm_entry_outputs: list[str] = Field(default_factory=list)
+    algorithm_context_outputs: list[str] = Field(default_factory=list)
+    lidar_extrinsic_profile: str | None = None
+    slam_source: str = "not_declared"
+    localization_source: str = "not_declared"
+    mapping_source: str = "not_declared"
+
+
+class RuntimeAlgorithmInterfaceSummary(GatewayResponseModel):
+    name: str
+    inputs: list[str] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+    owner: str
+    map_dependency: str
+
+
+class RuntimeAdapterAliasSummary(GatewayResponseModel):
+    source: str
+    target: str
+    msg_format: str
+    scope: str = "adapter_only"
+    note: str = ""
+
+
+class RuntimeProfileDataSourceBinding(GatewayResponseModel):
+    profile: str
+    data_source: str
+    mode: str
+    note: str = ""
+
+
+class RuntimeContractManifest(GatewayResponseModel):
+    schema_version: str
+    frames: RuntimeFrameSummary
+    topics: dict[str, str] = Field(default_factory=dict)
+    core_required_topics: list[str] = Field(default_factory=list)
+    frame_links: dict[str, RuntimeFrameLinkSummary] = Field(default_factory=dict)
+    lidar_extrinsics: dict[str, RuntimeTransform3D] = Field(default_factory=dict)
+    runtime_data_flow: list[RuntimeDataFlowStageSummary] = Field(default_factory=list)
+    resolved_runtime_data_flow: dict[str, list[RuntimeDataFlowStageSummary]] = Field(
+        default_factory=dict
+    )
+    message_formats: dict[str, RuntimeMessageFormatSummary] = Field(
+        default_factory=dict
+    )
+    topic_formats: dict[str, list[str]] = Field(default_factory=dict)
+    artifact_formats: dict[str, RuntimeArtifactFormatSummary] = Field(
+        default_factory=dict
+    )
+    topic_allowed_frame_ids: dict[str, list[str]] = Field(default_factory=dict)
+    topic_default_frame_ids: dict[str, str] = Field(default_factory=dict)
+    real_runtime_topic_allowed_frame_ids: dict[str, list[str]] = Field(
+        default_factory=dict
+    )
+    real_runtime_topic_default_frame_ids: dict[str, str] = Field(default_factory=dict)
+    real_runtime_required_topic_frame_ids: list[str] = Field(default_factory=list)
+    real_runtime_required_endpoint_input_topics: list[str] = Field(
+        default_factory=list
+    )
+    runtime_data_flow_topics: dict[str, list[str]] = Field(default_factory=dict)
+    runtime_data_flow_stage_algorithm_interfaces: dict[str, list[str]] = Field(
+        default_factory=dict
+    )
+    data_sources: dict[str, RuntimeDataSourceSummary] = Field(default_factory=dict)
+    adapter_aliases: dict[str, list[RuntimeAdapterAliasSummary]] = Field(
+        default_factory=dict
+    )
+    adapter_relays: dict[str, list[RuntimeAdapterAliasSummary]] = Field(
+        default_factory=dict
+    )
+    algorithm_interfaces: dict[str, RuntimeAlgorithmInterfaceSummary] = Field(
+        default_factory=dict
+    )
+    profile_data_sources: dict[str, RuntimeProfileDataSourceBinding] = Field(
+        default_factory=dict
+    )
+
+
+class RuntimeDataflowPortSummary(GatewayResponseModel):
+    module: str
+    port: str
+    direction: Literal["in", "out"]
+    type: str | None = None
+    msg_count: int = 0
+    rate_hz: float = 0.0
+    stale_ms: Any = None
+    connected: bool | None = None
+    callbacks: int | None = None
+
+
+class RuntimeDataflowObservability(GatewayResponseModel):
+    observable: bool
+    observable_via: list[str] = Field(default_factory=list)
+    module_port_candidates: list[RuntimeDataflowPortSummary] = Field(
+        default_factory=list
+    )
+    gateway_channels: list[dict[str, Any]] = Field(default_factory=list)
+    live_module_samples: bool = False
+    has_fresh_module_sample: bool = False
+    fresh_stale_ms_limit: float | None = None
+    ros2_topic_required: bool = False
+
+
+class RuntimeDataflowCommunication(GatewayResponseModel):
+    allowed: bool
+    interfaces: list[dict[str, Any]] = Field(default_factory=list)
+    arbitrary_publish_supported: bool = False
+    policy: str
+
+
+class RuntimeDataflowTokenEvidence(GatewayResponseModel):
+    token: str
+    kind: str
+    observable: bool = False
+    live: bool = False
+    reason: str
+    module_ports: list[RuntimeDataflowPortSummary] = Field(default_factory=list)
+    gateway_channels: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class RuntimeDataflowStageEvidence(GatewayResponseModel):
+    name: str
+    owner: str | None = None
+    frame_role: str | None = None
+    map_dependency: str | None = None
+    inputs: list[str] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+    input_evidence: list[RuntimeDataflowTokenEvidence] = Field(default_factory=list)
+    output_evidence: list[RuntimeDataflowTokenEvidence] = Field(default_factory=list)
+    observable: bool = False
+    live: bool = False
+    status: str
+    missing_inputs: list[str] = Field(default_factory=list)
+    missing_outputs: list[str] = Field(default_factory=list)
+    not_live_inputs: list[str] = Field(default_factory=list)
+    not_live_outputs: list[str] = Field(default_factory=list)
+
+
+class RuntimeDataflowTopicSummary(GatewayResponseModel):
+    topic: str
+    message_formats: list[str] = Field(default_factory=list)
+    default_frame_id: str | None = None
+    allowed_frame_ids: list[str] = Field(default_factory=list)
+    required_for_real_runtime_frame_evidence: bool = False
+    data_flow_stages: list[dict[str, Any]] = Field(default_factory=list)
+    observability: RuntimeDataflowObservability
+    communication: RuntimeDataflowCommunication
+    inspection: dict[str, Any] = Field(default_factory=dict)
+
+
+class RuntimeDataflowResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ts: float
+    runtime_contract: str | None = None
+    runtime_boundary: dict[str, Any] = Field(default_factory=dict)
+    transport_layers: dict[str, Any] = Field(default_factory=dict)
+    ros2_topic_required: bool = False
+    module_ports: dict[str, Any] = Field(default_factory=dict)
+    topics: list[RuntimeDataflowTopicSummary] = Field(default_factory=list)
+    stage_evidence: list[RuntimeDataflowStageEvidence] = Field(default_factory=list)
+    control_boundary: dict[str, Any] = Field(default_factory=dict)
+    links: dict[str, str] = Field(default_factory=dict)
+
+
+class RuntimeDataflowTopicDetailResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool
+    ts: float
+    selector: str
+    topic: RuntimeDataflowTopicSummary | None = None
+    runtime_contract: str | None = None
+    runtime_boundary: dict[str, Any] = Field(default_factory=dict)
+    inspection: dict[str, Any] = Field(default_factory=dict)
+    control_boundary: dict[str, Any] = Field(default_factory=dict)
+    available_topics: list[str] = Field(default_factory=list)
+    links: dict[str, str] = Field(default_factory=dict)
+    error: str | None = None
+
+
+class RuntimeDataflowSubscribeRequest(GatewayResponseModel):
+    selector: str = Field(description="Canonical runtime topic or short alias")
+    transport: Literal["gateway_sse"] = "gateway_sse"
+    max_rate_hz: float | None = Field(default=None, ge=0.0)
+
+
+class RuntimeDataflowSubscribeResponse(GatewayResponseModel):
+    schema_version: Literal["lingtu.runtime_dataflow_subscription.v1"] = (
+        "lingtu.runtime_dataflow_subscription.v1"
+    )
+    ok: bool
+    ts: float
+    read_only: bool = True
+    ros2_topic_required: bool = False
+    arbitrary_publish_supported: bool = False
+    publishes: list[str] = Field(default_factory=list)
+    selector: str
+    topic: str | None = None
+    transport: Literal["gateway_sse"] = "gateway_sse"
+    stream_url: str = ""
+    event_types: list[str] = Field(default_factory=list)
+    stream_interfaces: list[dict[str, Any]] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+    links: dict[str, str] = Field(default_factory=dict)
+
+
+class RuntimeSwitchPlanRequest(GatewayResponseModel):
+    current_profile: str | None = None
+    target_profile: str = "explore"
+    current_endpoint: str | None = None
+    target_endpoint: str | None = None
+    endpoint: str | None = None
+
+
+class RuntimeSwitchValidationSummary(GatewayResponseModel):
+    ok: bool
+    blockers: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class RuntimeSwitchPlanResponse(GatewayResponseModel):
+    schema_version: Literal["lingtu.runtime_switch_plan.v1"] = (
+        "lingtu.runtime_switch_plan.v1"
+    )
+    ok: bool
+    ts: float
+    read_only: bool = True
+    dry_run: bool = True
+    motion: bool = False
+    publishes: list[str] = Field(default_factory=list)
+    lifecycle: str = "dry_run_preflight"
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    from_: dict[str, Any] = Field(default_factory=dict, alias="from")
+    to: dict[str, Any] = Field(default_factory=dict)
+    changed: list[str] = Field(default_factory=list)
+    current_validation: RuntimeSwitchValidationSummary
+    target_validation: RuntimeSwitchValidationSummary
+    blockers: list[str] = Field(default_factory=list)
+    links: dict[str, str] = Field(default_factory=dict)
+    error: str | None = None
+
+
+class ReadinessLocalizationFrameSummary(GatewayResponseModel):
+    runtime_contract: str | None = None
+    odometry_frame_id: str | None = "unknown"
+    registered_cloud_frame_id: str | None = None
+    map_cloud_frame_id: str | None = None
+    odometry_expected_frame_ids: list[str] = Field(default_factory=list)
+    registered_cloud_expected_frame_ids: list[str] = Field(default_factory=list)
+    map_cloud_expected_frame_ids: list[str] = Field(default_factory=list)
+    observed_topic_frame_ids: dict[str, str] = Field(default_factory=dict)
+    missing_required_topic_frame_ids: list[str] = Field(default_factory=list)
+    ok: bool | None = None
+    mismatches: list[NavigationFrameMismatch] = Field(default_factory=list)
+
+
+class ReadinessLocalizationRuntime(GatewayResponseModel):
+    state: str | None = None
+    ready: bool | None = None
+    pose_fresh: bool | None = None
+    pose_freshness: str | None = None
+    algorithm_healthy: bool | None = None
+    runtime_contract: str | None = None
+    frames: ReadinessLocalizationFrameSummary = Field(
+        default_factory=ReadinessLocalizationFrameSummary
+    )
+    topic_allowed_frame_ids: dict[str, list[str]] = Field(default_factory=dict)
+    topic_default_frame_ids: dict[str, str] = Field(default_factory=dict)
+    required_topic_frame_ids: list[str] = Field(default_factory=list)
+    runtime_data_flow_topics: list[str] = Field(default_factory=list)
+    runtime_data_flow_stage_algorithm_interfaces: dict[str, list[str]] = Field(
+        default_factory=dict
+    )
+    reasons: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class ReadinessNavigationRuntime(GatewayResponseModel):
+    state: str | None = None
+    can_accept_goal: bool | None = None
+    blockers: list[str] = Field(default_factory=list)
+    advisories: list[str] = Field(default_factory=list)
+    active_cmd_source: str | None = None
+    error: str | None = None
+
+
+class ReadinessRuntimeBoundary(GatewayResponseModel):
+    ok: bool | None = None
+    declared: bool | None = None
+    profile: str | None = None
+    endpoint: str | None = None
+    data_source: str | None = None
+    runtime_contract: str | None = None
+    command_sink: str | None = None
+    expected_command_sink: str | None = None
+    frames: RuntimeFrameSummary = Field(default_factory=RuntimeFrameSummary)
+    frame_links: dict[str, RuntimeFrameLinkSummary] = Field(default_factory=dict)
+    topic_allowed_frame_ids: dict[str, list[str]] = Field(default_factory=dict)
+    topic_default_frame_ids: dict[str, str] = Field(default_factory=dict)
+    required_topic_frame_ids: list[str] = Field(default_factory=list)
+    runtime_data_flow_topics: list[str] = Field(default_factory=list)
+    resolved_runtime_data_flow: list[RuntimeDataFlowStageSummary] = Field(
+        default_factory=list
+    )
+    runtime_data_flow_stage_algorithm_interfaces: dict[str, list[str]] = Field(
+        default_factory=dict
+    )
+    blockers: list[str] = Field(default_factory=list)
+
+
+class ReadinessRuntimeModeSummary(GatewayResponseModel):
+    data_ready: bool | None = None
+    motion_ready: bool | None = None
+    non_motion_safe: bool | None = None
+    active_cmd_source: str | None = None
+    mission_state: str | None = None
+    data_blockers: list[str] = Field(default_factory=list)
+
+
+class ReadinessRuntimeSummary(GatewayResponseModel):
+    localization: ReadinessLocalizationRuntime | None = None
+    navigation: ReadinessNavigationRuntime | None = None
+    boundary: ReadinessRuntimeBoundary | None = None
+    safety: dict[str, Any] = Field(default_factory=dict)
+    calibration: dict[str, Any] = Field(default_factory=dict)
+    summary: ReadinessRuntimeModeSummary | None = None
+
+
 class ReadinessResponse(GatewayResponseModel):
     schema_version: int
     status: str
@@ -374,7 +842,7 @@ class ReadinessResponse(GatewayResponseModel):
     failed_modules: list[str]
     reasons: list[str]
     advisories: list[str] = Field(default_factory=list)
-    runtime: dict[str, Any] = Field(default_factory=dict)
+    runtime: ReadinessRuntimeSummary = Field(default_factory=ReadinessRuntimeSummary)
     ts: float
 
 
@@ -411,7 +879,7 @@ class ConstructedGoalTarget(GatewayResponseModel):
     y: float
     z: float = 0.0
     yaw: float = 0.0
-    frame_id: str = "map"
+    frame_id: str = GATEWAY_MAP_FRAME_ID
     source: str = "coordinate"
     target_type: str = "coordinate"
     label: str | None = None
@@ -492,7 +960,7 @@ class SceneGraphRegion(GatewayResponseModel):
 
 class SceneGraphResponse(GatewayResponseModel):
     schema_version: int = 1
-    frame_id: str = "map"
+    frame_id: str = GATEWAY_MAP_FRAME_ID
     ts: float | None = None
     objects: list[SceneGraphObject] = Field(default_factory=list)
     relations: list[SceneGraphRelation] = Field(default_factory=list)
@@ -545,7 +1013,7 @@ class LocationsResponse(GatewayResponseModel):
     schema_version: int = 1
     locations: list[LocationEntry] = Field(default_factory=list)
     count: int = 0
-    frame_id: str = "map"
+    frame_id: str = GATEWAY_MAP_FRAME_ID
     ts: float | None = None
     source: str = "tagged_locations"
 
@@ -591,7 +1059,7 @@ class PathResponse(GatewayResponseModel):
     path: list[PathPoint] = Field(default_factory=list)
     robot: RobotPoseSummary | None = None
     count: int = 0
-    frame_id: str = "map"
+    frame_id: str = GATEWAY_MAP_FRAME_ID
     ts: float | None = None
     source: str = "gateway_cache"
 
@@ -600,7 +1068,7 @@ class PlanPreviewResponse(GatewayResponseModel):
     schema_version: int = 1
     ok: bool = True
     feasible: bool = False
-    frame_id: str = "map"
+    frame_id: str = GATEWAY_MAP_FRAME_ID
     start: PathPoint | None = None
     goal: PathPoint
     adjusted_goal: PathPoint | None = None
@@ -629,6 +1097,125 @@ class GoalCandidateResponse(GatewayResponseModel):
     reasons: list[str] = Field(default_factory=list)
     error: str | None = None
     ts: float
+
+
+class InspectionAcceptanceRequest(BaseModel):
+    mode: Literal["non_motion", "simulation", "field"] = "simulation"
+    points: list[str] = Field(default_factory=list)
+    tag: str | None = Field(default=None, max_length=128)
+    map_dir: str | None = None
+    require_tomogram: bool = False
+    require_occupancy: bool = False
+    expected_data_source: str | None = None
+    expected_source_profile: str | None = None
+    expected_frame_id: str | None = None
+    client_id: str = Field(default="unknown", max_length=128)
+
+
+class ProductFieldCheckRequest(BaseModel):
+    mode: Literal["non_motion", "simulation", "field"] = "simulation"
+    map_dir: str | None = None
+    require_tomogram: bool = False
+    require_occupancy: bool = False
+    expected_data_source: str | None = None
+    expected_source_profile: str | None = None
+    expected_frame_id: str | None = None
+
+
+class ProductFieldCheckResponse(GatewayResponseModel):
+    schema_version: str
+    ok: bool
+    mode: str
+    summary: str
+    map: dict[str, Any] = Field(default_factory=dict)
+    runtime: dict[str, Any] = Field(default_factory=dict)
+    stage_evidence: dict[str, Any] = Field(default_factory=dict)
+    navigation: dict[str, Any] = Field(default_factory=dict)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    algorithm: dict[str, Any] = Field(default_factory=dict)
+    blockers: list[str] = Field(default_factory=list)
+    advisories: list[str] = Field(default_factory=list)
+    commands: dict[str, str] = Field(default_factory=dict)
+
+
+class InspectionAcceptanceTargetResult(GatewayResponseModel):
+    name: str
+    status: str
+    ok: bool
+    target_type: str | None = None
+    source: str | None = None
+    location_name: str | None = None
+    preview_feasible: bool = False
+    preview_count: int | None = None
+    planner: str | None = None
+    distance_m: float | None = None
+    non_motion: bool = True
+    command_published: bool = False
+    reasons: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class InspectionAcceptanceResponse(GatewayResponseModel):
+    schema_version: str
+    ok: bool
+    summary: str
+    gateway_url: str | None = None
+    mode: str = "field"
+    field_ready: bool = False
+    field_summary: str = "UNKNOWN"
+    target_count: int = 0
+    pass_count: int = 0
+    fail_count: int = 0
+    locations_count: int | None = None
+    motion_safety: dict[str, Any] = Field(default_factory=dict)
+    targets: list[InspectionAcceptanceTargetResult] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+    advisories: list[str] = Field(default_factory=list)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    commands: dict[str, str] = Field(default_factory=dict)
+    ts: float
+
+
+class NavigationRuntimeBoundary(GatewayResponseModel):
+    ok: bool = True
+    declared: bool = False
+    profile: str | None = None
+    endpoint: str | None = None
+    data_source: str | None = None
+    runtime_contract: str | None = None
+    simulation_only: bool | None = None
+    command_sink: str | None = None
+    expected_command_sink: str | None = None
+    slam_source: str | None = None
+    localization_source: str | None = None
+    mapping_source: str | None = None
+    frames: RuntimeFrameSummary = Field(default_factory=RuntimeFrameSummary)
+    frame_links: dict[str, RuntimeFrameLinkSummary] = Field(default_factory=dict)
+    topic_allowed_frame_ids: dict[str, list[str]] = Field(default_factory=dict)
+    topic_default_frame_ids: dict[str, str] = Field(default_factory=dict)
+    required_topic_frame_ids: list[str] = Field(default_factory=list)
+    runtime_data_flow_topics: list[str] = Field(default_factory=list)
+    resolved_runtime_data_flow: list[RuntimeDataFlowStageSummary] = Field(
+        default_factory=list
+    )
+    runtime_data_flow_stage_algorithm_interfaces: dict[str, list[str]] = Field(
+        default_factory=dict
+    )
+    blockers: list[str] = Field(default_factory=list)
+
+
+class LocalizationFrameSummary(GatewayResponseModel):
+    runtime_contract: str | None = None
+    odometry_frame_id: str = "unknown"
+    registered_cloud_frame_id: str | None = None
+    map_cloud_frame_id: str | None = None
+    odometry_expected_frame_ids: list[str] = Field(default_factory=list)
+    registered_cloud_expected_frame_ids: list[str] = Field(default_factory=list)
+    map_cloud_expected_frame_ids: list[str] = Field(default_factory=list)
+    observed_topic_frame_ids: dict[str, str] = Field(default_factory=dict)
+    missing_required_topic_frame_ids: list[str] = Field(default_factory=list)
+    ok: bool = True
+    mismatches: list[NavigationFrameMismatch] = Field(default_factory=list)
 
 
 class LocalizationStatusResponse(GatewayResponseModel):
@@ -678,6 +1265,8 @@ class LocalizationStatusResponse(GatewayResponseModel):
     ts: float | None = None
     diag_received_ts: float | None = None
     diag_age_ms: float | None = None
+    runtime: NavigationRuntimeBoundary
+    frames: LocalizationFrameSummary
     can_relocalize: bool = False
     reasons: list[str] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
@@ -745,12 +1334,6 @@ class NavigationProgressSummary(GatewayResponseModel):
     terminal: bool = False
 
 
-class NavigationFrameMismatch(GatewayResponseModel):
-    source: str
-    expected_frame: str
-    received_frame: str
-
-
 class NavigationDiagnosticsSummary(GatewayResponseModel):
     reason_codes: list[str] = Field(default_factory=list)
     failure_reason: str = ""
@@ -800,7 +1383,7 @@ class NavigationFeedbackSummary(GatewayResponseModel):
 
 
 class NavigationFrameSummary(GatewayResponseModel):
-    planning_frame_id: str = "map"
+    planning_frame_id: str = GATEWAY_MAP_FRAME_ID
     odom_frame_id: str = "unknown"
     costmap_frame_id: str = "unknown"
     goal_frame_id: str | None = None
@@ -822,6 +1405,7 @@ class NavigationStatusResponse(GatewayResponseModel):
     readiness: NavigationReadinessSummary
     progress: NavigationProgressSummary
     path: NavigationPathSummary
+    runtime: NavigationRuntimeBoundary
     frames: NavigationFrameSummary
     control: NavigationControlSummary
     localization: NavigationLocalizationSummary
@@ -941,7 +1525,7 @@ class MapPointsResponse(GatewayResponseModel):
     schema_version: int = 1
     count: int
     layout: Literal["flat_xyz", "xyz_rows"] = "xyz_rows"
-    frame_id: str = "map"
+    frame_id: str = GATEWAY_MAP_FRAME_ID
     source: str = "unknown"
     name: str | None = None
     points: list[float] | list[tuple[float, float, float]] = Field(
@@ -1045,6 +1629,10 @@ class ClientLinks(GatewayResponseModel):
     path: str | None = None
     localization_status: str | None = None
     navigation_status: str | None = None
+    runtime_dataflow: str | None = None
+    runtime_dataflow_topic: str | None = None
+    runtime_dataflow_subscribe: str | None = None
+    algorithm_benchmark_latest: str | None = None
     devices: str | None = None
     readiness: str | None = None
     auth_login: str | None = None
@@ -1065,6 +1653,7 @@ class ClientLinks(GatewayResponseModel):
     session_end: str | None = None
     navigation_goal_candidate: str | None = None
     navigation_plan: str | None = None
+    inspection_acceptance: str | None = None
     navigation_cancel: str | None = None
     goal: str | None = None
     navigate_click: str | None = None
@@ -1094,6 +1683,10 @@ class ClientLinks(GatewayResponseModel):
     memory_temporal: str | None = None
     memory_temporal_semantic: str | None = None
     diagnostic_pack: str | None = None
+    field_check: str | None = None
+    routecheck_latest: str | None = None
+    real_runtime_evidence_latest: str | None = None
+    runtime_contract: str | None = None
 
 
 class CameraPortStatus(GatewayResponseModel):
@@ -1212,6 +1805,31 @@ class AppRealtimeCapabilities(GatewayResponseModel):
     cloud: RealtimeCloudCapability
 
 
+class ValidationGateCapability(GatewayResponseModel):
+    schema_version: str
+    scope: str
+    acceptance_step: int | None = None
+    required_when: str | None = None
+    requires_prior_gates: list[str] = Field(default_factory=list)
+    conditional_prior_gates: list[str] = Field(default_factory=list)
+    proves: list[str] = Field(default_factory=list)
+    operator_summary_sections: list[str] = Field(default_factory=list)
+    command: str | None = None
+    script: str | None = None
+    collector_command: str | None = None
+    gate_command: str | None = None
+    artifact: str
+    expected_runtime_contract: str | None = None
+    requires_ros: bool
+    requires_real_robot_runtime: bool
+    requires_active_robot_run: bool
+    collector_publishes_control_topics: bool
+    control_topics_published: list[str] = Field(default_factory=list)
+    validates: list[str] = Field(default_factory=list)
+    checks: list[str] = Field(default_factory=list)
+    coverage: dict[str, list[str]] = Field(default_factory=dict)
+
+
 class TrafficSSEStats(GatewayResponseModel):
     clients: int = 0
     queue_maxsize: int | None = None
@@ -1263,7 +1881,7 @@ class StateResponse(GatewayResponseModel):
     lease: dict[str, Any]
     teleop: TeleopSummary
     session: dict[str, Any]
-    localization: dict[str, Any]
+    localization: LocalizationStatusResponse
     navigation: NavigationStatusResponse
     map: dict[str, Any]
     scene: dict[str, Any]
@@ -1280,7 +1898,7 @@ class AppBootstrapResponse(GatewayResponseModel):
     session: dict[str, Any]
     mission: dict[str, Any]
     safety: dict[str, Any]
-    localization: dict[str, Any]
+    localization: LocalizationStatusResponse
     navigation: NavigationStatusResponse
     control: dict[str, Any]
     map: dict[str, Any]
@@ -1301,6 +1919,7 @@ class AppCapabilitiesResponse(GatewayResponseModel):
     features: dict[str, bool]
     endpoints: dict[str, dict[str, EndpointSpec]]
     probes: dict[str, EndpointSpec]
+    validation_gates: dict[str, ValidationGateCapability]
     realtime: AppRealtimeCapabilities
     client_policy: dict[str, Any]
     links: ClientLinks

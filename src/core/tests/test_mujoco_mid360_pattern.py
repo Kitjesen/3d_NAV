@@ -169,6 +169,7 @@ def test_fastlio_live_gate_shutdown_is_idempotent() -> None:
 
 def test_fastlio_live_gate_writes_same_source_map_artifacts(tmp_path) -> None:
     from nav.services.nav_services.same_source_map_artifacts import (
+        validate_same_source_map_metadata,
         write_same_source_map_artifacts,
     )
 
@@ -207,7 +208,58 @@ def test_fastlio_live_gate_writes_same_source_map_artifacts(tmp_path) -> None:
     assert metadata.is_file()
     assert report["assets"]["map_pcd"]["point_count"] == 4
     assert "DATA ascii" in pcd.read_text(encoding="ascii")
-    assert json.loads(metadata.read_text(encoding="utf-8"))["scan_time_profile"] == "synthetic_rolling"
+    payload = json.loads(metadata.read_text(encoding="utf-8"))
+    assert payload["scan_time_profile"] == "synthetic_rolling"
+    assert payload["source_profile"] == "same_source_map_artifact_writer"
+    assert payload["data_source"] == "same_source_map_artifact_writer"
+    assert payload["frame_id"] == "odom"
+    assert payload["artifacts"]["map_pcd"]["sha256"] == report["assets"]["map_pcd"]["sha256"]
+    validation = validate_same_source_map_metadata(payload)
+    assert validation["ok"] is True, validation
+
+
+def test_same_source_map_metadata_rejects_derived_artifact_sha_drift() -> None:
+    from nav.services.nav_services.same_source_map_artifacts import (
+        validate_same_source_map_metadata,
+    )
+
+    metadata = {
+        "source_profile": "sim_mujoco_live",
+        "data_source": "mujoco_fastlio2_live",
+        "slam_source": "fastlio2",
+        "localization_source": "fastlio2",
+        "mapping_source": "/points_raw + /imu_raw -> fastlio2 -> /nav/map_cloud",
+        "frame_id": "odom",
+        "created_at": "2026-05-23T00:00:00+00:00",
+        "artifacts": {
+            "map_pcd": {
+                "path": "/tmp/map.pcd",
+                "sha256": "map-sha",
+                "source_profile": "sim_mujoco_live",
+                "data_source": "mujoco_fastlio2_live",
+                "slam_source": "fastlio2",
+                "frame_id": "odom",
+                "point_count": 10,
+            },
+            "tomogram": {
+                "path": "/tmp/tomogram.pickle",
+                "sha256": "tomo-sha",
+                "source_map_sha256": "different-map-sha",
+                "source_profile": "sim_mujoco_live",
+                "data_source": "mujoco_fastlio2_live",
+                "frame_id": "odom",
+                "shape": [5, 1, 4, 4],
+            },
+        },
+    }
+
+    validation = validate_same_source_map_metadata(metadata)
+
+    assert validation["ok"] is False
+    assert (
+        "metadata.artifacts.tomogram.source_map_sha256 does not match map_pcd.sha256"
+        in validation["blockers"]
+    )
 
 
 def test_fastlio_live_gate_rejects_diverged_map_before_tomogram(tmp_path) -> None:
@@ -255,7 +307,7 @@ def test_mujoco_tare_stack_reframes_cmu_waypoints_to_live_odom_contract() -> Non
         encoding="utf-8"
     )
 
-    assert "goal_frame_id=FRAMES.odom" in text
+    assert "goal_frame_id=MUJOCO_LIVE_GOAL_FRAME_ID" in text
     assert "hold_active_goal_until_terminal=True" in text
     assert '"goal_frame_id"' in full_stack
     assert '"goal_frame_id"' in exploration_stack
@@ -270,6 +322,16 @@ def test_fastlio_live_gate_reports_sim_realtime_factor() -> None:
     assert '"sim_time_s": round(sim_time_s, 3)' in text
     assert '"sim_wall_time_s": round(sim_wall_time_s, 3)' in text
     assert '"sim_realtime_factor": round(sim_realtime_factor, 4)' in text
+
+
+def test_fastlio_live_gate_uses_simulator_world_frame_contract() -> None:
+    script = Path("sim/scripts/mujoco_fastlio2_live_gate.py")
+    text = script.read_text(encoding="utf-8")
+
+    assert "simulator_world_frame_id" in text
+    assert "SIM_WORLD_FRAME_ID = simulator_world_frame_id()" in text
+    assert "FRAMES.world" not in text
+    assert "FRAMES.simulator_world" not in text
 
 
 def test_fastlio_live_gate_can_run_duration_by_sim_time() -> None:

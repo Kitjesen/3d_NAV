@@ -20,6 +20,22 @@ from .run_state import (
     save_run_state,
     update_run_state,
 )
+from .runtime_display import (
+    format_frame_links,
+    format_inspection_acceptance,
+    format_real_runtime_evidence_summary,
+    format_product_field_check,
+    format_runtime_audit_payload,
+    format_runtime_contract_manifest,
+    format_runtime_boundary,
+    format_runtime_flow,
+    format_runtime_flow_stages,
+    format_runtime_frames,
+    format_runtime_spec_payload,
+    format_runtime_sources,
+    format_runtime_switch_plan,
+    format_runtime_topic_frames,
+)
 from .runtime_extra import daemonize, health_check, kill_residual_ports, preflight
 from .term import IS_TTY
 from .ui import (
@@ -38,7 +54,26 @@ from .ui import (
 logger = logging.getLogger("lingtu")
 
 
-_SPECIAL_COMMANDS = {"stop", "restart", "status", "show-config", "log", "health", "doctor", "rerun"}
+_SPECIAL_COMMANDS = {
+    "stop",
+    "restart",
+    "status",
+    "show-config",
+    "log",
+    "health",
+    "doctor",
+    "rerun",
+    "switch-plan",
+    "runtime-contract",
+    "runtime-spec",
+    "runtime-audit",
+    "dataflow",
+    "gateway-runtime-acceptance",
+    "field-check",
+    "inspection-check",
+    "saved-map-artifact-gate",
+    "real-runtime-evidence",
+}
 
 
 def _runtime_endpoint(name: str):
@@ -65,6 +100,29 @@ def _is_runtime_endpoint_error(exc: Exception) -> bool:
     return isinstance(exc, RuntimeEndpointError)
 
 
+def _apply_runtime_process_env(profile_name: str, cfg: dict, args: argparse.Namespace):
+    import os
+
+    from core.blueprints.runtime_endpoint import resolve_runtime_run_spec
+    from core.runtime_switch import validate_runtime_switch
+
+    spec = resolve_runtime_run_spec(
+        profile_name,
+        cfg,
+        record=bool(getattr(args, "record", False)),
+        extra_args=tuple(args.extra or ()),
+    )
+    validation = validate_runtime_switch(spec)
+    if not validation.ok:
+        print(f"  {T.red('Error')}: runtime boundary invalid")
+        for blocker in validation.blockers:
+            print(f"    - {blocker}")
+        sys.exit(2)
+    for key, value in spec.env.items():
+        os.environ[key] = value
+    return spec
+
+
 def _run_external_profile_launcher(
     profile_name: str,
     cfg: dict,
@@ -76,10 +134,17 @@ def _run_external_profile_launcher(
     import os
     import subprocess
 
-    launcher = cfg.get("_external_launcher")
-    if not launcher:
+    from core.blueprints.runtime_endpoint import resolve_runtime_run_spec
+
+    spec = resolve_runtime_run_spec(
+        profile_name,
+        cfg,
+        record=bool(getattr(args, "record", False)),
+        extra_args=tuple(args.extra or ()),
+    )
+    if not spec.launcher:
         raise RuntimeError("external profile missing _external_launcher")
-    launcher_path = (repo_root / str(launcher)).resolve()
+    launcher_path = (repo_root / spec.launcher).resolve()
     if not launcher_path.exists():
         print(f"  {T.red('Error')}: launcher not found: {launcher_path}")
         sys.exit(1)
@@ -90,41 +155,527 @@ def _run_external_profile_launcher(
         )
         sys.exit(2)
 
-    if args.extra:
-        launcher_args = list(args.extra)
-    elif getattr(args, "record", False):
-        launcher_args = list(
-            cfg.get("_external_record_args")
-            or cfg.get("_external_default_args")
-            or ("gate",)
-        )
-    else:
-        launcher_args = list(cfg.get("_external_default_args") or ("gate",))
     env = os.environ.copy()
-    env.setdefault("LINGTU_PROFILE", profile_name)
-    runtime_endpoint_name = cfg.get("_runtime_endpoint")
-    if runtime_endpoint_name:
-        env.setdefault("LINGTU_ENDPOINT", str(runtime_endpoint_name))
-    endpoint_data_source = cfg.get("_endpoint_data_source")
-    if endpoint_data_source:
-        env.setdefault("LINGTU_DATA_SOURCE", str(endpoint_data_source))
-    runtime_contract = cfg.get("_runtime_contract")
-    if runtime_contract:
-        env.setdefault("LINGTU_RUNTIME_CONTRACT", str(runtime_contract))
+    for key, value in spec.env.items():
+        env[key] = value
 
     print(f"\n  Launching external simulation profile ({T.green(profile_name)})...", flush=True)
-    print(f"  Launcher: {launcher}", flush=True)
-    print(f"  Command:  bash {launcher} {' '.join(launcher_args)}", flush=True)
+    print(f"  Launcher: {spec.launcher}", flush=True)
+    print(f"  Runtime:  {format_runtime_boundary(spec)}", flush=True)
+    print(f"  SLAM:     {format_runtime_sources(spec)}", flush=True)
+    print(f"  Frame ids: {format_runtime_frames(spec)}", flush=True)
+    print(f"  Frames:   {format_frame_links(spec)}", flush=True)
+    print(f"  Topic frames: {format_runtime_topic_frames(spec)}", flush=True)
+    print(f"  Flow:     {format_runtime_flow(spec)}", flush=True)
+    print(f"  Flow stages: {format_runtime_flow_stages(spec)}", flush=True)
+    command = spec.as_command()
+    print(f"  Command:  {' '.join(command)}", flush=True)
     try:
         proc = subprocess.run(
-            ["bash", str(launcher), *launcher_args],
+            command,
             cwd=str(repo_root),
             env=env,
             check=False,
         )
     except FileNotFoundError:
-        print(f"  {T.red('Error')}: bash is required to run {launcher}")
+        print(f"  {T.red('Error')}: bash is required to run {spec.launcher}")
         sys.exit(127)
+    if proc.returncode:
+        sys.exit(proc.returncode)
+
+
+def _cmd_switch_plan(args: argparse.Namespace) -> None:
+    import json
+
+    from core.blueprints.runtime_endpoint import resolve_runtime_run_spec
+    from core.runtime_switch import compare_runtime_switch, validate_runtime_switch
+
+    if len(args.extra) < 2:
+        print(
+            "  Usage: lingtu switch-plan <current-profile> <target-profile> "
+            "[--current-endpoint ENDPOINT] [--endpoint ENDPOINT]"
+        )
+        sys.exit(1)
+    current_profile, target_profile = args.extra[:2]
+
+    current_args = argparse.Namespace(**vars(args))
+    current_args.endpoint = args.current_endpoint
+    target_args = argparse.Namespace(**vars(args))
+    current_cfg = _resolve_config(current_profile, current_args, allow_wizard=False)
+    target_cfg = _resolve_config(target_profile, target_args, allow_wizard=False)
+    current_spec = resolve_runtime_run_spec(current_profile, current_cfg)
+    target_spec = resolve_runtime_run_spec(target_profile, target_cfg)
+    current_validation = validate_runtime_switch(current_spec)
+    target_validation = validate_runtime_switch(target_spec)
+    payload = compare_runtime_switch(current_spec, target_spec)
+    payload["ok"] = current_validation.ok and target_validation.ok
+    payload["current_validation"] = {
+        "ok": current_validation.ok,
+        "blockers": list(current_validation.blockers),
+        "warnings": list(current_validation.warnings),
+    }
+    payload["target_validation"] = {
+        "ok": target_validation.ok,
+        "blockers": list(target_validation.blockers),
+        "warnings": list(target_validation.warnings),
+    }
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    if args.json_out:
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(text + "\n", encoding="utf-8")
+    if args.json:
+        print(text)
+    elif not args.json_out:
+        print(format_runtime_switch_plan(payload))
+    if not current_validation.ok or not target_validation.ok:
+        sys.exit(2)
+
+
+def _cmd_runtime_spec(args: argparse.Namespace) -> None:
+    import json
+
+    from core.blueprints.runtime_endpoint import resolve_runtime_run_spec
+    from core.runtime_switch import runtime_spec_summary, validate_runtime_switch
+
+    if len(args.extra) != 1:
+        print("  Usage: lingtu runtime-spec <profile> [--endpoint ENDPOINT]")
+        sys.exit(1)
+    profile_name = args.extra[0]
+    cfg = _resolve_config(profile_name, args, allow_wizard=False)
+    spec = resolve_runtime_run_spec(profile_name, cfg)
+    validation = validate_runtime_switch(spec)
+    payload = {
+        "ok": validation.ok,
+        "validation": {
+            "ok": validation.ok,
+            "blockers": list(validation.blockers),
+            "warnings": list(validation.warnings),
+        },
+        "spec": runtime_spec_summary(spec),
+        "env": dict(spec.env),
+    }
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    if args.json_out:
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(text + "\n", encoding="utf-8")
+    if args.json:
+        print(text)
+    elif not args.json_out:
+        print(format_runtime_spec_payload(payload))
+    if not validation.ok:
+        sys.exit(2)
+
+
+def _cmd_runtime_contract(args: argparse.Namespace) -> None:
+    import json
+
+    from core.runtime_interface import runtime_contract_manifest
+
+    if args.extra:
+        print("  Usage: lingtu runtime-contract [--json] [--json-out PATH]")
+        sys.exit(1)
+    payload = runtime_contract_manifest()
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    if args.json_out:
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(text + "\n", encoding="utf-8")
+    if args.json:
+        print(text)
+    elif not args.json_out:
+        print(format_runtime_contract_manifest(payload))
+
+
+def _cmd_runtime_audit(args: argparse.Namespace) -> None:
+    import json
+
+    from cli.runtime_audit import build_runtime_contract_audit
+
+    if args.extra:
+        print("  Usage: lingtu runtime-audit [--json] [--json-out PATH]")
+        sys.exit(1)
+    payload = build_runtime_contract_audit()
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    if args.json_out:
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(text + "\n", encoding="utf-8")
+    if args.json:
+        print(text)
+    elif not args.json_out:
+        print(format_runtime_audit_payload(payload))
+    if not payload["ok"]:
+        sys.exit(2)
+
+
+def _cmd_gateway_runtime_acceptance(args: argparse.Namespace) -> None:
+    import json
+
+    from core.gateway_runtime_acceptance import (
+        collect_gateway_runtime_acceptance,
+        format_gateway_runtime_acceptance,
+    )
+
+    if args.extra:
+        print(
+            "  Usage: lingtu gateway-runtime-acceptance "
+            "[--gateway-url URL] [--acceptance-mode non_motion|simulation|field] "
+            "[--gateway-timeout-sec SEC] [--json] [--json-out PATH]"
+        )
+        sys.exit(1)
+
+    payload = collect_gateway_runtime_acceptance(
+        gateway_url=args.gateway_url,
+        timeout_sec=args.gateway_timeout_sec,
+        mode=args.acceptance_mode or "non_motion",
+    )
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    if args.json_out:
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(text + "\n", encoding="utf-8")
+    if args.json:
+        print(text)
+    elif not args.json_out:
+        print(format_gateway_runtime_acceptance(payload))
+    if not payload["ok"]:
+        sys.exit(2)
+
+
+def _gateway_get_json(
+    gateway_url: str,
+    path: str,
+    *,
+    timeout_sec: float,
+    query: dict[str, str] | None = None,
+) -> dict:
+    import json
+    from urllib.error import URLError
+    from urllib.parse import urlencode, urljoin
+    from urllib.request import Request, urlopen
+
+    base = gateway_url.rstrip("/") + "/"
+    url = urljoin(base, path.lstrip("/"))
+    if query:
+        url = f"{url}?{urlencode(query)}"
+    req = Request(url, headers={"Accept": "application/json"})
+    try:
+        with urlopen(req, timeout=timeout_sec) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {
+            "ok": False,
+            "error": "gateway_request_failed",
+            "message": str(exc),
+            "url": url,
+        }
+
+
+def _format_dataflow_interfaces(items: object) -> str:
+    if not isinstance(items, list):
+        return "none"
+    parts: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        transport = item.get("transport") or item.get("method") or "interface"
+        path = item.get("path") or item.get("payload") or item.get("field") or "unknown"
+        parts.append(f"{transport}:{path}")
+    return ", ".join(parts) if parts else "none"
+
+
+def _format_dataflow_topic(payload: dict) -> str:
+    status = "PASS" if payload.get("ok") is True else "FAIL"
+    topic = payload.get("topic") if isinstance(payload.get("topic"), dict) else {}
+    inspection = (
+        payload.get("inspection") if isinstance(payload.get("inspection"), dict) else {}
+    )
+    live = str(bool(inspection.get("live"))).lower()
+    communicate = "gateway_commands" if inspection.get("communicate") else "read_only"
+    lines = [
+        f"Runtime dataflow topic: {status}",
+        f"topic={topic.get('topic')} selector={payload.get('selector')}",
+        f"live={live} observation={inspection.get('observation_level', 'unknown')}",
+        f"payload={_format_dataflow_interfaces(inspection.get('payload_interfaces'))}",
+        f"communication={communicate}",
+    ]
+    write_interfaces = _format_dataflow_interfaces(inspection.get("write_interfaces"))
+    if write_interfaces != "none":
+        lines.append(f"write_interfaces={write_interfaces}")
+    lines.append(
+        "primary=Gateway+ModulePorts "
+        f"ros2_topic_required={str(bool(inspection.get('ros2_topic_required'))).lower()} "
+        "adapter=endpoint_only"
+    )
+    lines.append(
+        "arbitrary_publish_supported="
+        f"{str(bool(inspection.get('arbitrary_publish_supported'))).lower()}"
+    )
+    if payload.get("error"):
+        lines.append(f"error={payload.get('error')}")
+    return "\n".join(lines)
+
+
+def _format_dataflow_summary(payload: dict) -> str:
+    ok = payload.get("ok")
+    status = "FAIL" if ok is False or payload.get("error") else "PASS"
+    transport_layers = (
+        payload.get("transport_layers")
+        if isinstance(payload.get("transport_layers"), dict)
+        else {}
+    )
+    module_bus = transport_layers.get("module_port_bus", {})
+    ros2_adapter = transport_layers.get("ros2_adapter", {})
+    topics = payload.get("topics") if isinstance(payload.get("topics"), list) else []
+    live_count = 0
+    commandable_topics = 0
+    for topic in topics:
+        if not isinstance(topic, dict):
+            continue
+        inspection = topic.get("inspection")
+        if isinstance(inspection, dict) and inspection.get("live"):
+            live_count += 1
+        communication = topic.get("communication")
+        if isinstance(communication, dict) and communication.get("allowed"):
+            commandable_topics += 1
+    stages = (
+        payload.get("stage_evidence")
+        if isinstance(payload.get("stage_evidence"), list)
+        else []
+    )
+    live_stages = 0
+    missing_stages = 0
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        if stage.get("live"):
+            live_stages += 1
+        if stage.get("status") == "missing" or stage.get("observable") is False:
+            missing_stages += 1
+    control = (
+        payload.get("control_boundary")
+        if isinstance(payload.get("control_boundary"), dict)
+        else {}
+    )
+    command_interfaces = (
+        control.get("command_interfaces")
+        if isinstance(control.get("command_interfaces"), list)
+        else []
+    )
+    lines = [
+        f"Runtime dataflow: {status}",
+        f"runtime_contract={payload.get('runtime_contract')}",
+        "primary=Gateway+ModulePorts "
+        f"module_port_bus.primary={str(bool(module_bus.get('primary'))).lower()} "
+        f"ros2_adapter.primary={str(bool(ros2_adapter.get('primary'))).lower()}",
+        f"topics={len(topics)} live_topics={live_count}",
+        f"stages={len(stages)} live_stages={live_stages} missing_stages={missing_stages}",
+        (
+            f"commandable_topics={commandable_topics} "
+            f"command_interfaces={len(command_interfaces)}"
+        ),
+        "arbitrary_publish_supported="
+        f"{str(bool(control.get('arbitrary_publish_supported'))).lower()}",
+        "Use `python lingtu.py dataflow <topic>` for one stream.",
+    ]
+    if payload.get("error"):
+        lines.append(f"error={payload.get('error')}")
+    if payload.get("message"):
+        lines.append(f"message={payload.get('message')}")
+    if payload.get("url"):
+        lines.append(f"url={payload.get('url')}")
+    return "\n".join(lines)
+
+
+def _cmd_dataflow(args: argparse.Namespace) -> None:
+    import json
+
+    if len(args.extra) > 1:
+        print(
+            "  Usage: lingtu dataflow [topic] "
+            "[--gateway-url URL] [--gateway-timeout-sec SEC] [--json]"
+        )
+        sys.exit(1)
+    topic = args.topic or (args.extra[0] if args.extra else None)
+    if topic:
+        payload = _gateway_get_json(
+            args.gateway_url,
+            "/api/v1/runtime/dataflow/topic",
+            timeout_sec=args.gateway_timeout_sec,
+            query={"topic": topic},
+        )
+    else:
+        payload = _gateway_get_json(
+            args.gateway_url,
+            "/api/v1/runtime/dataflow",
+            timeout_sec=args.gateway_timeout_sec,
+        )
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    if args.json_out:
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(text + "\n", encoding="utf-8")
+    if args.json:
+        print(text)
+    elif not args.json_out:
+        print(_format_dataflow_topic(payload) if topic else _format_dataflow_summary(payload))
+    if payload.get("ok") is False:
+        sys.exit(2)
+
+
+def _cmd_field_check(args: argparse.Namespace) -> None:
+    import json
+
+    from core.product_field_check import collect_product_field_check
+
+    if len(args.extra) > 1:
+        print(
+            "  Usage: lingtu field-check [map-dir] "
+            "[--gateway-url URL] [--acceptance-mode non_motion|simulation|field] "
+            "[--require-tomogram] [--require-occupancy] [--json] [--json-out PATH]"
+        )
+        sys.exit(1)
+
+    payload = collect_product_field_check(
+        gateway_url=args.gateway_url,
+        timeout_sec=args.gateway_timeout_sec,
+        mode=args.acceptance_mode or "simulation",
+        map_dir=args.extra[0] if args.extra else None,
+        require_tomogram=args.require_tomogram,
+        require_occupancy=args.require_occupancy,
+        expected_data_source=args.expected_data_source,
+        expected_source_profile=args.expected_source_profile,
+        expected_frame_id=args.expected_frame_id,
+    )
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    if args.json_out:
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(text + "\n", encoding="utf-8")
+    if args.json:
+        print(text)
+    elif not args.json_out:
+        print(format_product_field_check(payload))
+    if not payload["ok"]:
+        sys.exit(2)
+
+
+def _parse_inspection_point(raw: str):
+    return raw.strip()
+
+
+def _cmd_inspection_check(args: argparse.Namespace) -> None:
+    import json
+
+    from core.inspection_acceptance import collect_inspection_acceptance
+
+    if len(args.extra) > 1:
+        print(
+            "  Usage: lingtu inspection-check [map-dir] "
+            "[--point NAME] [--tag TAG] "
+            "[--gateway-url URL] [--acceptance-mode non_motion|simulation|field] "
+            "[--require-tomogram] [--require-occupancy] [--json] [--json-out PATH]"
+        )
+        sys.exit(1)
+
+    payload = collect_inspection_acceptance(
+        gateway_url=args.gateway_url,
+        timeout_sec=args.gateway_timeout_sec,
+        mode=args.acceptance_mode or "simulation",
+        map_dir=args.extra[0] if args.extra else None,
+        points=[_parse_inspection_point(item) for item in args.point],
+        tag=args.tag,
+        require_tomogram=args.require_tomogram,
+        require_occupancy=args.require_occupancy,
+        expected_data_source=args.expected_data_source,
+        expected_source_profile=args.expected_source_profile,
+        expected_frame_id=args.expected_frame_id,
+    )
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    if args.json_out:
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(text + "\n", encoding="utf-8")
+    if args.json:
+        print(text)
+    elif not args.json_out:
+        print(format_inspection_acceptance(payload))
+    if not payload["ok"]:
+        sys.exit(2)
+
+
+def _cmd_saved_map_artifact_gate(args: argparse.Namespace) -> None:
+    import subprocess
+
+    if len(args.extra) != 1:
+        print(
+            "  Usage: lingtu saved-map-artifact-gate <map-dir> "
+            "[--require-tomogram] [--require-occupancy] [--json-out PATH]"
+        )
+        sys.exit(1)
+
+    repo_root = Path(__file__).resolve().parent.parent
+    cmd = [
+        sys.executable,
+        str(repo_root / "scripts" / "saved_map_artifact_gate.py"),
+        args.extra[0],
+    ]
+    if args.require_tomogram:
+        cmd.append("--require-tomogram")
+    if args.require_occupancy:
+        cmd.append("--require-occupancy")
+    if args.expected_data_source:
+        cmd.extend(["--expected-data-source", args.expected_data_source])
+    if args.expected_source_profile:
+        cmd.extend(["--expected-source-profile", args.expected_source_profile])
+    if args.expected_frame_id:
+        cmd.extend(["--expected-frame-id", args.expected_frame_id])
+    if args.json_out:
+        cmd.extend(["--json-out", str(args.json_out)])
+    if args.json:
+        cmd.append("--json")
+
+    proc = subprocess.run(cmd, cwd=repo_root, check=False)
+    if proc.returncode:
+        sys.exit(proc.returncode)
+
+
+def _cmd_real_runtime_evidence(args: argparse.Namespace) -> None:
+    import json
+    import subprocess
+
+    if args.extra:
+        print(
+            "  Usage: lingtu real-runtime-evidence "
+            "[--duration-sec SEC] [--json-out PATH] [--json] "
+            "[--expected-command-subscriber NAME] [--no-validate]"
+        )
+        sys.exit(1)
+
+    repo_root = Path(__file__).resolve().parent.parent
+    report_path = args.json_out or Path("artifacts/real_s100p_runtime/report.json")
+    cmd = [
+        sys.executable,
+        str(repo_root / "scripts" / "real_runtime_evidence_collect.py"),
+        "--duration-sec",
+        str(args.duration_sec),
+        "--min-motion-m",
+        str(args.min_motion_m),
+        "--min-cmd-vel-norm",
+        str(args.min_cmd_vel_norm),
+        "--expected-contract",
+        "real_s100p",
+        "--json-out",
+        str(report_path),
+    ]
+    for subscriber in args.expected_command_subscriber:
+        cmd.extend(["--expected-command-subscriber", subscriber])
+    if args.no_validate:
+        cmd.append("--no-validate")
+    if args.json:
+        cmd.append("--json")
+
+    proc = subprocess.run(cmd, cwd=repo_root, check=False)
+    if not args.json:
+        print(f"  Real runtime evidence report: {report_path}")
+        if report_path.exists():
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            if isinstance(report, dict):
+                print(format_real_runtime_evidence_summary(report))
     if proc.returncode:
         sys.exit(proc.returncode)
 
@@ -224,28 +775,34 @@ def _resolve_config(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="LingTu Navigation System",
+        description=(
+            "LingTu Navigation System. Product inspection uses Gateway + "
+            "ModulePorts runtime dataflow; ROS 2 topics are endpoint adapter "
+            "details, not the operator entry point."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent(
             """\
-            profiles:
-              stub      No hardware, framework testing
-              sim       MuJoCo kinematic simulation
-              sim_mujoco_live MuJoCo raw MID-360 + Fast-LIO live simulation
-              sim_gazebo Gazebo/GZ ROS-native simulation
-              sim_industrial Gazebo industrial-yard delivery simulation
-              sim_cmu_tare CMU Unity + external TARE simulation
-              dev       Semantic pipeline, no C++ nodes
+            product profiles:
+              map       Build a new map
               nav       Navigation with pre-built map
               explore   Exploration, no pre-built map
 
+            advanced profiles:
+              tare_explore  CMU TARE exploration when external TARE is installed
+              use --list --all for simulation, dev, and experimental profiles
+
             runtime endpoints:
+              endpoints are connection/adaptation layers; they do not replace the product task graph
               --endpoint mujoco_live  Run a product task against MuJoCo raw MID-360 + Fast-LIO
+              --endpoint replay       Run a product task against no-actuation replay logs
               --endpoint gazebo       Run a product task against Gazebo/GZ industrial adapter
               --endpoint cmu_unity    Run TARE task against CMU Unity external runtime
 
             product simulation examples:
               python lingtu.py explore --endpoint mujoco_live
+              python lingtu.py nav --endpoint replay status
+              python lingtu.py switch-plan explore explore --current-endpoint mujoco_live --endpoint real_s100p
               python lingtu.py tare_explore --endpoint mujoco_live
               python lingtu.py tare_explore --endpoint cmu_unity --record
 
@@ -254,6 +811,16 @@ def main() -> None:
               restart      Stop and relaunch with the same argv
               status       Show external run status (add --json for jq)
               show-config  Print resolved config (add --json for jq)
+              runtime-contract Print canonical frames/topics/data-flow manifest
+              runtime-spec Print resolved runtime data-flow/frame contract for one profile
+              switch-plan  Print sim/replay/real runtime-boundary diff
+              runtime-audit Check runtime manifest/YAML/profile/collector contracts
+              dataflow    Inspect live Gateway/ModulePort flow and whitelist commands
+              gateway-runtime-acceptance Check product runtime state through Gateway only
+              field-check  One-screen field readiness from Gateway/evidence/map gates
+              inspection-check Non-motion inspection-point acceptance pack
+              saved-map-artifact-gate Validate saved map artifact provenance
+              real-runtime-evidence Collect read-only real S100P runtime evidence
               log          Print the current run log (add -f to follow)
               health       Sensor and module health (add --json for jq)
               doctor       Run diagnostics
@@ -263,10 +830,13 @@ def main() -> None:
     )
     parser.add_argument("target", nargs="?", default=None, help="Profile name or command")
     parser.add_argument("extra", nargs="*", help=argparse.SUPPRESS)
-    parser.add_argument("--list", action="store_true", help="List profiles and exit")
+    parser.add_argument("--list", action="store_true", help="List product profiles and exit")
+    parser.add_argument("--all", action="store_true", help="Show advanced, simulation, and dev profiles with --list")
     parser.add_argument("--version", action="store_true", help="Print LingTu version and exit")
     parser.add_argument("--json", action="store_true",
-                        help="Machine-readable JSON output (status / show-config)")
+                        help="Machine-readable JSON output (status / show-config / switch-plan / runtime-spec / runtime-contract / runtime-audit / dataflow / gateway-runtime-acceptance / field-check / inspection-check / real-runtime-evidence)")
+    parser.add_argument("--json-out", type=Path, default=None,
+                        help="Write JSON output for commands such as switch-plan, runtime-spec, runtime-contract, runtime-audit, dataflow, gateway-runtime-acceptance, field-check, inspection-check, or real-runtime-evidence")
     parser.add_argument("--daemon", "-d", action="store_true", help="Run as background daemon (Unix)")
     parser.add_argument("--follow", "-f", action="store_true", help="Follow output for `lingtu log`")
     parser.add_argument("--lines", type=int, default=80, help="Number of lines for `lingtu log` (default: 80)")
@@ -276,6 +846,12 @@ def main() -> None:
         choices=_runtime_endpoint_names(),
         default=None,
         help="Runtime endpoint/connection layer for map/nav/explore/tare_explore",
+    )
+    parser.add_argument(
+        "--current-endpoint",
+        choices=_runtime_endpoint_names(),
+        default=None,
+        help="Current runtime endpoint for switch-plan dry-run comparisons",
     )
     parser.add_argument(
         "--record",
@@ -313,6 +889,39 @@ def main() -> None:
     parser.add_argument("--log-level", default="INFO", dest="log_level")
     parser.add_argument("--log-format", default="text", choices=["text", "json"],
                         dest="log_format", help="Log file format: text (default) or json")
+    parser.add_argument("--duration-sec", type=float, default=20.0,
+                        help="Duration for `lingtu real-runtime-evidence`")
+    parser.add_argument("--gateway-url", default="http://127.0.0.1:5050",
+                        help="Gateway base URL for `lingtu dataflow`, `lingtu gateway-runtime-acceptance`, `lingtu field-check`, or `lingtu inspection-check`")
+    parser.add_argument("--gateway-timeout-sec", type=float, default=2.0,
+                        help="Per-request timeout for Gateway dataflow/acceptance/field-check/inspection-check")
+    parser.add_argument("--topic", default=None,
+                        help="Runtime dataflow topic or short alias for `lingtu dataflow`")
+    parser.add_argument("--acceptance-mode", default=None,
+                        choices=["non_motion", "simulation", "field"],
+                        help="Gateway acceptance strictness: non_motion checks product observability; simulation requires a live simulation endpoint; field requires real S100P evidence. Defaults: gateway-runtime-acceptance=non_motion, field-check=simulation, inspection-check=simulation")
+    parser.add_argument("--min-motion-m", type=float, default=0.05,
+                        help="Minimum odometry motion for `lingtu real-runtime-evidence`")
+    parser.add_argument("--min-cmd-vel-norm", type=float, default=0.01,
+                        help="Minimum cmd_vel norm for `lingtu real-runtime-evidence`")
+    parser.add_argument("--expected-command-subscriber", action="append", default=[],
+                        help="Accepted hardware cmd_vel subscriber for `lingtu real-runtime-evidence`")
+    parser.add_argument("--require-tomogram", action="store_true",
+                        help="Require tomogram.pickle for `lingtu saved-map-artifact-gate`")
+    parser.add_argument("--require-occupancy", action="store_true",
+                        help="Require occupancy.npz for `lingtu saved-map-artifact-gate`")
+    parser.add_argument("--expected-data-source", default=None,
+                        help="Expected data_source for `lingtu saved-map-artifact-gate`")
+    parser.add_argument("--expected-source-profile", default=None,
+                        help="Expected source_profile for `lingtu saved-map-artifact-gate`")
+    parser.add_argument("--expected-frame-id", default=None,
+                        help="Expected frame_id for `lingtu saved-map-artifact-gate`")
+    parser.add_argument("--point", action="append", default=[],
+                        help="Inspection target for `lingtu inspection-check`: saved location name. Repeat for multiple points")
+    parser.add_argument("--tag", default=None,
+                        help="Use saved locations with this tag for `lingtu inspection-check`")
+    parser.add_argument("--no-validate", action="store_true",
+                        help="Collect real runtime evidence without running the validation gate")
     args, trailing_extra = parser.parse_known_args()
     if trailing_extra:
         args.extra.extend(trailing_extra)
@@ -322,7 +931,7 @@ def main() -> None:
         return
 
     if args.list:
-        list_profiles()
+        list_profiles(show_all=args.all)
         return
 
     if args.target == "stop":
@@ -359,6 +968,46 @@ def main() -> None:
         cmd_log_external(follow=args.follow, lines=args.lines)
         return
 
+    if args.target == "switch-plan":
+        _cmd_switch_plan(args)
+        return
+
+    if args.target == "runtime-contract":
+        _cmd_runtime_contract(args)
+        return
+
+    if args.target == "runtime-spec":
+        _cmd_runtime_spec(args)
+        return
+
+    if args.target == "runtime-audit":
+        _cmd_runtime_audit(args)
+        return
+
+    if args.target == "dataflow":
+        _cmd_dataflow(args)
+        return
+
+    if args.target == "gateway-runtime-acceptance":
+        _cmd_gateway_runtime_acceptance(args)
+        return
+
+    if args.target == "field-check":
+        _cmd_field_check(args)
+        return
+
+    if args.target == "inspection-check":
+        _cmd_inspection_check(args)
+        return
+
+    if args.target == "saved-map-artifact-gate":
+        _cmd_saved_map_artifact_gate(args)
+        return
+
+    if args.target == "real-runtime-evidence":
+        _cmd_real_runtime_evidence(args)
+        return
+
     if args.target == "show-config":
         profile_name = args.extra[0] if args.extra else None
         if len(args.extra) > 1:
@@ -387,6 +1036,8 @@ def main() -> None:
         _run_external_profile_launcher(profile_name, cfg, args, _repo)
         return
 
+    runtime_spec = _apply_runtime_process_env(profile_name, cfg, args)
+
     if args.daemon:
         args.no_repl = True
     if not IS_TTY:
@@ -404,6 +1055,13 @@ def main() -> None:
 
     preflight(profile_name, cfg)
 
+    print(f"  Runtime:  {format_runtime_boundary(runtime_spec)}")
+    print(f"  SLAM:     {format_runtime_sources(runtime_spec)}")
+    print(f"  Frame ids: {format_runtime_frames(runtime_spec)}")
+    print(f"  Frames:   {format_frame_links(runtime_spec)}")
+    print(f"  Topic frames: {format_runtime_topic_frames(runtime_spec)}")
+    print(f"  Flow:     {format_runtime_flow(runtime_spec)}")
+    print(f"  Flow stages: {format_runtime_flow_stages(runtime_spec)}")
     print(f"\n  Building system ({T.green(profile_name)})...")
 
     from core.blueprints.full_stack import full_stack_blueprint
@@ -464,6 +1122,7 @@ def main() -> None:
         _wire_count = len(getattr(system, "_connections", []) or [])
     except Exception:
         _wire_count = None
+    from core.runtime_switch import runtime_spec_summary
 
     save_run_state(
         profile_name,
@@ -476,6 +1135,7 @@ def main() -> None:
         status="running",
         module_count=_mod_count,
         wire_count=_wire_count,
+        runtime=runtime_spec_summary(runtime_spec),
     )
 
     print_banner(profile_name, cfg, system, log_dir)

@@ -14,7 +14,13 @@ from typing import Any, List, Optional, Union
 
 import numpy as np
 
+from core.runtime_interface import body_frame_id, map_frame_id, odom_frame_id
+
 from .geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+
+NAV_MAP_FRAME_ID = map_frame_id()
+NAV_ODOM_FRAME_ID = odom_frame_id()
+NAV_BODY_FRAME_ID = body_frame_id()
 
 # ---------------------------------------------------------------------------
 # Odometry
@@ -30,8 +36,8 @@ class Odometry:
     pose: Pose = field(default_factory=Pose)
     twist: Twist = field(default_factory=Twist)
     ts: float = 0.0
-    frame_id: str = "odom"
-    child_frame_id: str = "body"
+    frame_id: str = NAV_ODOM_FRAME_ID
+    child_frame_id: str = NAV_BODY_FRAME_ID
 
     def __post_init__(self) -> None:
         if self.ts == 0.0:
@@ -86,8 +92,8 @@ class Odometry:
             pose=Pose.from_dict(d.get("pose", {})),
             twist=Twist.from_dict(d.get("twist", {})),
             ts=float(d.get("ts", 0)),
-            frame_id=str(d.get("frame_id", "odom")),
-            child_frame_id=str(d.get("child_frame_id", "body")),
+            frame_id=str(d.get("frame_id", NAV_ODOM_FRAME_ID)),
+            child_frame_id=str(d.get("child_frame_id", NAV_BODY_FRAME_ID)),
         )
 
     def encode(self) -> bytes:
@@ -132,7 +138,7 @@ class Path:
 
     poses: list[PoseStamped] = field(default_factory=list)
     ts: float = 0.0
-    frame_id: str = "map"
+    frame_id: str = NAV_MAP_FRAME_ID
 
     def __post_init__(self) -> None:
         if self.ts == 0.0:
@@ -193,7 +199,7 @@ class Path:
         return cls(
             poses=[PoseStamped.from_dict(p) for p in d.get("poses", [])],
             ts=float(d.get("ts", 0)),
-            frame_id=str(d.get("frame_id", "map")),
+            frame_id=str(d.get("frame_id", NAV_MAP_FRAME_ID)),
         )
 
     def encode(self) -> bytes:
@@ -245,7 +251,7 @@ class OccupancyGrid:
     resolution: float = 0.05
     origin: Pose = field(default_factory=Pose)
     ts: float = 0.0
-    frame_id: str = "map"
+    frame_id: str = NAV_MAP_FRAME_ID
 
     def __post_init__(self) -> None:
         if self.ts == 0.0:
@@ -306,7 +312,7 @@ class OccupancyGrid:
             resolution=float(d.get("resolution", 0.05)),
             origin=Pose.from_dict(d.get("origin", {})),
             ts=float(d.get("ts", 0)),
-            frame_id=str(d.get("frame_id", "map")),
+            frame_id=str(d.get("frame_id", NAV_MAP_FRAME_ID)),
         )
 
     def encode(self) -> bytes:

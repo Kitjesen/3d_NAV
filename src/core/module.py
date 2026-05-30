@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, get_args, get_origin, get_type_hints
 
 from .stream import In, Out
 
@@ -70,6 +70,7 @@ def skill(fn):
 
 import inspect as _inspect
 import json as _json
+import types as _types
 from dataclasses import dataclass as _dataclass
 
 
@@ -94,12 +95,20 @@ def _build_skill_schema(method) -> dict:
     properties: dict[str, Any] = {}
     required: list[str] = []
 
+    def json_type(ann: Any) -> str:
+        origin = get_origin(ann)
+        args = get_args(ann)
+        if origin in (_types.UnionType, Union):
+            non_null = [arg for arg in args if arg is not type(None)]
+            if len(non_null) == 1:
+                return _PY_TO_JSON.get(non_null[0], "string")
+        return _PY_TO_JSON.get(ann, "string")
+
     for pname, param in sig.parameters.items():
         if pname == "self":
             continue
         ann = param.annotation
-        json_type = _PY_TO_JSON.get(ann, "string")
-        prop: dict[str, Any] = {"type": json_type}
+        prop: dict[str, Any] = {"type": json_type(ann)}
         if param.default is not _inspect.Parameter.empty:
             prop["default"] = param.default
         else:

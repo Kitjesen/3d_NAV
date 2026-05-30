@@ -186,6 +186,7 @@ def test_34_no_clip_startup():
             planner="astar",
             enable_native=False,
             enable_semantic=True,
+            enable_standalone_encoder=True,
             enable_gateway=False,
         ).build()
 

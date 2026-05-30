@@ -28,6 +28,18 @@ def _algorithm_context_outputs(name: str) -> tuple[str, ...]:
     return _data_source(name).algorithm_context_outputs
 
 
+def _slam_source(name: str) -> str:
+    return _data_source(name).slam_source
+
+
+def _localization_source(name: str) -> str:
+    return _data_source(name).localization_source
+
+
+def _mapping_source(name: str) -> str:
+    return _data_source(name).mapping_source
+
+
 def _runtime_topics_for(name: str, *extra: str) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(
@@ -161,9 +173,9 @@ SIMULATION_RUNTIME_CONTRACTS = {
         runtime_stage="no_saved_map_live_mapping_smoke",
         map_dependency="gazebo_live_lidar_occupancy",
         world_sensor_owner="gazebo",
-        slam_source="none",
-        localization_source="gazebo_sim_odometry",
-        mapping_source="gazebo_lidar_derived_occupancy_grid",
+        slam_source=_slam_source("gazebo_industrial"),
+        localization_source=_localization_source("gazebo_industrial"),
+        mapping_source=_mapping_source("gazebo_industrial"),
         slam_validated=False,
         exploration_owner="lingtu_frontier_or_tare",
         global_planning_owner="lingtu_navigation",
@@ -296,9 +308,9 @@ SIMULATION_RUNTIME_CONTRACTS = {
         runtime_stage="external_live_map_execution",
         map_dependency="cmu_unity_live_registered_scan_or_same_source_tomogram",
         world_sensor_owner="cmu_unity",
-        slam_source="none",
-        localization_source="cmu_unity_state_estimation_relayed_to_nav_odometry",
-        mapping_source="cmu_registered_scan_and_terrain_map_relayed_to_nav_map_cloud",
+        slam_source=_slam_source("cmu_unity_external"),
+        localization_source=_localization_source("cmu_unity_external"),
+        mapping_source=_mapping_source("cmu_unity_external"),
         slam_validated=False,
         exploration_owner="cmu_tare_external",
         global_planning_owner="lingtu_navigation_optional_pct",
@@ -367,9 +379,9 @@ SIMULATION_RUNTIME_CONTRACTS = {
         runtime_stage="no_saved_map_live_slam_optional_exploration",
         map_dependency="none_raw_lidar_imu",
         world_sensor_owner="mujoco",
-        slam_source="fastlio2",
-        localization_source="fastlio2_odometry",
-        mapping_source="fastlio2_cloud_map",
+        slam_source=_slam_source("mujoco_fastlio2_live"),
+        localization_source=_localization_source("mujoco_fastlio2_live"),
+        mapping_source=_mapping_source("mujoco_fastlio2_live"),
         slam_validated=True,
         requires_live_slam=True,
         exploration_owner="lingtu_frontier_optional",
@@ -386,6 +398,57 @@ SIMULATION_RUNTIME_CONTRACTS = {
             "cmu_unity_exploration_validated",
             "real_robot_readiness",
         ),
+    ),
+    "rosbag_fastlio2_replay": SimulationRuntimeContract(
+        name="rosbag_fastlio2_replay",
+        provider="replay",
+        profile=None,
+        world=None,
+        launch_script="sim/scripts/fastlio2_rosbag_replay_gate.py",
+        rviz_config=None,
+        adapter_script="sim/scripts/rosbag_slam_bridge_replay.py",
+        data_source_contract="rosbag_fastlio2_replay",
+        command_topic="no_actuation_replay_sink",
+        canonical_topics=CANONICAL_NAV_TOPICS,
+        native_topics=_source_outputs("rosbag_fastlio2_replay"),
+        lingtu_owns=(
+            "recorded_input_adapter",
+            "navigation_graph_replay",
+            "local_planning",
+            "path_following",
+            "cmd_vel_mux_to_no_actuation_sink",
+        ),
+        simulator_owns=(
+            "recorded_sensor_log",
+            "recorded_slam_outputs",
+            "no_actuation",
+        ),
+        required_runtime_topics=_runtime_topics_for(
+            "rosbag_fastlio2_replay",
+            TOPICS.global_path,
+            TOPICS.local_path,
+            TOPICS.cmd_vel,
+        ),
+        required_path_topics=(TOPICS.global_path, TOPICS.local_path),
+        required_slam_topics=(
+            *_source_outputs("rosbag_fastlio2_replay"),
+            "/Odometry",
+            "/cloud_map",
+        ),
+        simulation_only=True,
+        contract_role="no_actuation_replay_validation",
+        runtime_stage="recorded_sensor_or_slam_replay",
+        map_dependency="replayed_same_source_map",
+        world_sensor_owner="recorded_log",
+        slam_source=_slam_source("rosbag_fastlio2_replay"),
+        localization_source=_localization_source("rosbag_fastlio2_replay"),
+        mapping_source=_mapping_source("rosbag_fastlio2_replay"),
+        slam_validated=True,
+        requires_live_slam=False,
+        requires_saved_map=False,
+        cmd_vel_owner="lingtu_cmd_vel_mux_to_no_actuation_sink",
+        validated_claims=("same_graph_no_actuation_replay",),
+        forbidden_claims=("real_robot_motion", "hardware_command_output"),
     ),
 }
 

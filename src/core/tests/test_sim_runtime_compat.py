@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import math
+import os
+import subprocess
 import struct
 import sys
 import time
@@ -776,6 +778,86 @@ def test_fastlio2_nav_bridge_records_odom_header_stamps():
     assert bridge.last_odom_stamp_s == pytest.approx(12.34)
 
 
+def test_fastlio2_nav_bridge_uses_runtime_default_frames():
+    from core.runtime_interface import TOPICS, topic_default_frame_id
+    from slam.fastlio2_nav_bridge import FastLio2NavBridgeRuntime
+
+    class FakePublisher:
+        def __init__(self):
+            self.messages = []
+
+        def publish(self, msg):
+            self.messages.append(msg)
+
+    class FakeNode:
+        def __init__(self):
+            self.publishers = {}
+
+        def create_publisher(self, _msg_cls, topic, _qos):
+            publisher = FakePublisher()
+            self.publishers[topic] = publisher
+            return publisher
+
+        def create_subscription(self, *_args, **_kwargs):
+            return object()
+
+    class FakeSlamBridge:
+        _odom_worker_thread = None
+
+        def __init__(self):
+            self.odom = []
+            self.clouds = []
+
+        def _on_rclpy_odom(self, msg):
+            self.odom.append(msg)
+
+        def _process_rclpy_cloud(self, msg):
+            self.clouds.append(msg)
+
+    def msg(frame_id):
+        return types.SimpleNamespace(
+            header=types.SimpleNamespace(
+                stamp=types.SimpleNamespace(sec=1, nanosec=0),
+                frame_id=frame_id,
+            )
+        )
+
+    node = FakeNode()
+    slam_bridge = FakeSlamBridge()
+    bridge = FastLio2NavBridgeRuntime(
+        node=node,
+        slam_bridge=slam_bridge,
+        odometry_cls=object,
+        pointcloud2_cls=object,
+    )
+
+    bridge.on_odom(msg("raw_odom"))
+    bridge.on_registered_cloud(msg("raw_registered"))
+    bridge.on_map_cloud(msg("raw_map"))
+
+    assert node.publishers[TOPICS.odometry].messages[0].header.frame_id == (
+        topic_default_frame_id(TOPICS.odometry)
+    )
+    assert node.publishers[TOPICS.registered_cloud].messages[0].header.frame_id == (
+        topic_default_frame_id(TOPICS.registered_cloud)
+    )
+    assert node.publishers[TOPICS.map_cloud].messages[0].header.frame_id == (
+        topic_default_frame_id(TOPICS.odometry)
+    )
+    assert slam_bridge.odom[0].header.frame_id == topic_default_frame_id(TOPICS.odometry)
+    assert slam_bridge.clouds[0].header.frame_id == topic_default_frame_id(
+        TOPICS.odometry)
+
+
+def test_fastlio2_nav_bridge_rejects_messages_without_frame_header():
+    from slam.fastlio2_nav_bridge import FastLio2NavBridgeRuntime
+
+    msg = types.SimpleNamespace(header=types.SimpleNamespace())
+
+    with pytest.raises(ValueError, match="header.frame_id"):
+        FastLio2NavBridgeRuntime.nav_frame_msg(msg, "odom")
+
+
 def test_fastlio2_live_bridge_writes_tunable_sim_config(tmp_path: Path):
     from slam.fastlio2_live_bridge import write_fastlio2_config
 
@@ -1169,6 +1251,44 @@ def test_mujoco_fastlio2_live_gate_can_hold_latest_nav_cmd_for_slow_sim_clock():
     assert selected["wz"] == pytest.approx(0.1)
 
 
+def test_mujoco_fastlio2_live_gate_rejects_spin_without_translation():
+    from sim.scripts.mujoco_fastlio2_live_gate import _control_quality_report
+
+    report = _control_quality_report(
+        applied_cmd_stats={
+            "linear_distance_integral_m": 1.1,
+            "angular_abs_integral_rad": 3.2,
+            "max_angular_abs": 0.45,
+            "angular_saturation_samples": 80,
+            "cmd_samples": 100,
+        },
+        max_yaw_per_meter=1.2,
+        max_angular_saturation_ratio=0.35,
+    )
+
+    assert report["ok"] is False
+    assert "yaw_per_meter too high" in report["blockers"]
+    assert "angular saturation ratio too high" in report["blockers"]
+
+
+def test_mujoco_fastlio2_live_gate_summarizes_dynamic_obstacle_sweep_quality():
+    from sim.scripts.mujoco_fastlio2_live_gate import _dynamic_obstacle_sweep_quality
+
+    report = _dynamic_obstacle_sweep_quality(
+        cases=[
+            {"density": 2, "speed_mps": 0.2, "collision": False, "runtime_evidence_ok": True},
+            {"density": 6, "speed_mps": 0.5, "collision": False, "runtime_evidence_ok": True},
+            {"density": 10, "speed_mps": 0.8, "collision": False, "runtime_evidence_ok": True},
+        ],
+        required_densities=(2, 6, 10),
+        required_speeds=(0.2, 0.5, 0.8),
+    )
+
+    assert report["ok"] is True
+    assert report["covered_density_count"] == 3
+    assert report["covered_speed_count"] == 3
+
+
 def test_launch_mujoco_fastlio2_live_exposes_cmd_vel_timeout_override():
     text = Path("sim/scripts/launch_mujoco_fastlio2_live.sh").read_text(encoding="utf-8")
 
@@ -1273,17 +1393,23 @@ def test_mujoco_fastlio2_live_gate_relays_fastlio_outputs_to_nav_topics():
     stack_source = Path("src/drivers/sim/mujoco_lingtu_stack.py").read_text(encoding="utf-8")
     launcher_source = Path("sim/scripts/launch_mujoco_fastlio2_live.sh").read_text(encoding="utf-8")
 
-    assert "from core.runtime_interface import FRAMES, TOPICS" in source
+    assert "resolved_runtime_data_flow" in source
     assert "FastLio2NavBridgeRuntime" in source
     assert "node.create_publisher(" in bridge_source
     assert "TOPICS.odometry" in bridge_source
     assert "TOPICS.registered_cloud" in bridge_source
     assert "TOPICS.map_cloud" in bridge_source
     assert "create_subscription(TwistStamped, TOPICS.cmd_vel" in source
-    assert "nav_frame_msg(msg, FRAMES.odom)" in bridge_source
-    assert "nav_frame_msg(msg, FRAMES.body)" in bridge_source
-    assert '"nav_odometry": FRAMES.odom' in source
-    assert '"nav_registered_cloud": FRAMES.body' in source
+    assert "topic_default_frame_id(TOPICS.odometry)" in bridge_source
+    assert "topic_default_frame_id(TOPICS.registered_cloud)" in bridge_source
+    assert "from core.runtime_interface import FRAMES" not in bridge_source
+    assert '"nav_odometry": SIM_NAV_ODOMETRY_FRAME_ID' in source
+    assert '"nav_registered_cloud": SIM_NAV_REGISTERED_CLOUD_FRAME_ID' in source
+    assert '"nav_map_cloud": SIM_FASTLIO_LIVE_MAP_FRAME_ID' in source
+    assert "FRAMES.odom" not in source
+    assert "FRAMES.body" not in source
+    assert "FRAMES.lidar" not in source
+    assert "FRAMES.map" not in source
     assert TOPICS.raw_lidar_points == "/points_raw"
     assert TOPICS.raw_imu == "/imu_raw"
     assert '--run-lingtu-frontier' in source
@@ -1315,7 +1441,7 @@ def test_mujoco_fastlio2_live_gate_relays_fastlio_outputs_to_nav_topics():
     assert "--fastlio-lidar-input timed_pointcloud2" in source
     assert "sensor_timestamp_source" in source
     assert "engine.sim_time" in source
-    assert "frame_id=FRAMES.lidar" in source
+    assert "frame_id=SIM_LIDAR_FRAME_ID" in source
     assert "body_to_lidar_m" in source
     assert "fastlio2_lidar_frame" in source
     assert "fastlio2_log_diagnostics" in source
@@ -1323,6 +1449,96 @@ def test_mujoco_fastlio2_live_gate_relays_fastlio_outputs_to_nav_topics():
     assert "--drive-vy" in launcher_source
     assert "LINGTU_MUJOCO_LIVE_DRIVE_VY" in launcher_source
     assert "LINGTU_MUJOCO_LIVE_DRIVE_WZ" in launcher_source
+
+
+def test_mujoco_fastlio2_live_gate_exception_report_keeps_runtime_contract():
+    from sim.scripts.mujoco_fastlio2_live_gate import _gate_exception_report
+
+    args = types.SimpleNamespace(
+        duration_clock="wall",
+        fastlio_lidar_input="livox_custom_msg",
+        mid360_pattern=str(
+            Path("sim/assets/livox/mid360.npy").resolve()
+        ),
+        mid360_samples_per_frame=1200,
+        n_rays=6400,
+        scan_time_profile="physical_rolling",
+    )
+    report = _gate_exception_report(
+        args,
+        RuntimeError("ROS2 Python modules are unavailable"),
+    )
+
+    assert report["ok"] is False
+    assert report["simulation_only"] is True
+    assert report["real_robot_motion"] is False
+    assert report["cmd_vel_sent_to_hardware"] is False
+    assert report["runtime_contract"]["name"] == "mujoco_fastlio2_live"
+    assert report["runtime_contract"]["ok"] is False
+    assert sorted(report["runtime_contract"]["frame_evidence"]) == [
+        "body_to_lidar",
+        "map_to_odom",
+        "odom_to_body",
+    ]
+    assert sorted(report["runtime_contract"]["data_flow_evidence"]) == [
+        "command_boundary",
+        "dynamic_obstacle_gate",
+        "endpoint_adapter",
+        "global_planning",
+        "local_planning_and_following",
+        "map_layers_and_exploration",
+        "slam_or_relayed_localization_map",
+    ]
+    assert report["runtime_evidence"]["ok"] is False
+    assert report["runtime_evidence"]["frame_links_required"] is True
+    assert report["runtime_evidence"]["data_flow_required"] is True
+    assert report["lidar_source"]["forced_pattern"] is True
+    assert report["lidar_source"]["samples_per_frame"] == 1200
+    gaps = "\n".join(report["remaining_gaps"])
+    assert "gate_exception: RuntimeError: ROS2 Python modules are unavailable" in gaps
+    assert "runtime_contract.ok is not true" in gaps
+    assert "frame evidence missing or failed for map_to_odom" in gaps
+    assert "data-flow evidence missing or failed for endpoint_adapter" in gaps
+
+
+def test_mujoco_data_flow_marks_unrequired_navigation_stages_not_run():
+    from core.runtime_interface import TOPICS
+    from sim.scripts.mujoco_fastlio2_live_gate import _mujoco_data_flow_evidence
+
+    evidence = _mujoco_data_flow_evidence(
+        topic_evidence={
+            TOPICS.raw_lidar_points: {"ok": True},
+            TOPICS.raw_imu: {"ok": True},
+            TOPICS.odometry: {"ok": True},
+            TOPICS.map_cloud: {"ok": True},
+        },
+        navigation_required=False,
+    )
+
+    assert evidence["endpoint_adapter"]["ok"] is True
+    assert evidence["endpoint_adapter"]["inputs"] == [TOPICS.raw_lidar_points, TOPICS.raw_imu]
+    assert evidence["endpoint_adapter"]["outputs"] == [TOPICS.raw_lidar_points, TOPICS.raw_imu]
+    assert evidence["slam_or_relayed_localization_map"]["ok"] is True
+    assert evidence["slam_or_relayed_localization_map"]["outputs"] == [
+        TOPICS.odometry,
+        TOPICS.registered_cloud,
+        TOPICS.map_cloud,
+    ]
+    assert evidence["global_planning"]["required"] is False
+    assert evidence["global_planning"]["ok"] is False
+    assert evidence["global_planning"]["owner"] == "lingtu_navigation_or_pct"
+    assert evidence["global_planning"]["frame_role"] == "map"
+    assert evidence["global_planning"]["map_dependency"] == (
+        "pct_uses_same_source_saved_tomogram;"
+        "astar_or_frontier_may_use_live_occupancy_grid"
+    )
+    assert evidence["global_planning"]["reason"] == "not_required_for_basic_slam_gate"
+    assert evidence["command_boundary"]["required"] is False
+    assert evidence["command_boundary"]["ok"] is False
+    assert evidence["command_boundary"]["outputs"] == ["mujoco_velocity_adapter"]
+    assert evidence["command_boundary"]["owner"] == "cmd_vel_mux_to_endpoint_sink"
+    assert evidence["command_boundary"]["frame_role"] == "body_twist"
+    assert evidence["command_boundary"]["map_dependency"] == "none"
 
 
 class _FakeEngine:
@@ -2212,120 +2428,176 @@ def test_sim_mujoco_full_stack_emits_costmap_and_plans_local_goal():
 def test_sim_mujoco_full_stack_policy_mode_moves_under_nav_cmds_when_real_policy_available():
     pytest.importorskip("mujoco")
     pytest.importorskip("onnxruntime")
-    _real_policy_path_or_skip()
+    policy_path = _real_policy_path_or_skip()
 
-    system = full_stack_blueprint(
-        robot="sim_mujoco",
-        world="open_field",
-        slam_profile="none",
-        detector="sim_scene",
-        llm="mock",
-        enable_native=False,
-        enable_semantic=False,
-        enable_gateway=False,
-        render=False,
-        python_autonomy_backend="simple",
-        python_path_follower_backend="pid",
-        drive_mode="policy",
-        max_angular_vel=0.2,
-        waypoint_threshold=0.35,
-        final_waypoint_threshold=0.06,
-        downsample_dist=0.25,
-        path_follower_goal_tolerance=0.08,
-        path_follower_min_speed=0.05,
-        path_follower_max_speed=0.25,
-        run_startup_checks=False,
-    ).build()
-    driver = system.get_module("MujocoDriverModule")
-    ogm = system.get_module("OccupancyGridModule")
-    nav = system.get_module("NavigationModule")
-    local_planner = system.get_module("LocalPlannerModule")
-    path_follower = system.get_module("PathFollowerModule")
-    mux = system.get_module("CmdVelMux")
+    # MuJoCo + ONNX policy state is not repeat-isolated inside one Windows
+    # Python process. Production validation launches this gate in a fresh
+    # process, so keep the test boundary identical to the runtime boundary.
+    script = r'''
+import json
+import math
+import time
 
-    seen = {
-        "costmap": 0,
-        "waypoints": 0,
-        "local_path": 0,
-        "path_follower_cmd": 0,
-        "mux_cmd": 0,
-        "direct_fallback": 0,
-    }
-    odom = []
-    ogm.costmap._add_callback(lambda _: seen.__setitem__("costmap", seen["costmap"] + 1))
-    nav.waypoint._add_callback(lambda _: seen.__setitem__("waypoints", seen["waypoints"] + 1))
-    nav.adapter_status._add_callback(
-        lambda e: seen.__setitem__(
-            "direct_fallback",
-            seen["direct_fallback"] + (1 if e.get("event") == "direct_goal_fallback" else 0),
+from core.blueprints.full_stack import full_stack_blueprint
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
+
+system = full_stack_blueprint(
+    robot="sim_mujoco",
+    world="open_field",
+    slam_profile="none",
+    detector="sim_scene",
+    llm="mock",
+    enable_native=False,
+    enable_semantic=False,
+    enable_gateway=False,
+    render=False,
+    python_autonomy_backend="simple",
+    python_path_follower_backend="pid",
+    drive_mode="policy",
+    policy_path=r"__POLICY_PATH__",
+    max_angular_vel=0.15,
+    waypoint_threshold=0.35,
+    final_waypoint_threshold=0.06,
+    downsample_dist=0.25,
+    path_follower_goal_tolerance=0.08,
+    path_follower_min_speed=0.15,
+    path_follower_max_speed=0.25,
+    path_follower_max_yaw_rate=0.15,
+    run_startup_checks=False,
+).build()
+driver = system.get_module("MujocoDriverModule")
+ogm = system.get_module("OccupancyGridModule")
+nav = system.get_module("NavigationModule")
+local_planner = system.get_module("LocalPlannerModule")
+path_follower = system.get_module("PathFollowerModule")
+mux = system.get_module("CmdVelMux")
+
+seen = {
+    "costmap": 0,
+    "waypoints": 0,
+    "local_path": 0,
+    "path_follower_cmd": 0,
+    "mux_cmd": 0,
+    "direct_fallback": 0,
+}
+odom = []
+z_values = []
+state_history = []
+ogm.costmap._add_callback(lambda _: seen.__setitem__("costmap", seen["costmap"] + 1))
+nav.waypoint._add_callback(lambda _: seen.__setitem__("waypoints", seen["waypoints"] + 1))
+nav.planner_status._add_callback(lambda state: state_history.append(state))
+nav.adapter_status._add_callback(
+    lambda e: seen.__setitem__(
+        "direct_fallback",
+        seen["direct_fallback"] + (1 if e.get("event") == "direct_goal_fallback" else 0),
+    )
+)
+local_planner.local_path._add_callback(
+    lambda _: seen.__setitem__("local_path", seen["local_path"] + 1)
+)
+path_follower.cmd_vel._add_callback(
+    lambda _: seen.__setitem__("path_follower_cmd", seen["path_follower_cmd"] + 1)
+)
+mux.driver_cmd_vel._add_callback(lambda _: seen.__setitem__("mux_cmd", seen["mux_cmd"] + 1))
+driver.odometry._add_callback(
+    lambda m: odom.append(
+        (float(m.pose.position.x), float(m.pose.position.y), float(m.pose.position.z))
+    )
+)
+
+system.start()
+try:
+    deadline = time.time() + 8.0
+    while time.time() < deadline and (seen["costmap"] == 0 or not odom):
+        time.sleep(0.1)
+    if driver._engine is None:
+        raise AssertionError("MuJoCo engine did not start")
+    if driver._engine.drive_mode != "policy" or not driver._engine.has_policy:
+        raise AssertionError("policy drive mode did not load")
+    if seen["costmap"] <= 0:
+        raise AssertionError("costmap was not produced")
+
+    start = odom[-1]
+    goal_x = start[0] + 1.0
+    goal_y = start[1]
+    nav.goal_pose._deliver(
+        PoseStamped(
+            pose=Pose(
+                position=Vector3(goal_x, goal_y, 0.0),
+                orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
+            ),
+            frame_id="map",
+            ts=time.time(),
         )
     )
-    local_planner.local_path._add_callback(
-        lambda _: seen.__setitem__("local_path", seen["local_path"] + 1)
+
+    deadline = time.time() + 18.0
+    moved = 0.0
+    dist_to_goal = math.hypot(goal_x - start[0], goal_y - start[1])
+    while time.time() < deadline:
+        time.sleep(0.1)
+        if odom:
+            moved = math.hypot(odom[-1][0] - start[0], odom[-1][1] - start[1])
+            dist_to_goal = math.hypot(goal_x - odom[-1][0], goal_y - odom[-1][1])
+            z_values.append(odom[-1][2])
+        if (
+            seen["waypoints"] > 0
+            and seen["local_path"] > 0
+            and seen["path_follower_cmd"] > 3
+            and seen["mux_cmd"] > 3
+            and moved > 0.20
+        ):
+            break
+
+    state_at_navigation_evidence = nav._state
+    deadline = time.time() + 2.5
+    while time.time() < deadline and nav._state == "PLANNING":
+        time.sleep(0.05)
+
+    print("__LINGTU_POLICY_NAV_RESULT__" + json.dumps({
+        "seen": seen,
+        "moved": moved,
+        "dist_to_goal": dist_to_goal,
+        "min_z": min(z_values) if z_values else None,
+        "max_z": max(z_values) if z_values else None,
+        "nav_state": nav._state,
+        "state_at_navigation_evidence": state_at_navigation_evidence,
+        "state_history_tail": state_history[-12:],
+    }, sort_keys=True))
+finally:
+    system.stop()
+'''.replace("__POLICY_PATH__", str(policy_path).replace("\\", "\\\\"))
+
+    env = os.environ.copy()
+    repo_root = Path(__file__).resolve().parents[3]
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(repo_root / "src"), str(repo_root), env.get("PYTHONPATH", "")]
     )
-    path_follower.cmd_vel._add_callback(
-        lambda _: seen.__setitem__("path_follower_cmd", seen["path_follower_cmd"] + 1)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=repo_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=45,
     )
-    mux.driver_cmd_vel._add_callback(lambda _: seen.__setitem__("mux_cmd", seen["mux_cmd"] + 1))
-    driver.odometry._add_callback(
-        lambda m: odom.append((float(m.pose.position.x), float(m.pose.position.y), float(m.pose.position.z)))
-    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    marker = "__LINGTU_POLICY_NAV_RESULT__"
+    payloads = [line[len(marker):] for line in result.stdout.splitlines() if line.startswith(marker)]
+    assert payloads, result.stdout + result.stderr
+    report = json.loads(payloads[-1])
 
-    system.start()
-    try:
-        deadline = time.time() + 8.0
-        while time.time() < deadline and (seen["costmap"] == 0 or not odom):
-            time.sleep(0.1)
-        assert driver._engine is not None
-        assert driver._engine.drive_mode == "policy"
-        assert driver._engine.has_policy is True
-        assert seen["costmap"] > 0
-
-        start = odom[-1]
-        goal_x = start[0] + 1.0
-        goal_y = start[1]
-        nav.goal_pose._deliver(
-            PoseStamped(
-                pose=Pose(
-                    position=Vector3(goal_x, goal_y, 0.0),
-                    orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
-                ),
-                frame_id="map",
-                ts=time.time(),
-            )
-        )
-
-        deadline = time.time() + 18.0
-        moved = 0.0
-        dist_to_goal = math.hypot(goal_x - start[0], goal_y - start[1])
-        z_values = []
-        while time.time() < deadline:
-            time.sleep(0.1)
-            if odom:
-                moved = math.hypot(odom[-1][0] - start[0], odom[-1][1] - start[1])
-                dist_to_goal = math.hypot(goal_x - odom[-1][0], goal_y - odom[-1][1])
-                z_values.append(odom[-1][2])
-            if (
-                seen["waypoints"] > 0
-                and seen["local_path"] > 0
-                and seen["path_follower_cmd"] > 3
-                and seen["mux_cmd"] > 3
-                and moved > 0.20
-            ):
-                break
-
-        assert seen["waypoints"] > 0
-        assert seen["local_path"] > 0
-        assert seen["path_follower_cmd"] > 3
-        assert seen["mux_cmd"] > 3
-        assert seen["direct_fallback"] == 0
-        assert moved > 0.20
-        assert dist_to_goal < 0.90
-        assert min(z_values) > 0.35
-        assert max(z_values) < 0.50
-        assert nav._state in ("EXECUTING", "SUCCESS")
-    finally:
-        system.stop()
+    seen = report["seen"]
+    assert seen["waypoints"] > 0
+    assert seen["local_path"] > 0
+    assert seen["path_follower_cmd"] > 3
+    assert seen["mux_cmd"] > 3
+    assert seen["direct_fallback"] == 0
+    assert report["moved"] > 0.20
+    assert report["dist_to_goal"] < 0.90
+    assert report["min_z"] > 0.35
+    assert report["max_z"] < 0.50
+    assert report["nav_state"] in ("EXECUTING", "SUCCESS"), report
 
 
 def test_sim_mujoco_full_stack_routes_autonomy_cmds_through_mux():

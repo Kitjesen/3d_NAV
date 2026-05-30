@@ -86,7 +86,7 @@ def _gate_crossing(path: list[tuple[float, float, float]] | list[list[float]]) -
 def _pct_runtime_evidence() -> dict[str, Any]:
     try:
         info = inspect_pct_runtime(ROOT)
-        return {
+        evidence = {
             "ok": bool(info.get("ok")),
             "canonical_arch": info.get("canonical_arch"),
             "python_tag": info.get("python_tag"),
@@ -95,6 +95,20 @@ def _pct_runtime_evidence() -> dict[str, Any]:
             "shared_missing": info.get("shared_missing", []),
             "error": info.get("error", ""),
         }
+        for key in (
+            "known_good_python_tag",
+            "python_abi_matches_known_good",
+            "platform_system",
+            "os_name",
+            "native_binary_format",
+            "host_platform_supported",
+            "host_platform_blocker",
+            "candidate_diagnostics",
+            "recommended_build_command",
+        ):
+            if key in info:
+                evidence[key] = info[key]
+        return evidence
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
@@ -108,6 +122,11 @@ def _plan_with_backend(
 ) -> dict[str, Any]:
     planner_name = planner_name.lower().strip()
     native_runtime = _pct_runtime_evidence() if planner_name == "pct" else None
+    environment_blocked = bool(
+        planner_name == "pct"
+        and isinstance(native_runtime, dict)
+        and native_runtime.get("ok") is not True
+    )
     svc = GlobalPlannerService(
         planner_name=planner_name,
         tomogram=str(assets.tomogram),
@@ -125,6 +144,8 @@ def _plan_with_backend(
             "error": str(exc),
             "native_backend_used": False,
             "native_runtime": native_runtime,
+            "status": "blocked" if environment_blocked else "failed",
+            "failure_category": "environment_runtime" if environment_blocked else "planner_runtime",
             "plan_ms": 0.0,
             "start": list(route.start),
             "goal": list(route.goal),
@@ -146,6 +167,7 @@ def _plan_with_backend(
         elapsed_ms = (time.perf_counter() - start_t) * 1000.0
         error = str(exc)
     native_backend_used = bool(planner_name == "pct" and backend_available and path)
+    status = "passed" if path else "blocked" if environment_blocked else "failed"
     return {
         "planner": planner_name,
         "backend_class": backend.__class__.__name__ if backend is not None else "",
@@ -154,6 +176,14 @@ def _plan_with_backend(
         "backend_available": backend_available,
         "native_backend_used": native_backend_used,
         "native_runtime": native_runtime,
+        "status": status,
+        "failure_category": (
+            ""
+            if path
+            else "environment_runtime"
+            if environment_blocked
+            else "planner_runtime"
+        ),
         "load_error": str(getattr(backend, "_load_error", "")) if backend is not None else "",
         "error": error,
         "plan_ms": round(float(elapsed_ms), 3),
@@ -216,6 +246,9 @@ def _selection_evidence(planning: list[dict[str, Any]]) -> dict[str, Any]:
             "feasible": bool(plan.get("feasible")),
             "route_ok": bool(plan.get("route_ok")),
             "reason": (
+                "environment_blocked"
+                if plan.get("failure_category") == "environment_runtime"
+                else
                 "not_feasible"
                 if not plan.get("feasible")
                 else "unsafe_or_invalid_route"
@@ -251,6 +284,10 @@ def run_validation(
     cases = []
     all_ok = True
     planner_names = tuple(dict.fromkeys(planner.lower().strip() for planner in planners if planner.strip()))
+    native_runtime = _pct_runtime_evidence() if "pct" in planner_names else None
+    environment_blockers: list[str] = []
+    if isinstance(native_runtime, dict) and native_runtime.get("ok") is not True:
+        environment_blockers.append("PCT native runtime unavailable")
     for route_name in routes:
         if route_name not in route_by_name:
             raise ValueError(f"unknown route {route_name!r}")
@@ -321,6 +358,8 @@ def run_validation(
             "map_pcd": str(assets.map_pcd),
             "metadata": str(assets.metadata),
         },
+        "native_runtime": native_runtime,
+        "environment_blockers": environment_blockers,
         "routes": list(routes),
         "planners": list(planner_names),
         "cases": cases,

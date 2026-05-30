@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+from core.runtime_interface import TOPICS, map_frame_id
+
 
 def _default_map_dir() -> str:
     """Return the default on-robot map storage directory.
@@ -56,6 +58,7 @@ def _resolve_tomogram() -> str:
 
 
 _ACTIVE_TOMOGRAM = _resolve_tomogram()
+RUNTIME_MAP_FRAME_ID = map_frame_id()
 
 ROBOT_PRESETS = {
     "stub": dict(robot="stub", slam_profile="none", detector="yoloe", encoder="mobileclip"),
@@ -108,7 +111,7 @@ PROFILES = {
         enable_semantic=False,
         enable_gateway=True,
         enable_map_modules=True,
-        planning_frame_id="map",
+        planning_frame_id=RUNTIME_MAP_FRAME_ID,
         gateway_port=5050,
     ),
     "nav": dict(
@@ -139,7 +142,7 @@ PROFILES = {
         # App/Web goals, semantic targets, saved locations, maps, and PCT paths
         # are all contracted in map frame. SlamBridgeModule normalizes
         # localization output into that contract before the Module graph sees it.
-        planning_frame_id="map",
+        planning_frame_id=RUNTIME_MAP_FRAME_ID,
         gateway_port=5050,
     ),
     "super_lio": dict(
@@ -155,7 +158,7 @@ PROFILES = {
         enable_semantic=True,
         enable_gateway=True,
         enable_map_modules=True,
-        planning_frame_id="map",
+        planning_frame_id=RUNTIME_MAP_FRAME_ID,
         gateway_port=5050,
     ),
     "super_lio_relocation": dict(
@@ -171,7 +174,7 @@ PROFILES = {
         enable_semantic=True,
         enable_gateway=True,
         enable_map_modules=True,
-        planning_frame_id="map",
+        planning_frame_id=RUNTIME_MAP_FRAME_ID,
         gateway_port=5050,
     ),
     "explore": dict(
@@ -190,8 +193,9 @@ PROFILES = {
         # TARE-only since 1c457f3. Keep exploration_backend="none" so we
         # don't try to spawn a TARE NativeModule on top of wavefront.
         enable_frontier=True,
+        enable_traversable_frontier=True,
         exploration_backend="none",
-        planning_frame_id="map",
+        planning_frame_id=RUNTIME_MAP_FRAME_ID,
         gateway_port=5050,
     ),
     "tare_explore": dict(
@@ -209,7 +213,7 @@ PROFILES = {
         enable_frontier=False,
         exploration_backend="tare",
         tare_scenario="forest",
-        planning_frame_id="map",
+        planning_frame_id=RUNTIME_MAP_FRAME_ID,
         gateway_port=5050,
     ),
     "sim": dict(
@@ -249,9 +253,10 @@ PROFILES = {
         enable_map_modules=True,
         enable_camera=False,
         use_driver_camera=False,
-        cloud_topic="/nav/map_cloud",
-        planning_frame_id="map",
+        cloud_topic=TOPICS.map_cloud,
+        planning_frame_id=RUNTIME_MAP_FRAME_ID,
         enable_frontier=True,
+        enable_traversable_frontier=True,
         exploration_backend="none",
         frontier_safe_distance=0.80,
         frontier_max_dist=25.0,
@@ -282,10 +287,10 @@ PROFILES = {
         enable_map_modules=True,
         enable_camera=True,
         use_driver_camera=True,
-        cloud_topic="/nav/map_cloud",
+        cloud_topic=TOPICS.map_cloud,
         # Gazebo raw topics enter through ROS2SimDriverModule, but LingTu
         # planning and App/Web goal contracts stay in map frame.
-        planning_frame_id="map",
+        planning_frame_id=RUNTIME_MAP_FRAME_ID,
         # The Gazebo profile is ROS-native at the simulator boundary, while
         # planning/tracking stay in the Module graph so /nav/local_path cannot
         # disappear into an unbridged external ROS2 process.
@@ -310,8 +315,8 @@ PROFILES = {
         enable_map_modules=True,
         enable_camera=True,
         use_driver_camera=True,
-        cloud_topic="/nav/map_cloud",
-        planning_frame_id="map",
+        cloud_topic=TOPICS.map_cloud,
+        planning_frame_id=RUNTIME_MAP_FRAME_ID,
         enable_frontier=True,
         exploration_backend="none",
         frontier_safe_distance=0.80,
@@ -366,7 +371,7 @@ PROFILES = {
         partial_goal_repeat_ignore_window_s=5.0,
         external_strategy_path_control=False,
         external_strategy_start_tolerance_m=1.5,
-        planning_frame_id="map",
+        planning_frame_id=RUNTIME_MAP_FRAME_ID,
         latch_stop_signal=False,
         run_startup_checks=False,
         manage_external_services=False,

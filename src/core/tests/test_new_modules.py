@@ -43,6 +43,11 @@ class TestNavigationModule(unittest.TestCase):
         self.assertIn("planner_status", m.ports_out)
         self.assertIn("mission_status", m.ports_out)
 
+    def test_default_waypoint_z_threshold_matches_step_limit(self):
+        m = self._make()
+
+        self.assertAlmostEqual(m._tracker._z_threshold, 0.25)
+
     def test_set_state_publishes(self):
         m = self._make()
         statuses = []
@@ -108,6 +113,41 @@ class TestNavigationModule(unittest.TestCase):
         m._on_odom(odom)
         self.assertAlmostEqual(m._robot_pos[0], 1.0)
         self.assertAlmostEqual(m._robot_pos[1], 2.0)
+
+    def test_on_odom_rejects_non_planning_frame_without_transform(self):
+        m = self._make()
+        events = []
+        m.adapter_status._add_callback(events.append)
+
+        m._on_odom(Odometry(
+            pose=Pose(position=Vector3(1, 2, 0)),
+            frame_id="odom",
+            ts=time.time(),
+        ))
+
+        self.assertEqual(m._odom_frame_id, "odom")
+        np.testing.assert_array_equal(m._robot_pos, np.zeros(3))
+        self.assertTrue(
+            any(event.get("event") == "frame_mismatch" for event in events)
+        )
+
+    def test_on_odom_rejects_non_contract_frame(self):
+        m = self._make()
+        events = []
+        m.adapter_status._add_callback(events.append)
+        m._state = "EXECUTING"
+
+        m._on_odom(Odometry(
+            pose=Pose(position=Vector3(1, 2, 0)),
+            frame_id="camera_link",
+            ts=time.time(),
+        ))
+
+        self.assertEqual(m._state, "FAILED")
+        self.assertEqual(events[-1]["event"], "navigation_blocked")
+        self.assertEqual(events[-1]["source"], "odometry")
+        self.assertEqual(events[-1]["expected_frame"], "map")
+        self.assertEqual(events[-1]["received_frame"], "camera_link")
 
     def test_on_odom_updates_yaw_and_tracker(self):
         from nav.waypoint_tracker import TrackerStatus
@@ -407,6 +447,57 @@ class TestNavigationModule(unittest.TestCase):
         self.assertEqual(m._tracker.path_length, first_path_len)
         self.assertTrue(any(e.get("event") == "goal_update_ignored" for e in events))
 
+    def test_same_xy_different_z_goal_update_is_not_ignored(self):
+        m = self._make(enable_ros2_bridge=False, allow_direct_goal_fallback=True)
+
+        class _NoMapBackend:
+            _grid = None
+
+            def plan(self, start, goal, **kwargs):
+                return []
+
+        m._planner_svc._backend = _NoMapBackend()
+        m._robot_pos = np.array([0.0, 0.0, 0.0])
+        events = []
+        m.adapter_status._add_callback(events.append)
+
+        m._on_goal(PoseStamped(
+            pose=Pose(position=Vector3(4.0, 2.0, 0.0), orientation=Quaternion()),
+            frame_id="map", ts=time.time(),
+        ))
+        events.clear()
+
+        m._on_goal(PoseStamped(
+            pose=Pose(position=Vector3(4.0, 2.0, 3.0), orientation=Quaternion()),
+            frame_id="map", ts=time.time(),
+        ))
+
+        self.assertAlmostEqual(m._goal[2], 3.0)
+        self.assertFalse(any(e.get("event") == "goal_update_ignored" for e in events))
+
+    def test_navigate_to_skill_accepts_explicit_z(self):
+        m = self._make(enable_ros2_bridge=False, allow_direct_goal_fallback=True)
+        m._robot_pos = np.array([1.0, 2.0, 1.25])
+
+        result = json.loads(m.navigate_to(4.0, 5.0, yaw=0.25, z=2.5))
+
+        self.assertEqual(result["goal"], [4.0, 5.0, 2.5])
+        self.assertAlmostEqual(m._goal[2], 2.5)
+        self.assertAlmostEqual(m._active_path_terminal_goal[2], 2.5)
+
+    def test_navigate_to_skill_defaults_z_to_current_floor(self):
+        m = self._make(enable_ros2_bridge=False, allow_direct_goal_fallback=True)
+        m._on_odom(Odometry(
+            pose=Pose(position=Vector3(1.0, 2.0, 1.75)),
+            frame_id="map",
+            ts=time.time(),
+        ))
+
+        result = json.loads(m.navigate_to(4.0, 5.0))
+
+        self.assertEqual(result["goal"], [4.0, 5.0, 1.75])
+        self.assertAlmostEqual(m._goal[2], 1.75)
+
     def test_rejects_non_map_goal_frame(self):
         m = self._make(enable_ros2_bridge=False, allow_direct_goal_fallback=True)
         events = []
@@ -432,6 +523,28 @@ class TestNavigationModule(unittest.TestCase):
             statuses[-1]["failure_reason"],
             "unsupported goal_pose frame 'odom'; expected 'map'",
         )
+
+    def test_rejects_non_finite_goal_coordinates(self):
+        m = self._make(enable_ros2_bridge=False, allow_direct_goal_fallback=True)
+        events = []
+        statuses = []
+        waypoints = []
+        m.adapter_status._add_callback(events.append)
+        m.mission_status._add_callback(statuses.append)
+        m.waypoint._add_callback(waypoints.append)
+
+        m._on_goal(PoseStamped(
+            pose=Pose(position=Vector3(float("nan"), 2.0, 0.0), orientation=Quaternion()),
+            frame_id="map", ts=time.time(),
+        ))
+
+        self.assertIsNone(m._goal)
+        self.assertEqual(m._state, "IDLE")
+        self.assertEqual(waypoints, [])
+        self.assertEqual(events[-1]["event"], "goal_rejected")
+        self.assertEqual(events[-1]["reason"], "invalid_coordinates")
+        self.assertEqual(events[-1]["source"], "goal_pose")
+        self.assertEqual(statuses[-1]["failure_reason"], "invalid goal_pose coordinates")
 
     def test_mission_status_exposes_coordinate_frames(self):
         m = self._make()
@@ -1425,6 +1538,7 @@ class TestSemanticPlannerModule(unittest.TestCase):
                     "best": {
                         "x": 6.0,
                         "y": 7.0,
+                        "z": 1.25,
                         "labels": "charger",
                         "score": 0.95,
                     },
@@ -1452,6 +1566,7 @@ class TestSemanticPlannerModule(unittest.TestCase):
         self.assertEqual(len(goals), 1)
         self.assertAlmostEqual(goals[0].pose.position.x, 6.0)
         self.assertAlmostEqual(goals[0].pose.position.y, 7.0)
+        self.assertAlmostEqual(goals[0].pose.position.z, 1.25)
         self.assertIn("VECTOR_MEMORY", statuses)
 
     def test_scene_graph_stored_as_object(self):

@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from core.runtime_interface import map_frame_id
 from core.utils.sanitize import safe_json_loads, sanitize_position
 
 from .adacot import AdaCoTConfig, AdaCoTDecision, AdaCoTRouter
@@ -51,6 +52,7 @@ except ImportError:
     TopologySemGraph = None
 
 logger = logging.getLogger(__name__)
+GOAL_RESOLVER_MAP_FRAME_ID = map_frame_id()
 
 
 # ── 多源置信度权重 (AdaNav 不确定性融合) ──
@@ -74,7 +76,7 @@ class GoalResult:
     error: str = ""
     path: str = ""                 # "fast" | "slow" — 标记走了哪条路径
     candidate_id: int = -1         # BA-HSG: 候选物体 ID
-    frame_id: str = "map"          # 坐标帧 (默认 map, 与 planner_node 一致)
+    frame_id: str = GOAL_RESOLVER_MAP_FRAME_ID
     hint_room: str = ""                            # OmniNav: 目标所在推测房间名
     hint_room_center: list[float] | None = None # OmniNav: 房间中心坐标 [x,y,z]
     score_entropy: float = 0.0                     # AdaNav: Fast Path 得分熵
@@ -397,5 +399,5 @@ class GoalResolver(FastPathMixin, SlowPathMixin):
             is_valid=True,
             path="fast",
             candidate_id=next_target.object_id,
-            frame_id="map",  # BA-HSG 多假设验证使用 map 坐标系
+            frame_id=GOAL_RESOLVER_MAP_FRAME_ID,
         )

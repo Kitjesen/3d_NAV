@@ -32,6 +32,8 @@ PCT_SHARED_LIBS = (
     "libgpmp_optimizer.so",
     "libele_planner_lib.so",
 )
+PCT_NATIVE_BINARY_FORMAT = "linux_elf"
+PCT_KNOWN_GOOD_PYTHON_TAG = "py310"
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,64 @@ def _missing_shared_libs(path: Path) -> list[str]:
 
 def _has_runtime_shared_libs(path: Path) -> bool:
     return not _missing_shared_libs(path)
+
+
+def _platform_system() -> str:
+    return platform.system().lower()
+
+
+def _host_platform_supported(system: str | None = None) -> bool:
+    return (system or _platform_system()) == "linux"
+
+
+def _host_platform_blocker(system: str | None = None) -> str:
+    resolved = system or _platform_system()
+    if _host_platform_supported(resolved):
+        return ""
+    return (
+        "PCT native artifacts are Linux ELF extension modules; run this gate on "
+        f"Linux or build a matching native runtime for host platform {resolved!r}."
+    )
+
+
+def _recommended_build_command(canonical_arch: str) -> str:
+    if canonical_arch == "x86_64":
+        return "bash src/global_planning/PCT_planner_runnable/build_host_x86_64.sh"
+    if canonical_arch == "aarch64":
+        return (
+            "build on the S100P/aarch64 target or deploy matching "
+            "PCT_planner/planner/lib CPython 3.10 artifacts"
+        )
+    return "build matching PCT native artifacts for this host architecture and Python ABI"
+
+
+def _available_extension_modules(path: Path) -> list[str]:
+    if not path.is_dir():
+        return []
+    names: list[str] = []
+    for module in PCT_EXTENSION_MODULES:
+        names.extend(item.name for item in path.glob(f"{module}.cpython-*-*.so"))
+    return sorted(names)
+
+
+def _candidate_diagnostic(
+    path: Path,
+    py_tag: str,
+    canonical_arch: str,
+) -> dict[str, Any]:
+    missing = [
+        _expected_extension_name(module, py_tag, canonical_arch)
+        for module in PCT_EXTENSION_MODULES
+        if not any(path.glob(_extension_glob(module, py_tag)))
+    ]
+    return {
+        "path": str(path),
+        "exists": path.is_dir(),
+        "available_extension_modules": _available_extension_modules(path),
+        "missing": missing,
+        "shared_missing": _missing_shared_libs(path),
+        "has_current_abi_extensions": path.is_dir() and not missing,
+    }
 
 
 def _candidate_lib_dirs(lib_root: Path, canonical_arch: str, py_tag: str) -> list[Path]:
@@ -206,6 +266,7 @@ def inspect_pct_runtime(
     canonical_arch = _canonical_arch(machine)
     py_tag = _python_tag()
     candidates = _candidate_runtime_dirs(root, runnable_root, lib_root, canonical_arch, py_tag)
+    platform_system = _platform_system()
 
     try:
         paths = resolve_pct_runtime_paths(root, machine=machine)
@@ -232,12 +293,24 @@ def inspect_pct_runtime(
         "machine": (machine or platform.machine()).lower(),
         "canonical_arch": canonical_arch,
         "python_tag": py_tag,
+        "known_good_python_tag": PCT_KNOWN_GOOD_PYTHON_TAG,
+        "python_abi_matches_known_good": py_tag == PCT_KNOWN_GOOD_PYTHON_TAG,
+        "platform_system": platform_system,
+        "os_name": os.name,
+        "native_binary_format": PCT_NATIVE_BINARY_FORMAT,
+        "host_platform_supported": _host_platform_supported(platform_system),
+        "host_platform_blocker": _host_platform_blocker(platform_system),
         "lib_dir": str(chosen),
         "searched": [str(path) for path in candidates],
+        "candidate_diagnostics": [
+            _candidate_diagnostic(path, py_tag, canonical_arch)
+            for path in candidates
+        ],
         "required": required,
         "missing": missing,
         "shared_missing": shared_missing,
         "optional_missing": [],
+        "recommended_build_command": _recommended_build_command(canonical_arch),
         "ok": not missing and not shared_missing,
         "error": load_error,
     }

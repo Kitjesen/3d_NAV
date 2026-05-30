@@ -707,6 +707,30 @@ def test_robot_fastlio2_service_matches_adapter_alias_contract():
     assert f"-r /path:=/lio_path" in text
 
 
+def test_s100p_lidar_service_normalizes_livox_topics_at_adapter_boundary():
+    text = _read("scripts/deploy/s100p/lidar.service")
+
+    assert "-r livox/lidar:=/nav/lidar_scan" in text
+    assert "-r livox/imu:=/nav/imu" in text
+    assert "-r /nav/lidar_scan:=livox/lidar" not in text
+    assert "-r /nav/imu:=livox/imu" not in text
+
+
+def test_s100p_slam_service_matches_fastlio2_adapter_contract():
+    text = _read("scripts/deploy/s100p/slam.service")
+
+    for source, target in adapter_remappings("fastlio2").items():
+        assert f"-r {source}:={target}" in text
+    assert "-r /path:=/lio_path" in text
+
+
+def test_s100p_slam_pgo_service_uses_canonical_fastlio_topics():
+    text = _read("scripts/deploy/s100p/slam_pgo.service")
+
+    for source, target in adapter_remappings("pgo").items():
+        assert f"-r {source}:={target}" in text
+
+
 def test_s100p_localizer_template_matches_relocalize_api():
     text = _read("scripts/deploy/s100p/localizer.service")
 
@@ -728,6 +752,40 @@ def test_localizer_launch_profile_matches_topic_contract():
     assert f'("/localization_quality", "{TOPICS.localization_quality}")' in text
     assert f'("global_relocalize", "{TOPICS.global_relocalize_service}")' in text
     assert '("map_cloud", "/nav/map_cloud")' not in text
+
+
+@pytest.mark.parametrize(
+    ("launch_path", "surface"),
+    (
+        ("launch/profiles/slam_fastlio2.launch.py", "fastlio2"),
+        ("launch/profiles/slam_pointlio.launch.py", "pointlio"),
+    ),
+)
+def test_slam_launch_profiles_match_adapter_contract(launch_path, surface):
+    text = " ".join(_read(launch_path).split())
+
+    for source, target in adapter_remappings(surface).items():
+        assert f'("{source}", "{target}")' in text
+
+
+@pytest.mark.parametrize(
+    "service_path",
+    (
+        "scripts/deploy/s100p/super_lio.service",
+        "scripts/deploy/s100p/super_lio_relocation.service",
+    ),
+)
+def test_s100p_super_lio_services_publish_canonical_nav_topics(service_path):
+    text = _read(service_path)
+
+    assert "Environment=SUPER_LIO_LIDAR_TOPIC=/nav/lidar_scan" in text
+    assert "Environment=SUPER_LIO_IMU_TOPIC=/nav/imu" in text
+    assert '-p "lio.ros.lidar_topic:=$${SUPER_LIO_LIDAR_TOPIC}"' in text
+    assert '-p "lio.ros.imu_topic:=$${SUPER_LIO_IMU_TOPIC}"' in text
+    assert '-r "/lio/odom:=/nav/odometry"' in text
+    assert '-r "/lio/cloud_world:=/nav/map_cloud"' in text
+    assert '-r "/lio/imu/odom:=/nav/imu_odom"' in text
+    assert '-r "/lio/robo/odom:=/nav/robot_odom"' in text
 
 
 def test_topic_contract_names_static_map_and_global_relocalize():
@@ -1285,6 +1343,74 @@ def test_lingtu_routecompare_is_allow_motion_gated():
     assert cmd_impl.index('if [ "$allow_motion" != "1" ]') < cmd_impl.index(
         "routecompare_run_backend"
     )
+
+
+def test_lingtu_exposes_product_acceptance_gateway_commands():
+    text = _read("scripts/lingtu")
+    start = text.index("cmd_dataflow_usage()")
+    end = text.index("# -- Subcommand: evidence --", start)
+    impl = text[start:end]
+
+    assert "Usage: lingtu dataflow" in impl
+    assert "Usage: lingtu gateway-runtime-acceptance" in impl
+    assert "Usage: lingtu field-check" in impl
+    assert "Usage: lingtu saved-map-artifact-gate" in impl
+    assert "Gateway + ModulePorts" in impl
+    assert "ROS2 topic inspection is not required" in impl
+    assert 'cmd+=(--gateway-url "$GW")' in impl
+    assert "dataflow|flow" in text
+    assert "gateway-runtime-acceptance|gateway-acceptance|gw-accept" in text
+    assert "field-check|field-acceptance|accept" in text
+    assert "saved-map-artifact-gate|map-gate" in text
+    assert "/api/v1/goal" not in impl
+    assert "/api/v1/cmd_vel" not in impl
+    assert "cmd_nav" not in impl
+
+
+def test_lingtu_product_acceptance_wrappers_delegate_to_lingtu_py(tmp_path):
+    fake_python = tmp_path / "fake_python.sh"
+    calls = tmp_path / "python_calls.txt"
+    _write_executable(
+        fake_python,
+        f"""
+        #!/usr/bin/env bash
+        printf '%s\n' "$*" >> {shlex.quote(_wsl_path(calls))}
+        case "$*" in
+            *"dataflow"*) echo "Runtime dataflow: PASS" ;;
+            *"gateway-runtime-acceptance"*) echo "Gateway runtime acceptance: PASS" ;;
+            *"field-check"*) echo "Product field check: PASS" ;;
+            *"saved-map-artifact-gate"*) echo "Saved-map artifact gate: PASS" ;;
+        esac
+        """,
+    )
+
+    commands = [
+        "dataflow odometry",
+        "gw-accept --acceptance-mode field",
+        "accept /tmp/map --require-tomogram",
+        "map-gate /tmp/map --require-occupancy",
+    ]
+    for index, command in enumerate(commands):
+        run_dir = tmp_path / f"run_{index}"
+        run_dir.mkdir()
+        result, _harness = _run_lingtu_command(
+            run_dir,
+            command,
+            extra_env={"LINGTU_PYTHON": _wsl_path(fake_python)},
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    log = calls.read_text(encoding="utf-8")
+    assert "lingtu.py dataflow --gateway-url http://fake-gateway:5050 odometry" in log
+    assert (
+        "lingtu.py gateway-runtime-acceptance --gateway-url "
+        "http://fake-gateway:5050 --acceptance-mode field"
+    ) in log
+    assert (
+        "lingtu.py field-check --gateway-url "
+        "http://fake-gateway:5050 /tmp/map --require-tomogram"
+    ) in log
+    assert "lingtu.py saved-map-artifact-gate /tmp/map --require-occupancy" in log
 
 
 def test_lingtu_nav_goal_prechecks_readiness_and_plan_preview(tmp_path):

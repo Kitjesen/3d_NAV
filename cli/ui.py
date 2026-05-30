@@ -14,11 +14,21 @@ from pathlib import Path
 from . import term as T
 from .profiles_data import PROFILES
 from .run_state import clear_run_state, is_pid_alive, read_run_state, resolve_log_file
+from .runtime_display import (
+    format_frame_links,
+    format_runtime_boundary,
+    format_runtime_flow,
+    format_runtime_flow_stages,
+    format_runtime_frames,
+    format_runtime_sources,
+    format_runtime_topic_frames,
+)
 
 
 def _vlen(s: str) -> int:
     """Visible length of a string — strips ANSI escape codes."""
     return len(re.sub(r'\033\[[0-9;]*m', '', s))
+
 
 # ── LOGO ──────────────────────────────────────────────────────────────────────
 # figlet font: "ANSI Shadow"
@@ -45,6 +55,27 @@ _PROFILE_META = {
     "dev":     ("◇", "Test perception & planning without a robot",   T.navy),
     "stub":    ("○", "Framework testing only",                       T.dim),
 }
+
+_PRODUCT_PROFILE_NAMES = ("map", "nav", "explore")
+_ADVANCED_PROFILE_NAMES = ("tare_explore",)
+_EXPERIMENTAL_PROFILE_NAMES = ("super_lio", "super_lio_relocation")
+
+
+def _profile_tier(name: str) -> str:
+    if name in _PRODUCT_PROFILE_NAMES:
+        return "product"
+    if name in _ADVANCED_PROFILE_NAMES:
+        return "advanced"
+    if name in _EXPERIMENTAL_PROFILE_NAMES:
+        return "experimental"
+    return "dev"
+
+
+def _visible_profile_names(*, show_all: bool = False) -> list[str]:
+    if show_all:
+        return list(PROFILES.keys())
+    return [name for name in _PRODUCT_PROFILE_NAMES if name in PROFILES]
+
 
 # Which wizard questions are relevant per profile.
 # Keys: "semantic", "gateway", "teleop"
@@ -164,7 +195,7 @@ def select_interactive() -> str:
     """Full-screen profile picker with LOGO and styled cards."""
     _print_logo()
 
-    names = list(PROFILES.keys())
+    names = _visible_profile_names()
     W = 54  # card inner width
 
     print(T.navy(f"  ┌{'─' * W}┐"))
@@ -295,10 +326,14 @@ def wizard_interactive(profile_name: str, cfg: dict) -> None:
     print()
 
 
-def list_profiles():
-    print(f"\n  {T.bold('Available profiles:')}\n")
-    for name, p in PROFILES.items():
-        print(f"  {T.green(f'{name:10s}')} {p['_desc']}")
+def list_profiles(*, show_all: bool = False):
+    title = "Available product profiles" if not show_all else "Available profiles"
+    print(f"\n  {T.bold(title + ':')}\n")
+    for name in _visible_profile_names(show_all=show_all):
+        p = PROFILES[name]
+        tier = _profile_tier(name)
+        tier_note = "" if tier == "product" else f" [{tier}]"
+        print(f"  {T.green(f'{name:10s}')} {p['_desc']}{T.dim(tier_note)}")
         parts = []
         if p.get("robot"):
             parts.append(f"robot={p['robot']}")
@@ -311,7 +346,13 @@ def list_profiles():
         if not p.get("enable_semantic"):
             parts.append("no-semantic")
         print(f"  {T.dim('           ' + ', '.join(parts))}")
+    if not show_all:
+        print(T.dim("  Use --list --all to show advanced, simulation, and dev profiles."))
     print("\n  Override any flag: lingtu nav --llm mock\n")
+
+
+def _force_stop_signal() -> int:
+    return getattr(signal, "SIGKILL", signal.SIGTERM)
 
 
 def cmd_stop(force: bool = False) -> None:
@@ -328,7 +369,7 @@ def cmd_stop(force: bool = False) -> None:
 
     print(f"  Stopping PID {pid} (profile: {state.get('profile', '?')})...")
     try:
-        os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
+        os.kill(pid, _force_stop_signal() if force else signal.SIGTERM)
     except OSError as e:
         print(f"  Failed to stop: {e}")
         sys.exit(1)
@@ -347,7 +388,7 @@ def cmd_stop(force: bool = False) -> None:
 
     print(f"  {T.yellow('Process still alive after 15s. Force kill?')}")
     try:
-        os.kill(pid, signal.SIGKILL)
+        os.kill(pid, _force_stop_signal())
         clear_run_state()
         print(f"  {T.green('Force killed.')}")
     except OSError:
@@ -391,6 +432,8 @@ def cmd_status_external(as_json: bool = False) -> None:
     modules = state.get("module_count")
     wires = state.get("wire_count")
     runtime_status = state.get("status", "running")
+    runtime = state.get("runtime")
+    runtime = runtime if isinstance(runtime, dict) else {}
 
     status_label = T.green(runtime_status) if alive else T.red("dead (stale PID)")
     print(f"\n  Status:    {status_label}")
@@ -398,6 +441,14 @@ def cmd_status_external(as_json: bool = False) -> None:
     print(f"  Host:      {host}")
     print(f"  Version:   {version}")
     print(f"  Profile:   {profile}")
+    if runtime:
+        print(f"  Runtime:  {format_runtime_boundary(runtime)}")
+        print(f"  SLAM:     {format_runtime_sources(runtime)}")
+        print(f"  Frame ids: {format_runtime_frames(runtime)}")
+        print(f"  Frames:   {format_frame_links(runtime)}")
+        print(f"  Topic frames: {format_runtime_topic_frames(runtime)}")
+        print(f"  Flow:     {format_runtime_flow(runtime)}")
+        print(f"  Flow stages: {format_runtime_flow_stages(runtime)}")
     print(f"  Started:   {started}")
     if uptime is not None:
         print(f"  Uptime:    {format_uptime(uptime)}")

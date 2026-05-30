@@ -36,6 +36,7 @@ from core.module import Module, skill
 from core.msgs.geometry import Pose, PoseStamped
 from core.msgs.nav import Odometry
 from core.registry import register
+from core.runtime_interface import map_frame_id
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ logger = logging.getLogger(__name__)
 FREE     =  0
 OCCUPIED = 100
 UNKNOWN  = -1
+FRONTIER_MAP_FRAME_ID = map_frame_id()
 
 # 4-connectivity neighbours (row_delta, col_delta)
 _NEIGH4 = [(-1, 0), (1, 0), (0, -1), (0, 1)]
@@ -445,7 +447,7 @@ class WavefrontFrontierExplorer(Module, layer=2):
             goal = self._make_pose_stamped(
                 best["cx"],
                 best["cy"],
-                frame_id=str(meta.get("frame_id") or "map"),
+                frame_id=str(meta.get("frame_id") or FRONTIER_MAP_FRAME_ID),
             )
             with self._state_lock:
                 self._current_goal = (float(best["cx"]), float(best["cy"]))
@@ -652,7 +654,7 @@ class WavefrontFrontierExplorer(Module, layer=2):
                 "origin_y":   float(data.get("origin_y", 0.0)),
                 "width":      w,
                 "height":     h,
-                "frame_id":   str(data.get("frame_id") or "map"),
+                "frame_id":   str(data.get("frame_id") or FRONTIER_MAP_FRAME_ID),
             }
             return grid, meta
 
@@ -1452,7 +1454,13 @@ class WavefrontFrontierExplorer(Module, layer=2):
     # Helpers
     # -------------------------------------------------------------------------
 
-    def _make_pose_stamped(self, x: float, y: float, *, frame_id: str = "map") -> PoseStamped:
+    def _make_pose_stamped(
+        self,
+        x: float,
+        y: float,
+        *,
+        frame_id: str = FRONTIER_MAP_FRAME_ID,
+    ) -> PoseStamped:
         """Create a PoseStamped in the map frame at (x, y, 0)."""
         return PoseStamped(
             pose=Pose(float(x), float(y), 0.0),

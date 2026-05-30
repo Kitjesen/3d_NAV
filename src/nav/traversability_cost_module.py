@@ -1,31 +1,34 @@
-"""TraversabilityCostModule — map layer hub: ESDF relay + slope visualization.
+"""TraversabilityCostModule - ESDF relay, slope view, and fused cost map.
 
 NAV COMPUTE CONTRACT (docs/architecture/NAVIGATION_COMPUTE_CONTRACT.md):
   This module produces the L2 SAFETY-GATING / observability signal `fused_cost`
-  (a RISK grid = occupancy + slope + ESDF proximity). Consumers are the GLOBAL
-  safety gate (NavigationModule.costmap), exploration, and Gateway visualization
-  — NOT the local planner's primary scoring. The `esdf_field` relay to
-  LocalPlanner is a RESERVED extension point: nav_core's LocalPlannerCore has no
-  set_esdf binding yet, so ESDF does NOT currently influence local scoring.
+  (a RISK grid = occupancy + slope + ESDF proximity). Its consumers are the
+  GLOBAL safety gate (NavigationModule.costmap), exploration, and the Gateway
+  visualization — NOT the local planner's primary scoring. On S100P with PCT
+  active, fused_cost is only a safe-goal/path-safety helper, not a planner.
+
+The `esdf_field` relay to LocalPlanner is a RESERVED extension point:
+nav_core's LocalPlannerCore has no set_esdf binding yet, so ESDF does NOT
+currently influence local scoring.
 
 Two core functions:
-  1. ESDF → LocalPlanner  — relay ESDF distance field + gradients (RESERVED:
-     not yet consumed by nav_core scoring; see contract §5).
-  2. Slope → Web          — compute slope grid from ElevationMap and push via
-     Gateway SSE for operator situational awareness (green/yellow/red overlay).
+  1. ESDF -> LocalPlanner - relay ESDF distance field + gradients (RESERVED:
+     not yet consumed by nav_core scoring; see contract section 5).
+  2. Slope -> Web - compute slope grid from ElevationMap and push via Gateway
+     SSE for operator situational awareness (green/yellow/red overlay).
 
-Secondary function (dev/sim only):
-  3. fused_cost → NavigationModule → A* backend — on dev machines where
-     ele_planner.so (PCT) is unavailable, the fused grid gives the Python A*
-     terrain awareness (slope hard-block + proximity preference). On S100P
-     with PCT active, this fused grid only feeds _find_safe_goal BFS — PCT
-     plans on its own pre-built 3D tomogram, not on this grid.
+The module merges map-layer evidence without changing the ownership model:
+
+1. ESDF is relayed to LocalPlannerModule for obstacle distance scoring.
+2. Slope is computed from ElevationMap for operator visualization.
+3. fused_cost gives the Python A* planner terrain awareness on dev/sim
+   machines. On S100P with PCT active, it is only a safe-goal helper.
 
 Merge rule: layered max() with hard constraint protection.
-  L0  LETHAL(100) / INSCRIBED(99) from OccupancyGrid — never overridden
-  L1  slope ≥ max_slope → LETHAL
-  L2  slope soft cost 1..97 — only on free cells
-  L3  ESDF proximity 0..proximity_cap — only on free cells
+  L0  LETHAL(100) / INSCRIBED(99) from OccupancyGrid.
+  L1  slope >= max_slope -> LETHAL.
+  L2  slope soft cost 1..97, only on free cells.
+  L3  ESDF proximity 0..proximity_cap, only on free cells.
 
 Ports:
   In:  costmap (dict), elevation_map (dict), esdf (dict), traversability (dict)
@@ -42,16 +45,16 @@ import numpy as np
 
 from core.module import Module
 from core.registry import register
+from core.runtime_interface import TOPICS, normalize_frame_id, topic_default_frame_id
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
 
-# W2-7: scipy is required for bilinear resampling. Verified once at module
-# import; setup() raises loudly if it's missing (Wave 1 no-silent-fallback
-# discipline). Tests patch this flag to simulate the absence.
+# scipy is required for bilinear resampling. setup() raises loudly if missing.
 try:
     import scipy.ndimage
+
     _SCIPY_AVAILABLE = True
 except ImportError:
     _SCIPY_AVAILABLE = False
@@ -66,29 +69,22 @@ def _resample_to_grid(
     dst_res: float,
     fill: float = 0.0,
 ) -> np.ndarray:
-    """Bilinear resample src grid onto dst grid coordinates via scipy.
+    """Bilinear resample src grid onto dst grid coordinates via scipy."""
 
-    W2-7: nearest-neighbour was previously used and produced aliasing at grid
-    edges where slope/cost discontinuities confused the planner. Bilinear
-    gives continuous interpolated values between source cells.
-    """
     if not _SCIPY_AVAILABLE:
         raise RuntimeError(
-            "_resample_to_grid requires scipy — call TraversabilityCostModule.setup() "
-            "first to see the pre-flight check error."
+            "_resample_to_grid requires scipy; call "
+            "TraversabilityCostModule.setup() first to see the preflight error."
         )
     from scipy.ndimage import map_coordinates
 
     dst_h, dst_w = dst_shape
-    # Build dst cell centres in world coords
     ys = dst_origin[1] + (np.arange(dst_h) + 0.5) * dst_res
     xs = dst_origin[0] + (np.arange(dst_w) + 0.5) * dst_res
 
-    # Map world coords to fractional src cell indices (row = y-axis, col = x-axis)
-    src_row = (ys - src_origin[1]) / src_res - 0.5   # shape (dst_h,)
-    src_col = (xs - src_origin[0]) / src_res - 0.5   # shape (dst_w,)
+    src_row = (ys - src_origin[1]) / src_res - 0.5
+    src_col = (xs - src_origin[0]) / src_res - 0.5
 
-    # 2D coordinate arrays for map_coordinates (row, col order)
     row_grid = np.broadcast_to(src_row[:, None], dst_shape)
     col_grid = np.broadcast_to(src_col[None, :], dst_shape)
     coords = np.array([row_grid.ravel(), col_grid.ravel()])
@@ -96,41 +92,32 @@ def _resample_to_grid(
     out = map_coordinates(
         src.astype(np.float64),
         coords,
-        order=1,              # bilinear
+        order=1,
         mode="constant",
         cval=float(fill),
     ).reshape(dst_shape).astype(np.float32)
     return out
 
 
-@register("map", "traversability_cost",
-          description="Fuse obstacle + slope + ESDF into unified traversability cost")
+@register(
+    "map",
+    "traversability_cost",
+    description="Fuse obstacle + slope + ESDF into unified traversability cost",
+)
 class TraversabilityCostModule(Module, layer=2):
-    """Map layer hub: ESDF relay + slope visualization + A* fallback fusion.
+    """Map layer hub for ESDF relay, slope visualization, and A* cost fusion."""
 
-    Primary (S100P production):
-      - Relays ESDF field to LocalPlannerModule for smooth obstacle avoidance
-      - Publishes slope grid for Web operator situational awareness
-      - fused_cost feeds NavigationModule but PCT ignores it for path planning
+    costmap: In[dict]
+    elevation_map: In[dict]
+    esdf: In[dict]
+    traversability: In[dict]
 
-    Secondary (dev/sim):
-      - fused_cost is the sole cost source for the Python A* planner
-      - Gives A* terrain awareness that raw OccupancyGrid alone doesn't have
+    fused_cost: Out[dict]
+    esdf_field: Out[dict]
+    slope_grid: Out[dict]
 
-    Gracefully degrades: if any input is missing, that layer contributes zero.
-    max_slope_deg defaults from robot_config.yaml terrain_analysis.slope_max.
-    """
-
-    # Inputs — from four map sources
-    costmap:        In[dict]   # OccupancyGridModule: {grid, resolution, origin}
-    elevation_map:  In[dict]   # ElevationMapModule: {min_z, max_z, clearance, valid}
-    esdf:           In[dict]   # ESDFModule: {distance_field, grad_x, grad_y}
-    traversability: In[dict]   # TerrainModule: traversability stats
-
-    # Outputs — unified interface
-    fused_cost: Out[dict]   # {grid(float32 0-100), resolution, origin, ts}
-    esdf_field: Out[dict]   # {distance_field, grad_x, grad_y, resolution, origin}
-    slope_grid: Out[dict]   # {grid(float32 degrees), resolution, origin}
+    LETHAL = 100
+    INSCRIBED = 99
 
     def __init__(
         self,
@@ -138,28 +125,32 @@ class TraversabilityCostModule(Module, layer=2):
         max_slope_deg: float | None = None,
         proximity_cap: float = 50.0,
         publish_hz: float = 2.0,
+        frame_id: str | None = None,
         **kw,
     ):
         super().__init__(**kw)
         self._safe_dist = safe_distance
         self._prox_cap = proximity_cap
         self._interval = 1.0 / publish_hz
+        self._default_frame_id = (
+            normalize_frame_id(frame_id)
+            or topic_default_frame_id(TOPICS.exploration_grid)
+        )
 
-        # Read max_slope from robot_config (single source of truth)
         if max_slope_deg is not None:
             self._max_slope = max_slope_deg
         else:
             try:
-                from core.config import get_config
-                cfg = get_config()
-                # terrain_analysis.slope_max is tan(angle); convert to degrees
                 import math
+
+                from core.config import get_config
+
+                cfg = get_config()
                 slope_tan = cfg.raw.get("terrain_analysis", {}).get("slope_max", 1.0)
                 self._max_slope = math.degrees(math.atan(slope_tan))
             except (ImportError, AttributeError):
-                self._max_slope = 45.0  # tan(1.0) = 45°, quadruped limit
+                self._max_slope = 45.0
 
-        # Latest data from each source
         self._costmap_data: dict | None = None
         self._elev_data: dict | None = None
         self._esdf_data: dict | None = None
@@ -190,32 +181,14 @@ class TraversabilityCostModule(Module, layer=2):
 
     def _on_esdf(self, data: dict) -> None:
         self._esdf_data = data
-        # Forward ESDF immediately for LocalPlanner consumption
         self.esdf_field.publish(data)
 
     def _on_traversability(self, data: dict) -> None:
         self._trav_data = data
 
-    # Cost semantics (match ROS2 nav2 costmap_2d convention):
-    #   LETHAL     = 100  — occupied wall, hard constraint, cannot be overridden
-    #   INSCRIBED  = 99   — inside inflation radius, treat as impassable
-    #   SLOPE_HARD = 98   — slope ≥ max_slope_deg, impassable terrain
-    #   1..97             — soft cost (slope preference + ESDF proximity preference)
-    #   0                 — free space
-    LETHAL    = 100
-    INSCRIBED = 99
-
     def _try_fuse(self) -> None:
-        """Layered priority merge. Triggered by costmap (primary clock).
+        """Layered priority merge triggered by the costmap input."""
 
-        Layer precedence (high → low):
-          L0  Lethal/Inscribed — from OccupancyGrid (obstacle + inflation)
-          L1  Slope hard-block — slope ≥ max_slope_deg → LETHAL
-          L2  Slope soft cost  — slope mapped to 1..97 (only on free cells)
-          L3  Proximity prefer — ESDF distance preference (only on free cells)
-
-        Merge rule: max() per cell with hard constraint protection.
-        """
         now = time.time()
         if now - self._last_publish < self._interval:
             return
@@ -228,52 +201,51 @@ class TraversabilityCostModule(Module, layer=2):
         obs_grid = np.asarray(cm["grid"], dtype=np.float32)
         res = cm["resolution"]
         origin = np.array(cm["origin"][:2], dtype=np.float64)
-        frame_id = str(cm.get("frame_id") or "map")
+        frame_id = (
+            normalize_frame_id(cm.get("frame_id"))
+            or self._default_frame_id
+        )
         shape = obs_grid.shape
 
-        # L0: Obstacle layer is the base — lethal and inscribed cells are protected
         fused = obs_grid.copy()
-        is_hard = obs_grid >= self.INSCRIBED  # lethal + inscribed cells
+        is_hard = obs_grid >= self.INSCRIBED
 
-        # L1+L2: Slope layer
         slope_deg = self._compute_slope(shape, origin, res)
         if slope_deg is not None:
-            # Hard-block: slope ≥ max → LETHAL (even if OccupancyGrid says free)
             slope_lethal = slope_deg >= self._max_slope
             fused[slope_lethal & ~is_hard] = self.LETHAL
 
-            # Soft cost: slope < max → map to 1..97, only on non-hard cells
             soft_mask = ~is_hard & ~slope_lethal & (slope_deg > 3.0)
             slope_cost = np.clip(slope_deg / self._max_slope, 0, 0.97) * 100.0
             fused[soft_mask] = np.maximum(fused[soft_mask], slope_cost[soft_mask])
 
-            self.slope_grid.publish({
-                "grid": slope_deg,
-                "resolution": res,
-                "origin": origin.tolist(),
-                "ts": now,
-                "frame_id": frame_id,
-            })
+            self.slope_grid.publish(
+                {
+                    "grid": slope_deg,
+                    "resolution": res,
+                    "origin": origin.tolist(),
+                    "ts": now,
+                    "frame_id": frame_id,
+                }
+            )
 
-        # L3: Proximity preference — only on free-ish cells (cost < INSCRIBED)
-        #     This does NOT duplicate inflation (inflation is binary dilation at 0.5m,
-        #     proximity is a smooth gradient out to safe_distance=1.5m).
         prox_cost = self._compute_proximity(shape, origin, res)
         if prox_cost is not None:
             free_mask = fused < self.INSCRIBED
-            # Cap proximity contribution so it never promotes free→inscribed
             soft_prox = np.clip(prox_cost * (self._prox_cap / 100.0), 0, self._prox_cap)
             fused[free_mask] = np.maximum(fused[free_mask], soft_prox[free_mask])
 
         fused = np.clip(fused, 0, 100).astype(np.float32)
 
-        self.fused_cost.publish({
-            "grid": fused,
-            "resolution": res,
-            "origin": origin.tolist(),
-            "ts": now,
-            "frame_id": frame_id,
-        })
+        self.fused_cost.publish(
+            {
+                "grid": fused,
+                "resolution": res,
+                "origin": origin.tolist(),
+                "ts": now,
+                "frame_id": frame_id,
+            }
+        )
 
     def _compute_slope(
         self,
@@ -282,6 +254,7 @@ class TraversabilityCostModule(Module, layer=2):
         dst_res: float,
     ) -> np.ndarray | None:
         """Compute slope in degrees from elevation grid, resampled to dst grid."""
+
         elev = self._elev_data
         if elev is None:
             return None
@@ -296,8 +269,6 @@ class TraversabilityCostModule(Module, layer=2):
         elev_res = elev.get("resolution", 0.2)
         elev_origin = np.array(elev["origin"][:2], dtype=np.float64)
 
-        # Compute slope on elevation grid's own resolution
-        # Replace invalid cells with neighbour average to avoid edge artifacts
         z = np.where(valid, max_z, 0.0)
         dzdx = np.gradient(z, elev_res, axis=1)
         dzdy = np.gradient(z, elev_res, axis=0)
@@ -305,11 +276,14 @@ class TraversabilityCostModule(Module, layer=2):
         slope_deg = np.degrees(slope_rad).astype(np.float32)
         slope_deg[~valid] = 0.0
 
-        # Resample to costmap grid if dimensions differ
         if slope_deg.shape != dst_shape or not np.allclose(elev_origin, dst_origin):
             slope_deg = _resample_to_grid(
-                slope_deg, elev_origin, elev_res,
-                dst_shape, dst_origin, dst_res,
+                slope_deg,
+                elev_origin,
+                elev_res,
+                dst_shape,
+                dst_origin,
+                dst_res,
                 fill=0.0,
             )
         return slope_deg
@@ -320,7 +294,8 @@ class TraversabilityCostModule(Module, layer=2):
         dst_origin: np.ndarray,
         dst_res: float,
     ) -> np.ndarray | None:
-        """Repulsive cost from ESDF — decays with distance from obstacles."""
+        """Compute ESDF proximity cost."""
+
         esdf = self._esdf_data
         if esdf is None:
             return None
@@ -335,11 +310,14 @@ class TraversabilityCostModule(Module, layer=2):
 
         cost = np.clip(1.0 - dist / self._safe_dist, 0, 1) * 100.0
 
-        # Resample to costmap grid if dimensions differ
         if cost.shape != dst_shape or not np.allclose(esdf_origin, dst_origin):
             cost = _resample_to_grid(
-                cost, esdf_origin, esdf_res,
-                dst_shape, dst_origin, dst_res,
+                cost,
+                esdf_origin,
+                esdf_res,
+                dst_shape,
+                dst_origin,
+                dst_res,
                 fill=0.0,
             )
         return cost
@@ -351,10 +329,11 @@ class TraversabilityCostModule(Module, layer=2):
             "safe_distance": self._safe_dist,
             "max_slope_deg": self._max_slope,
             "proximity_cap": self._prox_cap,
+            "default_frame_id": self._default_frame_id,
             "layers": {
-                "costmap":        self._costmap_data is not None,
-                "elevation":      self._elev_data is not None,
-                "esdf":           self._esdf_data is not None,
+                "costmap": self._costmap_data is not None,
+                "elevation": self._elev_data is not None,
+                "esdf": self._esdf_data is not None,
                 "traversability": self._trav_data is not None,
             },
         }

@@ -48,6 +48,90 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _ensure_core_import_path() -> None:
+    import sys
+
+    for candidate in (ROOT / "src", ROOT):
+        path = str(candidate)
+        if path not in sys.path:
+            sys.path.insert(0, path)
+
+
+def _extend_unique(blockers: list[str], additions: list[str] | tuple[str, ...]) -> None:
+    for item in additions:
+        if item not in blockers:
+            blockers.append(item)
+
+
+def _shared_runtime_evidence(
+    report: dict[str, Any],
+    *,
+    expected_contract: str,
+    require_contract: bool = True,
+    require_paths: bool = True,
+    require_command: bool = True,
+    require_frame_links: bool = False,
+    require_data_flow: bool = False,
+) -> tuple[list[str], dict[str, Any]]:
+    has_contract = isinstance(report.get("runtime_contract"), dict)
+    validation_required = (
+        require_contract
+        or require_paths
+        or require_command
+        or require_frame_links
+        or require_data_flow
+    )
+    if not has_contract and not validation_required:
+        return [], {
+            "checked": False,
+            "expected_contract": expected_contract,
+            "required": False,
+            "contract_required": require_contract,
+            "frame_links_required": require_frame_links,
+            "data_flow_required": require_data_flow,
+            "reason": "runtime_contract not declared",
+            "ok": True,
+            "blockers": [],
+        }
+
+    try:
+        _ensure_core_import_path()
+        from core.runtime_evidence import validate_runtime_evidence
+
+        result = validate_runtime_evidence(
+            report,
+            expected_contract,
+            require_paths=require_paths,
+            require_command=require_command,
+            require_frame_links=require_frame_links,
+            require_data_flow=require_data_flow,
+        )
+    except Exception as exc:
+        blocker = f"runtime_evidence validation unavailable: {type(exc).__name__}: {exc}"
+        return [blocker], {
+            "checked": False,
+            "expected_contract": expected_contract,
+            "required": validation_required,
+            "contract_required": require_contract,
+            "frame_links_required": require_frame_links,
+            "data_flow_required": require_data_flow,
+            "ok": False,
+            "blockers": [blocker],
+        }
+
+    blockers = list(result.blockers)
+    return blockers, {
+        "checked": True,
+        "expected_contract": expected_contract,
+        "required": validation_required,
+        "contract_required": require_contract,
+        "frame_links_required": require_frame_links,
+        "data_flow_required": require_data_flow,
+        "ok": result.ok,
+        "blockers": blockers,
+    }
+
+
 def _require_live_nav_map_growth(map_growth: dict[str, Any], blockers: list[str]) -> None:
     source = str(map_growth.get("accepted_cumulative_growth_source") or "")
     if source != LIVE_NAV_MAP_TOPIC:
@@ -281,12 +365,7 @@ def _runtime_contract_blockers(
 
     canonical: dict[str, Any] = {}
     try:
-        import sys
-
-        for candidate in (ROOT / "src", ROOT):
-            path = str(candidate)
-            if path not in sys.path:
-                sys.path.insert(0, path)
+        _ensure_core_import_path()
         from core.blueprints.simulation_contract import simulation_runtime_contract
 
         canonical = simulation_runtime_contract(expected_name).as_report()
@@ -432,10 +511,15 @@ def _eval_large_terrain(report: dict[str, Any]) -> tuple[bool, list[str], dict[s
         blockers.append("no native PCT case found")
     if not path_safe:
         blockers.append("path safety failed")
+    for blocker in report.get("environment_blockers") or []:
+        if str(blocker) not in blockers:
+            blockers.append(str(blocker))
 
     return not blockers, blockers, {
         "case_count": len(cases),
         "native_pct": native_pct,
+        "native_runtime": report.get("native_runtime") or {},
+        "environment_blockers": report.get("environment_blockers") or [],
         "path_safe": path_safe,
         "routes": [case.get("route") for case in cases],
     }
@@ -699,6 +783,16 @@ def _eval_dynamic_obstacle_local_planner(report: dict[str, Any]) -> tuple[bool, 
 
 def _eval_fastlio2_live(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
     blockers: list[str] = []
+    runtime_evidence_blockers, runtime_evidence = _shared_runtime_evidence(
+        report,
+        expected_contract="mujoco_fastlio2_live",
+        require_contract=True,
+        require_paths=False,
+        require_command=False,
+        require_frame_links=True,
+        require_data_flow=True,
+    )
+    _extend_unique(blockers, runtime_evidence_blockers)
     for key in (
         "ok",
         "simulation_only",
@@ -880,6 +974,7 @@ def _eval_fastlio2_live(report: dict[str, Any]) -> tuple[bool, list[str], dict[s
         "moving_obstacles": moving_obstacle_evidence,
         "video": video_evidence,
         "frames": report.get("frames") or {},
+        "runtime_evidence": runtime_evidence,
     }
 
 
@@ -1071,6 +1166,12 @@ def _eval_moving_obstacle_sweep(report: dict[str, Any]) -> tuple[bool, list[str]
                 )
     for blocker in report.get("blockers") or []:
         blockers.append(str(blocker))
+    for blocker in report.get("environment_blockers") or []:
+        if str(blocker) not in blockers:
+            blockers.append(str(blocker))
+    for blocker in report.get("artifact_blockers") or []:
+        if str(blocker) not in blockers:
+            blockers.append(str(blocker))
 
     return not blockers, blockers, {
         "case_count": report.get("case_count"),
@@ -1079,6 +1180,10 @@ def _eval_moving_obstacle_sweep(report: dict[str, Any]) -> tuple[bool, list[str]
         "passed_pair_count": report.get("passed_pair_count"),
         "minimal_red_defect": report.get("minimal_red_defect") or {},
         "blocking_subsystems": report.get("blocking_subsystems") or [],
+        "environment_blockers": report.get("environment_blockers") or [],
+        "artifact_blockers": report.get("artifact_blockers") or [],
+        "preflight": report.get("preflight") or {},
+        "next_action_hint": report.get("next_action_hint") or "",
         "required_speed_bins": required_speed_bins,
         "required_density_bins": required_density_bins,
         "required_pairs": required_pairs,
@@ -1109,6 +1214,11 @@ def _eval_large_loop_closure(report: dict[str, Any]) -> tuple[bool, list[str], d
     thresholds = report.get("thresholds") if isinstance(report.get("thresholds"), dict) else {}
     min_path_length = _safe_float(thresholds.get("min_path_length_m"), default=20.0)
     max_loop_error = _safe_float(thresholds.get("max_loop_closure_error_m"), default=0.75)
+    max_fastlio_loop_error = _safe_float(
+        thresholds.get("max_fastlio_loop_closure_error_m"),
+        default=1.0,
+    )
+    max_loop_yaw_error = _safe_float(thresholds.get("max_loop_yaw_error_rad"), default=0.5)
     required_scan_time_profile = str(thresholds.get("required_scan_time_profile") or "")
     passed_case_count = _safe_int(report.get("passed_case_count"))
     if required_scan_time_profile != "physical_rolling":
@@ -1126,6 +1236,18 @@ def _eval_large_loop_closure(report: dict[str, Any]) -> tuple[bool, list[str], d
             blockers.append("best_case.fastlio2_path_length_m below threshold")
         if _safe_float(best_case.get("sim_loop_closure_error_m"), default=999.0) > max_loop_error:
             blockers.append("best_case.sim_loop_closure_error_m above threshold")
+        if (
+            _safe_float(best_case.get("fastlio2_loop_closure_error_m"), default=999.0)
+            > max_fastlio_loop_error
+        ):
+            blockers.append("best_case.fastlio2_loop_closure_error_m above threshold")
+        if _safe_float(best_case.get("sim_loop_yaw_error_rad"), default=999.0) > max_loop_yaw_error:
+            blockers.append("best_case.sim_loop_yaw_error_rad above threshold")
+        if (
+            _safe_float(best_case.get("fastlio2_loop_yaw_error_rad"), default=999.0)
+            > max_loop_yaw_error
+        ):
+            blockers.append("best_case.fastlio2_loop_yaw_error_rad above threshold")
         if _safe_int(best_case.get("nav_cmd_vel_nonzero")) <= 0:
             blockers.append("best_case.nav_cmd_vel_nonzero missing")
         if _safe_int(best_case.get("local_path_count")) <= 0:
@@ -1300,6 +1422,144 @@ def _eval_routecheck_preflight(report: dict[str, Any]) -> tuple[bool, list[str],
         "phases": phase_evidence,
         "published": published,
         "artifacts": report.get("artifacts") or {},
+    }
+
+
+def _eval_gateway_runtime_acceptance(
+    report: dict[str, Any],
+) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    checks = report.get("checks") if isinstance(report.get("checks"), dict) else {}
+    gateway_contract = (
+        checks.get("gateway_contract")
+        if isinstance(checks.get("gateway_contract"), dict)
+        else {}
+    )
+    dataflow = (
+        checks.get("module_first_dataflow")
+        if isinstance(checks.get("module_first_dataflow"), dict)
+        else {}
+    )
+    stage_evidence = (
+        checks.get("stage_evidence")
+        if isinstance(checks.get("stage_evidence"), dict)
+        else {}
+    )
+
+    if report.get("schema_version") != "lingtu.gateway_runtime_acceptance.v1":
+        blockers.append("schema_version is not lingtu.gateway_runtime_acceptance.v1")
+    if report.get("ok") is not True:
+        blockers.append("report.ok is not true")
+    if report.get("mode") != "non_motion":
+        blockers.append("mode is not non_motion")
+    if report.get("ros2_topic_required") is not False:
+        blockers.append("ros2_topic_required is not false")
+    _extend_unique(blockers, [str(blocker) for blocker in report.get("blockers") or []])
+
+    if gateway_contract.get("ok") is not True:
+        blockers.append("gateway_contract.ok is not true")
+    missing_links = [str(item) for item in gateway_contract.get("missing_links") or []]
+    if missing_links:
+        blockers.append("gateway contract missing links: " + ", ".join(missing_links))
+
+    if dataflow.get("ok") is not True:
+        blockers.append("module_first_dataflow.ok is not true")
+    if dataflow.get("ros2_topic_required") is True:
+        blockers.append("Gateway acceptance must not require ros2 topic")
+    if dataflow.get("module_port_bus_primary") is not True:
+        blockers.append("module_port_bus_primary is not true")
+    if dataflow.get("ros2_adapter_primary") is True:
+        blockers.append("ros2_adapter_primary is true")
+    if dataflow.get("arbitrary_publish_supported") is not False:
+        blockers.append("arbitrary_publish_supported is not false")
+    if _safe_int(dataflow.get("command_interface_count")) <= 0:
+        blockers.append("command_interface_count is missing")
+
+    missing_command_interfaces = [
+        str(item) for item in dataflow.get("missing_command_interfaces") or []
+    ]
+    unexpected_command_interfaces = [
+        str(item) for item in dataflow.get("unexpected_command_interfaces") or []
+    ]
+    missing_topics = [str(item) for item in dataflow.get("missing_topics") or []]
+    non_observable_topics = [
+        str(item) for item in dataflow.get("non_observable_topics") or []
+    ]
+    missing_stream_interfaces = [
+        str(item) for item in dataflow.get("missing_stream_interfaces") or []
+    ]
+    missing_live_topics = [
+        str(item) for item in dataflow.get("missing_live_topics") or []
+    ]
+    if missing_command_interfaces:
+        blockers.append(
+            "missing Gateway command interfaces: "
+            + ", ".join(missing_command_interfaces)
+        )
+    if unexpected_command_interfaces:
+        blockers.append(
+            "unexpected Gateway command interfaces: "
+            + ", ".join(unexpected_command_interfaces)
+        )
+    if missing_topics:
+        blockers.append("missing product runtime topics: " + ", ".join(missing_topics))
+    if non_observable_topics:
+        blockers.append(
+            "non-observable product runtime topics: "
+            + ", ".join(non_observable_topics)
+        )
+    if missing_stream_interfaces:
+        blockers.append(
+            "missing Gateway SSE stream interfaces: "
+            + ", ".join(missing_stream_interfaces)
+        )
+    if missing_live_topics and report.get("mode") != "non_motion":
+        blockers.append("missing live Module samples: " + ", ".join(missing_live_topics))
+
+    if stage_evidence.get("ok") is not True:
+        blockers.append("stage_evidence.ok is not true")
+    if _safe_int(stage_evidence.get("stage_count")) <= 0:
+        blockers.append("stage_evidence.stage_count is missing")
+    missing_stages = [str(item) for item in stage_evidence.get("missing_stages") or []]
+    not_live_stages = [str(item) for item in stage_evidence.get("not_live_stages") or []]
+    missing_tokens = (
+        stage_evidence.get("missing_tokens")
+        if isinstance(stage_evidence.get("missing_tokens"), dict)
+        else {}
+    )
+    if missing_stages:
+        blockers.append("missing runtime stages: " + ", ".join(missing_stages))
+    if not_live_stages and report.get("mode") != "non_motion":
+        blockers.append("non-live runtime stages: " + ", ".join(not_live_stages))
+    if missing_tokens and report.get("mode") != "non_motion":
+        blockers.append(
+            "runtime stages missing required inputs: "
+            + ", ".join(sorted(str(key) for key in missing_tokens))
+        )
+
+    observable_topics = [str(item) for item in dataflow.get("observable_topics") or []]
+    streamable_topics = [str(item) for item in dataflow.get("streamable_topics") or []]
+    return not blockers, blockers, {
+        "mode": report.get("mode"),
+        "runtime_contract": report.get("runtime_contract")
+        or dataflow.get("runtime_contract"),
+        "ros2_topic_required": report.get("ros2_topic_required"),
+        "module_port_bus_primary": dataflow.get("module_port_bus_primary"),
+        "ros2_adapter_primary": dataflow.get("ros2_adapter_primary"),
+        "arbitrary_publish_supported": dataflow.get("arbitrary_publish_supported"),
+        "command_interface_count": dataflow.get("command_interface_count"),
+        "observable_topic_count": len(observable_topics),
+        "streamable_topic_count": len(streamable_topics),
+        "stage_count": stage_evidence.get("stage_count"),
+        "missing_links": missing_links,
+        "missing_topics": missing_topics,
+        "non_observable_topics": non_observable_topics,
+        "missing_stream_interfaces": missing_stream_interfaces,
+        "missing_command_interfaces": missing_command_interfaces,
+        "unexpected_command_interfaces": unexpected_command_interfaces,
+        "missing_stages": missing_stages,
+        "missing_stage_tokens": missing_tokens,
+        "not_live_stages": not_live_stages,
     }
 
 
@@ -1623,19 +1883,20 @@ def _eval_cmu_unity_runtime(report: dict[str, Any]) -> tuple[bool, list[str], di
         blockers.append("report.ok is not true")
     if report.get("runtime_executed") is not True:
         blockers.append("runtime_executed is not true")
-    if report.get("simulation_only") is not True:
-        blockers.append("simulation_only is not true")
-    if not _bool_false(report, "real_robot_motion"):
-        blockers.append("real_robot_motion is not false")
-    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
-        blockers.append("cmd_vel_sent_to_hardware is not false")
+    runtime_evidence_blockers, shared_runtime_evidence = _shared_runtime_evidence(
+        report,
+        expected_contract="cmu_unity_external",
+        require_frame_links=True,
+        require_data_flow=True,
+    )
+    _extend_unique(blockers, runtime_evidence_blockers)
     if str(report.get("ros_domain_id") or "") in {"", "0"}:
         blockers.append("ROS_DOMAIN_ID is empty or default")
     contract_blockers, runtime_contract = _runtime_contract_blockers(
         report,
         expected_name="cmu_unity_external",
     )
-    blockers.extend(contract_blockers)
+    _extend_unique(blockers, contract_blockers)
 
     thresholds = report.get("thresholds") or {}
     waypoints = report.get("waypoints") or {}
@@ -1689,6 +1950,7 @@ def _eval_cmu_unity_runtime(report: dict[str, Any]) -> tuple[bool, list[str], di
         "cloud_coverage": cloud,
         "hardware_safety": hardware,
         "runtime_contract": runtime_contract,
+        "runtime_evidence": shared_runtime_evidence,
         "tare_navigation": tare_navigation,
         "blockers": report.get("blockers") or [],
     }
@@ -1962,6 +2224,18 @@ def _eval_multifloor_exploration(report: dict[str, Any]) -> tuple[bool, list[str
 
 GATES: tuple[GateSpec, ...] = (
     GateSpec(
+        "gateway_runtime_acceptance",
+        "Gateway Runtime Data Plane acceptance through ModulePort streams, stage evidence, and command whitelist",
+        (
+            "artifacts/server_sim_closure/gateway_runtime_acceptance/report.json",
+            "artifacts/gateway_runtime_acceptance*/report.json",
+        ),
+        "PYTHONPATH=src:. python3 lingtu.py gateway-runtime-acceptance "
+        "--acceptance-mode non_motion "
+        "--json-out artifacts/server_sim_closure/gateway_runtime_acceptance/report.json",
+        _eval_gateway_runtime_acceptance,
+    ),
+    GateSpec(
         "multifloor_exploration",
         "Multi-floor route matrix with LiDAR localization contract, local planning, tracking, and frontier closed-loop",
         (
@@ -2047,9 +2321,9 @@ GATES: tuple[GateSpec, ...] = (
         "export MUJOCO_GL=${MUJOCO_GL:-egl}; "
         "export PYOPENGL_PLATFORM=${PYOPENGL_PLATFORM:-egl}; "
         "export LINGTU_MUJOCO_LIVE_RUN_DIR=${LINGTU_MUJOCO_LIVE_RUN_DIR:-artifacts/server_sim_closure/mujoco_fastlio2_live}; "
-        "export LINGTU_MUJOCO_LIVE_WORLD=${LINGTU_MUJOCO_LIVE_WORLD:-artifacts/server_sim_closure/large_terrain_odom/large_terrain_scene.xml}; "
+        "export LINGTU_MUJOCO_LIVE_WORLD=${LINGTU_MUJOCO_LIVE_WORLD:-artifacts/server_sim_closure/large_terrain/large_terrain_scene.xml}; "
         "export LINGTU_MUJOCO_LIVE_INSPECTION_PLANNER=${LINGTU_MUJOCO_LIVE_INSPECTION_PLANNER:-pct}; "
-        "export LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM=${LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM:-artifacts/server_sim_closure/large_terrain_odom/tomogram.pickle}; "
+        "export LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM=${LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM:-artifacts/server_sim_closure/large_terrain/tomogram.pickle}; "
         "export LINGTU_MUJOCO_LIVE_INSPECTION_GOALS=${LINGTU_MUJOCO_LIVE_INSPECTION_GOALS:-0.5,0.05;1.0,0.1;1.5,0.15}; "
         "export LINGTU_MUJOCO_LIVE_MOVING_OBSTACLE_COUNT=${LINGTU_MUJOCO_LIVE_MOVING_OBSTACLE_COUNT:-3}; "
         "export LINGTU_MUJOCO_LIVE_MOVING_OBSTACLE_PERIOD_S=${LINGTU_MUJOCO_LIVE_MOVING_OBSTACLE_PERIOD_S:-6}; "
@@ -2073,8 +2347,8 @@ GATES: tuple[GateSpec, ...] = (
         "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
         "python3 sim/scripts/moving_obstacle_sweep_gate.py --run-matrix "
         "--child-run-root artifacts/server_sim_closure/moving_obstacle_sweep/children "
-        "--world ${LINGTU_MUJOCO_LIVE_WORLD:-artifacts/server_sim_closure/large_terrain_odom/large_terrain_scene.xml} "
-        "--inspection-tomogram ${LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM:-artifacts/server_sim_closure/large_terrain_odom/tomogram.pickle} "
+        "--world ${LINGTU_MUJOCO_LIVE_WORLD:-artifacts/server_sim_closure/large_terrain/large_terrain_scene.xml} "
+        "--inspection-tomogram ${LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM:-artifacts/server_sim_closure/large_terrain/tomogram.pickle} "
         "--report-glob artifacts/server_sim_closure/mujoco_fastlio2_live*/inspection*/*/report.json "
         "--report-glob artifacts/mujoco_fastlio2_live*/inspection*/*/report.json "
         "--required-speed-bins slow,fast --required-density-bins sparse,dense "
@@ -2094,14 +2368,14 @@ GATES: tuple[GateSpec, ...] = (
         "export MUJOCO_GL=${MUJOCO_GL:-egl}; "
         "export PYOPENGL_PLATFORM=${PYOPENGL_PLATFORM:-egl}; "
         "export LINGTU_MUJOCO_LIVE_RUN_DIR=${LINGTU_MUJOCO_LIVE_RUN_DIR:-artifacts/server_sim_closure/mujoco_fastlio2_live}; "
-        "export LINGTU_MUJOCO_LIVE_WORLD=${LINGTU_MUJOCO_LIVE_WORLD:-artifacts/server_sim_closure/large_terrain_odom/large_terrain_scene.xml}; "
+        "export LINGTU_MUJOCO_LIVE_WORLD=${LINGTU_MUJOCO_LIVE_WORLD:-artifacts/server_sim_closure/large_terrain/large_terrain_scene.xml}; "
         "export LINGTU_MUJOCO_LIVE_DURATION_INSPECTION=${LINGTU_MUJOCO_LIVE_DURATION_INSPECTION:-240}; "
         "export LINGTU_MUJOCO_LIVE_MAX_WALL_TIME_S=${LINGTU_MUJOCO_LIVE_MAX_WALL_TIME_S:-900}; "
         "export LINGTU_MUJOCO_LIVE_NAV_MAX_LINEAR_SPEED=${LINGTU_MUJOCO_LIVE_NAV_MAX_LINEAR_SPEED:-0.45}; "
         "export LINGTU_MUJOCO_LIVE_CMD_VEL_LINEAR_LIMIT=${LINGTU_MUJOCO_LIVE_CMD_VEL_LINEAR_LIMIT:-0.45}; "
         "export LINGTU_MUJOCO_LIVE_CMD_VEL_LINEAR_ACCEL_LIMIT=${LINGTU_MUJOCO_LIVE_CMD_VEL_LINEAR_ACCEL_LIMIT:-0.8}; "
         "export LINGTU_MUJOCO_LIVE_INSPECTION_PLANNER=${LINGTU_MUJOCO_LIVE_INSPECTION_PLANNER:-pct}; "
-        "export LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM=${LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM:-artifacts/server_sim_closure/large_terrain_odom/tomogram.pickle}; "
+        "export LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM=${LINGTU_MUJOCO_LIVE_INSPECTION_TOMOGRAM:-artifacts/server_sim_closure/large_terrain/tomogram.pickle}; "
         "export LINGTU_MUJOCO_LIVE_INSPECTION_GOALS=${LINGTU_MUJOCO_LIVE_INSPECTION_GOALS:-6.0,0.0;6.0,6.0;0.0,6.0;0.0,0.0}; "
         "export LINGTU_MUJOCO_LIVE_INSPECTION_MIN_CHECKPOINTS=${LINGTU_MUJOCO_LIVE_INSPECTION_MIN_CHECKPOINTS:-4}; "
         "export LINGTU_MUJOCO_LIVE_SCAN_TIME_PROFILE=${LINGTU_MUJOCO_LIVE_SCAN_TIME_PROFILE:-physical_rolling}; "
@@ -2331,7 +2605,16 @@ ALGORITHM_PRESETS: dict[str, tuple[str, ...]] = {
         "moving_obstacle_sweep",
         "large_loop_closure",
     ),
+    "inspection_mvp": (
+        "gateway_runtime_acceptance",
+        "routecheck_preflight",
+        "large_terrain",
+        "fastlio2_dynamic_inspection",
+        "dynamic_obstacle_local_planner",
+        "moving_obstacle_sweep",
+    ),
     "dimos_benchmark": (
+        "gateway_runtime_acceptance",
         "routecheck_preflight",
         "large_terrain",
         "native_pct_mujoco",
@@ -2348,6 +2631,12 @@ ALGORITHM_PRESETS: dict[str, tuple[str, ...]] = {
 
 
 ALGORITHM_VALIDATION_FLOW: tuple[dict[str, Any], ...] = (
+    {
+        "id": "runtime_data_plane",
+        "title": "Gateway Runtime Data Plane",
+        "gates": ("gateway_runtime_acceptance",),
+        "proves": "Gateway/ModulePort runtime streams, stage evidence, and command whitelist are product-visible through the runtime data plane",
+    },
     {
         "id": "map_asset",
         "title": "Map/tomogram asset",
@@ -2431,6 +2720,17 @@ def _missing_required_commands(
 
 _BLOCKER_CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
+        "product_data_plane",
+        (
+            "gateway",
+            "runtime dataflow",
+            "runtime data plane",
+            "module_port",
+            "moduleport",
+            "sse stream",
+        ),
+    ),
+    (
         "slam_localization",
         (
             "fast-lio",
@@ -2445,6 +2745,19 @@ _BLOCKER_CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "z drift",
             "yaw drift",
             "odometry diverged",
+        ),
+    ),
+    (
+        "environment_runtime",
+        (
+            "native runtime",
+            "abi",
+            "python_tag",
+            "shared library",
+            "no runnable pct native modules",
+            "runtime unavailable",
+            "launch_script",
+            "launch script",
         ),
     ),
     (
@@ -2481,6 +2794,9 @@ _BLOCKER_CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "report_age_s",
             "same-source",
             "tomogram",
+            "inspection_tomogram",
+            "world file",
+            "world/tomogram",
             "metadata",
             "video",
             "file missing",
@@ -2596,6 +2912,7 @@ def _algorithm_validation_summary(
             + ", ".join(_ordered_gate_names(set(missing_or_failed)))
         )
     )
+    next_actions = _next_actions(gates, missing_or_failed, gate_categories)
     return {
         "claim": "simulation_algorithm_health",
         "claim_allowed": claim_allowed,
@@ -2617,11 +2934,74 @@ def _algorithm_validation_summary(
         "blocking_gate_count": len(missing_or_failed),
         "blocking_categories": blocking_categories,
         "gate_categories": gate_categories,
+        "next_actions": next_actions,
         "stop_condition": stop_condition,
         "interpretation": (
             "simulation/replay evidence only; not physical S100P field readiness"
         ),
     }
+
+
+_NEXT_ACTION_CATEGORY_PRIORITY = (
+    "product_data_plane",
+    "environment_runtime",
+    "artifact_contract",
+    "slam_localization",
+    "dynamic_obstacle",
+    "planning_tracking",
+    "command_safety",
+    "simulation_integration",
+    "unclassified",
+)
+
+
+_NEXT_ACTION_TYPE_BY_CATEGORY = {
+    "product_data_plane": "fix_gateway_runtime_acceptance_then_rerun",
+    "environment_runtime": "fix_runtime_then_rerun",
+    "artifact_contract": "generate_missing_report",
+    "slam_localization": "debug_localization_then_rerun",
+    "dynamic_obstacle": "rerun_dynamic_obstacle_matrix",
+    "planning_tracking": "debug_planning_tracking_then_rerun",
+    "command_safety": "fix_command_boundary_then_rerun",
+    "simulation_integration": "fix_simulation_bridge_then_rerun",
+    "unclassified": "inspect_gate_report_then_rerun",
+}
+
+
+def _primary_next_action_category(categories: list[str]) -> str:
+    category_set = set(categories)
+    for category in _NEXT_ACTION_CATEGORY_PRIORITY:
+        if category in category_set:
+            return category
+    return categories[0] if categories else "unclassified"
+
+
+def _next_actions(
+    gates: dict[str, Any],
+    missing_or_failed: list[str],
+    gate_categories: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    for name in _ordered_gate_names(set(missing_or_failed)):
+        gate = gates.get(name) or {}
+        categories = list(gate_categories.get(name) or ["unclassified"])
+        category = _primary_next_action_category(categories)
+        actions.append(
+            {
+                "gate": name,
+                "status": gate.get("status", "missing"),
+                "category": category,
+                "categories": categories,
+                "action_type": _NEXT_ACTION_TYPE_BY_CATEGORY.get(
+                    category,
+                    "inspect_gate_report_then_rerun",
+                ),
+                "blockers": list(gate.get("blockers") or ["not verified"]),
+                "command": gate.get("command", ""),
+                "report_path": gate.get("path", ""),
+            }
+        )
+    return actions
 
 
 def _candidate_matches(patterns: tuple[str, ...]) -> list[Path]:
@@ -2635,10 +3015,24 @@ def _candidate_matches(patterns: tuple[str, ...]) -> list[Path]:
     return sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
 
 
-def _best_match(spec: GateSpec) -> Path | None:
+def _best_match(
+    spec: GateSpec,
+    *,
+    max_report_age_s: float | None = None,
+    generated_at: float | None = None,
+) -> Path | None:
     candidates = _candidate_matches(spec.default_patterns)
     if not candidates:
         return None
+    if max_report_age_s is not None:
+        reference_time = time.time() if generated_at is None else generated_at
+        fresh_candidates = [
+            path
+            for path in candidates
+            if max(0.0, reference_time - path.stat().st_mtime) <= max_report_age_s
+        ]
+        if fresh_candidates:
+            candidates = fresh_candidates
     for path in candidates:
         try:
             ok, _, _ = spec.evaluator(_load_json(path))
@@ -2665,7 +3059,11 @@ def summarize(
         else tuple(spec for spec in GATES if spec.name in required_names)
     )
     for spec in selected_specs:
-        path = report_overrides.get(spec.name) or _best_match(spec)
+        path = report_overrides.get(spec.name) or _best_match(
+            spec,
+            max_report_age_s=max_report_age_s,
+            generated_at=generated_at,
+        )
         if path is None:
             gates[spec.name] = {
                 "description": spec.description,
@@ -2757,6 +3155,7 @@ def summarize(
         "missing_required_commands": _missing_required_commands(gates, missing_or_failed),
         "optional_missing_or_failed": optional_missing_or_failed,
         "algorithm_validation": algorithm_validation,
+        "next_actions": algorithm_validation["next_actions"],
         "gates": gates,
         "remaining_gaps": [
             f"{name}: {', '.join((gates.get(name) or {}).get('blockers') or ['not verified'])}"
@@ -2839,6 +3238,7 @@ def run_missing_required_gates(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--gateway-runtime-acceptance-report", type=Path, default=None)
     parser.add_argument("--large-terrain-report", type=Path, default=None)
     parser.add_argument("--native-pct-mujoco-report", type=Path, default=None)
     parser.add_argument("--dynamic-obstacle-local-planner-report", type=Path, default=None)
@@ -2865,7 +3265,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--preset",
         choices=sorted(ALGORITHM_PRESETS),
         default=None,
-        help="Named required-gate preset; core_algorithm is the strict daily algorithm acceptance gate.",
+        help=(
+            "Named required-gate preset; inspection_mvp is product-facing "
+            "patrol readiness, dimos_benchmark is the strict reference suite."
+        ),
     )
     parser.add_argument(
         "--max-report-age-s",
@@ -2910,6 +3313,7 @@ def _required_from_args(args: argparse.Namespace) -> set[str]:
 def main() -> int:
     args = _build_parser().parse_args()
     overrides = {
+        "gateway_runtime_acceptance": args.gateway_runtime_acceptance_report,
         "large_terrain": args.large_terrain_report,
         "native_pct_mujoco": args.native_pct_mujoco_report,
         "dynamic_obstacle_local_planner": args.dynamic_obstacle_local_planner_report,

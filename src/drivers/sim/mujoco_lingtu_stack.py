@@ -5,7 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core.runtime_interface import FRAMES, TOPICS
+from core.runtime_interface import TOPICS, topic_default_frame_id
+
+
+# Fast-LIO live simulation owns a continuous local world frame named odom.
+# Saved-map relocalization validates map-frame navigation separately.
+MUJOCO_LIVE_PLANNING_FRAME_ID = topic_default_frame_id(TOPICS.odometry)
+MUJOCO_LIVE_OCCUPANCY_FRAME_ID = topic_default_frame_id(TOPICS.odometry)
+MUJOCO_LIVE_GOAL_FRAME_ID = topic_default_frame_id(TOPICS.odometry)
 
 
 @dataclass(frozen=True)
@@ -63,10 +70,8 @@ def build_fastlio2_frontier_stack(
         enable_ros2_grid_bridge=True,
         cloud_topic=cloud_topic,
         cmd_vel_topic=cmd_vel_topic,
-        # Fast-LIO mapping mode owns a continuous local world frame named odom.
-        # Saved-map relocalization validates map-frame navigation separately.
-        planning_frame_id=FRAMES.odom,
-        occupancy_frame_id=FRAMES.odom,
+        planning_frame_id=MUJOCO_LIVE_PLANNING_FRAME_ID,
+        occupancy_frame_id=MUJOCO_LIVE_OCCUPANCY_FRAME_ID,
         occupancy_raycast_free_space=True,
         occupancy_unknown_as_obstacle_for_costmap=True,
         occupancy_raycast_max_rays=1600,
@@ -178,9 +183,9 @@ def build_fastlio2_inspection_stack(
         enable_ros2_grid_bridge=True,
         cloud_topic=cloud_topic,
         cmd_vel_topic=cmd_vel_topic,
-        planning_frame_id=FRAMES.odom,
-        occupancy_frame_id=FRAMES.odom,
-        goal_frame_id=FRAMES.odom,
+        planning_frame_id=MUJOCO_LIVE_PLANNING_FRAME_ID,
+        occupancy_frame_id=MUJOCO_LIVE_OCCUPANCY_FRAME_ID,
+        goal_frame_id=MUJOCO_LIVE_GOAL_FRAME_ID,
         occupancy_raycast_free_space=True,
         occupancy_unknown_as_obstacle_for_costmap=True,
         occupancy_raycast_max_rays=1600,
@@ -269,7 +274,7 @@ def build_fastlio2_tare_stack(
         exploration_backend="tare",
         exploration_auto_start=False,
         tare_scenario=tare_scenario,
-        goal_frame_id=FRAMES.odom,
+        goal_frame_id=MUJOCO_LIVE_GOAL_FRAME_ID,
         way_point_timeout_s=max(10.0, float(tare_goal_timeout) * 0.5),
         hold_active_goal_until_terminal=True,
         max_waypoint_distance_m=6.0,
@@ -279,8 +284,8 @@ def build_fastlio2_tare_stack(
         enable_ros2_grid_bridge=True,
         cloud_topic=cloud_topic,
         cmd_vel_topic=cmd_vel_topic,
-        planning_frame_id=FRAMES.odom,
-        occupancy_frame_id=FRAMES.odom,
+        planning_frame_id=MUJOCO_LIVE_PLANNING_FRAME_ID,
+        occupancy_frame_id=MUJOCO_LIVE_OCCUPANCY_FRAME_ID,
         occupancy_raycast_free_space=True,
         occupancy_unknown_as_obstacle_for_costmap=True,
         occupancy_raycast_max_rays=1600,

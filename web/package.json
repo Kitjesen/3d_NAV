@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "smoke:gateway": "node scripts/gateway-smoke.mjs"
+    "smoke:gateway": "node scripts/gateway-smoke.mjs",
+    "smoke:dataflow-ui": "node scripts/dataflow-ui-contract.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.7.0",

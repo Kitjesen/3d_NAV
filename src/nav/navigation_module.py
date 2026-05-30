@@ -43,6 +43,11 @@ from core.module import Module, skill
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.registry import register
+from core.runtime_interface import (
+    TOPICS,
+    map_frame_id,
+    normalize_frame_id,
+)
 from core.stream import In, Out
 from nav.global_planner_service import GlobalPlannerService
 from nav.waypoint_tracker import (
@@ -58,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 LOCALIZATION_MOTION_HOLD_SIGNALS = {"ODOM_MISSING"}
 LOCALIZATION_MOTION_HOLD_ACTIONS = {"restart_localization_chain"}
-PLANNING_FRAME_ID = "map"
+PLANNING_FRAME_ID = map_frame_id()
 
 
 class _PlanPreviewBusy(RuntimeError):
@@ -138,6 +143,7 @@ class NavigationModule(Module, layer=5):
         downsample_dist: float = 2.0,
         enable_ros2_bridge: bool = False,
         final_waypoint_threshold: float | None = None,
+        waypoint_z_threshold: float | None = 0.25,
         allow_direct_goal_fallback: bool = False,
         direct_goal_fallback_on_planner_failure: bool = False,
         external_strategy_path_control: bool = False,
@@ -200,6 +206,7 @@ class NavigationModule(Module, layer=5):
         self._tracker = WaypointTracker(
             threshold=waypoint_threshold,
             final_threshold=final_waypoint_threshold,
+            z_threshold=waypoint_z_threshold,
             stuck_timeout=stuck_timeout,
             stuck_dist=stuck_dist_thre,
         )
@@ -292,10 +299,13 @@ class NavigationModule(Module, layer=5):
                 self._ros2_node = Node("nav_waypoint_bridge")
                 qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
                 self._ros2_wp_pub = self._ros2_node.create_publisher(
-                    PointStamped, "/nav/way_point", qos
+                    PointStamped, TOPICS.nav_way_point, qos
                 )
                 get_shared_executor().add_node(self._ros2_node)
-                logger.info("NavigationModule: ROS2 waypoint bridge enabled -> /nav/way_point")
+                logger.info(
+                    "NavigationModule: ROS2 waypoint bridge enabled -> %s",
+                    TOPICS.nav_way_point,
+                )
             except (ImportError, Exception) as e:
                 logger.debug("NavigationModule: ROS2 not available: %s", e)
         else:
@@ -334,6 +344,19 @@ class NavigationModule(Module, layer=5):
         av = np.asarray(a[:2], dtype=float)
         bv = np.asarray(b[:2], dtype=float)
         return round(float(np.linalg.norm(av - bv)), 3)
+
+    @staticmethod
+    def _distance_xyz_or_xy(a: np.ndarray, b: np.ndarray) -> float:
+        av = np.asarray(a, dtype=float).reshape(-1)
+        bv = np.asarray(b, dtype=float).reshape(-1)
+        if (
+            av.size >= 3
+            and bv.size >= 3
+            and np.all(np.isfinite(av[:3]))
+            and np.all(np.isfinite(bv[:3]))
+        ):
+            return float(np.linalg.norm(av[:3] - bv[:3]))
+        return float(np.linalg.norm(av[:2] - bv[:2]))
 
     def _set_state(self, state: str) -> None:
         allowed = MissionState.TRANSITIONS.get(self._state, frozenset())
@@ -385,6 +408,7 @@ class NavigationModule(Module, layer=5):
             ),
             "replan_on_costmap_update": self._replan_on_costmap_update,
             "last_plan_report": self._current_plan_report(),
+            "map_artifact_gate": getattr(self._planner_svc, "map_artifact_gate", {}),
             "direct_goal_fallback": self._direct_goal_fallback_status,
             "external_strategy_path_control": self._external_strategy_path_control,
             "using_external_strategy_path": self._using_external_strategy_path,
@@ -403,8 +427,24 @@ class NavigationModule(Module, layer=5):
     def _goal_frame(self, goal: PoseStamped) -> str:
         return str(getattr(goal, "frame_id", "") or self._planning_frame_id)
 
+    def _runtime_contract(self) -> str | None:
+        return (
+            os.environ.get("LINGTU_RUNTIME_CONTRACT")
+            or os.environ.get("LINGTU_DATA_SOURCE")
+        )
+
+    def _expected_frames_for_source(self, source: str) -> tuple[str, ...]:
+        planning_frame = (
+            normalize_frame_id(self._planning_frame_id)
+            or PLANNING_FRAME_ID
+        )
+        return (planning_frame,)
+
+    def _expected_frame_label(self, source: str) -> str:
+        return ",".join(self._expected_frames_for_source(source))
+
     def _report_frame_mismatch(self, source: str, frame_id: str) -> None:
-        if not self._is_frame_mismatch(frame_id):
+        if not self._is_frame_mismatch(frame_id, source=source):
             return
         key = (source, frame_id)
         if key in self._reported_frame_mismatches:
@@ -414,16 +454,17 @@ class NavigationModule(Module, layer=5):
             "event": "frame_mismatch",
             "reason": "unsupported_frame",
             "source": source,
-            "expected_frame": self._planning_frame_id,
+            "expected_frame": self._expected_frame_label(source),
             "received_frame": frame_id,
             "ts": time.time(),
         })
 
-    def _is_frame_mismatch(self, frame_id: str) -> bool:
+    def _is_frame_mismatch(self, frame_id: str, *, source: str) -> bool:
+        normalized = normalize_frame_id(frame_id)
         return bool(
-            frame_id
-            and frame_id != "unknown"
-            and frame_id != self._planning_frame_id
+            normalized
+            and normalized != "unknown"
+            and normalized not in self._expected_frames_for_source(source)
         )
 
     def _planning_frame_blocker(self) -> tuple[str, str] | None:
@@ -431,7 +472,7 @@ class NavigationModule(Module, layer=5):
             ("odometry", self._odom_frame_id),
             ("costmap", self._costmap_frame_id),
         ):
-            if self._is_frame_mismatch(frame_id):
+            if self._is_frame_mismatch(frame_id, source=source):
                 return source, frame_id
         return None
 
@@ -449,15 +490,16 @@ class NavigationModule(Module, layer=5):
         )
 
     def _block_for_frame_mismatch(self, source: str, frame_id: str) -> None:
+        expected_frame = self._expected_frame_label(source)
         self._failure_reason = (
             f"unsupported {source} frame {frame_id!r}; expected "
-            f"{self._planning_frame_id!r}"
+            f"{expected_frame!r}"
         )
         self.adapter_status.publish({
             "event": "navigation_blocked",
             "reason": "frame_mismatch",
             "source": source,
-            "expected_frame": self._planning_frame_id,
+            "expected_frame": expected_frame,
             "received_frame": frame_id,
             "ts": time.time(),
         })
@@ -498,16 +540,61 @@ class NavigationModule(Module, layer=5):
         else:
             self._set_state(self._state)
 
+    def _reject_invalid_goal(
+        self,
+        *,
+        source: str,
+        reason: str = "invalid_coordinates",
+        details: str = "invalid coordinates",
+    ) -> None:
+        self._failure_reason = f"invalid {source} coordinates"
+        self.adapter_status.publish({
+            "event": "goal_rejected",
+            "reason": reason,
+            "source": source,
+            "details": details,
+            "ts": time.time(),
+        })
+        self._tracker.clear()
+        self._goal = None
+        self._goal_frame_id = None
+        self._active_path_terminal_goal = None
+        self._active_external_strategy_path = []
+        self._clear_partial_goal_progress()
+        self._clear_deferred_empty_path()
+        self._publish_motion_stop()
+        if self._state not in (
+            MissionState.IDLE,
+            MissionState.SUCCESS,
+            MissionState.CANCELLED,
+        ):
+            self._set_state(MissionState.FAILED)
+        else:
+            self._set_state(self._state)
+
     def _on_goal(self, goal: PoseStamped) -> None:
         frame_id = self._goal_frame(goal)
         if frame_id != self._planning_frame_id:
             self._reject_goal_frame(frame_id, source="goal_pose")
             return
-        new_goal = np.array([
-            goal.pose.position.x,
-            goal.pose.position.y,
-            goal.pose.position.z,
-        ])
+        try:
+            new_goal = np.array([
+                goal.pose.position.x,
+                goal.pose.position.y,
+                goal.pose.position.z,
+            ], dtype=float)
+        except (TypeError, ValueError):
+            self._reject_invalid_goal(
+                source="goal_pose",
+                details="coordinates must be numeric",
+            )
+            return
+        if new_goal.shape != (3,) or not np.all(np.isfinite(new_goal)):
+            self._reject_invalid_goal(
+                source="goal_pose",
+                details="coordinates must be finite x/y/z values",
+            )
+            return
         if self._should_ignore_goal_update(new_goal):
             return
         self._clear_localization_pause_for_explicit_action(
@@ -529,7 +616,7 @@ class NavigationModule(Module, layer=5):
             return False
         if self._state not in (MissionState.PLANNING, MissionState.EXECUTING, MissionState.PATROLLING):
             return False
-        dist = float(np.linalg.norm(new_goal[:2] - self._goal[:2]))
+        dist = self._distance_xyz_or_xy(new_goal, self._goal)
         if dist > self._goal_update_epsilon:
             return False
         self.adapter_status.publish({
@@ -554,14 +641,14 @@ class NavigationModule(Module, layer=5):
                 self._clear_partial_goal_progress()
                 return False
         try:
-            goal_delta = float(np.linalg.norm(
-                np.asarray(new_goal[:2], dtype=float)
-                - np.asarray(self._partial_progress_completed_goal[:2], dtype=float)
-            ))
-            robot_terminal_delta = float(np.linalg.norm(
-                np.asarray(self._robot_pos[:2], dtype=float)
-                - np.asarray(self._partial_progress_completed_terminal[:2], dtype=float)
-            ))
+            goal_delta = self._distance_xyz_or_xy(
+                new_goal,
+                self._partial_progress_completed_goal,
+            )
+            robot_terminal_delta = self._distance_xyz_or_xy(
+                self._robot_pos,
+                self._partial_progress_completed_terminal,
+            )
         except (TypeError, ValueError):
             return False
         if goal_delta > self._goal_update_epsilon:
@@ -651,7 +738,7 @@ class NavigationModule(Module, layer=5):
     def _on_costmap(self, data: dict) -> None:
         self._costmap_frame_id = str(data.get("frame_id") or self._planning_frame_id)
         self._report_frame_mismatch("costmap", self._costmap_frame_id)
-        if self._is_frame_mismatch(self._costmap_frame_id):
+        if self._is_frame_mismatch(self._costmap_frame_id, source="costmap"):
             if self._has_motion_artifacts():
                 self._block_for_frame_mismatch("costmap", self._costmap_frame_id)
             return
@@ -874,15 +961,35 @@ class NavigationModule(Module, layer=5):
                 if frame_id != self._planning_frame_id:
                     self._reject_goal_frame(frame_id, source="patrol_goals")
                     return
-                parsed_goals.append(
-                    np.array([g["x"], g["y"], g.get("z", 0.0)])
-                )
+                try:
+                    goal = np.array([
+                        g["x"],
+                        g["y"],
+                        g["z"] if "z" in g else self._resolve_goal_z(None),
+                    ], dtype=float)
+                except (KeyError, TypeError, ValueError):
+                    self._reject_invalid_goal(source="patrol_goals")
+                    return
+                if goal.shape != (3,) or not np.all(np.isfinite(goal)):
+                    self._reject_invalid_goal(source="patrol_goals")
+                    return
+                parsed_goals.append(goal)
                 if g.get("loop"):
                     patrol_loop = True
             elif isinstance(g, (list, tuple)) and len(g) >= 2:
-                parsed_goals.append(
-                    np.array([g[0], g[1], g[2] if len(g) > 2 else 0.0])
-                )
+                try:
+                    goal = np.array([
+                        g[0],
+                        g[1],
+                        g[2] if len(g) > 2 else self._resolve_goal_z(None),
+                    ], dtype=float)
+                except (TypeError, ValueError):
+                    self._reject_invalid_goal(source="patrol_goals")
+                    return
+                if goal.shape != (3,) or not np.all(np.isfinite(goal)):
+                    self._reject_invalid_goal(source="patrol_goals")
+                    return
+                parsed_goals.append(goal)
         if parsed_goals:
             if self._same_patrol_goals(parsed_goals, loop=patrol_loop):
                 return
@@ -1012,7 +1119,7 @@ class NavigationModule(Module, layer=5):
     def _on_odom(self, odom: Odometry) -> None:
         self._odom_frame_id = str(getattr(odom, "frame_id", "") or "unknown")
         self._report_frame_mismatch("odometry", self._odom_frame_id)
-        if self._is_frame_mismatch(self._odom_frame_id):
+        if self._is_frame_mismatch(self._odom_frame_id, source="odometry"):
             if self._has_motion_artifacts():
                 self._block_for_frame_mismatch("odometry", self._odom_frame_id)
             return
@@ -1252,7 +1359,7 @@ class NavigationModule(Module, layer=5):
     def _preview_path_point(
         point: Any,
         *,
-        frame_id: str = "map",
+        frame_id: str = PLANNING_FRAME_ID,
         ts: float | None = None,
         index: int | None = None,
     ) -> dict[str, Any]:
@@ -1635,6 +1742,7 @@ class NavigationModule(Module, layer=5):
 
         try:
             path = self._validate_planned_path(path)
+            path = self._anchor_path_start_to_robot(path)
         except RuntimeError as exc:
             if self._should_defer_empty_path_failure(exc):
                 self._defer_empty_path_failure(str(exc), planned_state)
@@ -1843,6 +1951,29 @@ class NavigationModule(Module, layer=5):
             validated.append(arr)
         return validated
 
+    def _anchor_path_start_to_robot(self, path: list[np.ndarray]) -> list[np.ndarray]:
+        if not path:
+            return path
+        robot = np.asarray(self._robot_pos[:3], dtype=float)
+        first = np.asarray(path[0][:3], dtype=float)
+        if not (np.all(np.isfinite(robot)) and np.all(np.isfinite(first))):
+            return path
+        if float(np.linalg.norm(first[:2] - robot[:2])) > 0.5:
+            return path
+        anchored = [point.copy() for point in path]
+        original_z = np.array([point[2] for point in anchored], dtype=float)
+        planar_zero_height = bool(
+            original_z.size > 0
+            and np.all(np.isfinite(original_z))
+            and float(np.ptp(original_z)) <= 1e-6
+            and abs(float(original_z[0])) <= 1e-6
+        )
+        if planar_zero_height:
+            for point in anchored:
+                point[2] = robot[2]
+        anchored[0] = robot.copy()
+        return anchored
+
     def _advance_patrol(self) -> bool:
         """Advance to next patrol goal. Returns True if more goals remain."""
         self._patrol_index += 1
@@ -1891,29 +2022,72 @@ class NavigationModule(Module, layer=5):
     # ── Skills (auto-discovered by MCPServerModule) ───────────────────────
 
     @skill
-    def navigate_to(self, x: float, y: float, yaw: float = 0.0) -> str:
+    def navigate_to(
+        self,
+        x: float,
+        y: float,
+        yaw: float = 0.0,
+        z: float | None = None,
+    ) -> str:
         """Navigate to map coordinates.
 
         Args:
             x: X coordinate in meters (map frame)
             y: Y coordinate in meters (map frame)
+            z: Z coordinate in meters (map frame). Defaults to current odometry z.
             yaw: Heading in radians (default 0)
         """
-        q_w = math.cos(yaw / 2)
-        q_z = math.sin(yaw / 2)
+        try:
+            goal_x = float(x)
+            goal_y = float(y)
+            goal_yaw = float(yaw)
+            goal_z = self._resolve_goal_z(z)
+        except (TypeError, ValueError) as exc:
+            return json.dumps({
+                "status": "rejected",
+                "reason": "invalid_coordinates",
+                "error": str(exc),
+                "frame_id": self._planning_frame_id,
+            })
+        if not all(math.isfinite(v) for v in (goal_x, goal_y, goal_yaw, goal_z)):
+            return json.dumps({
+                "status": "rejected",
+                "reason": "invalid_coordinates",
+                "error": "x, y, z, and yaw must be finite",
+                "frame_id": self._planning_frame_id,
+            })
+        q_w = math.cos(goal_yaw / 2)
+        q_z = math.sin(goal_yaw / 2)
         self._on_goal(PoseStamped(
             pose=Pose(
-                position=Vector3(x, y, 0.0),
+                position=Vector3(goal_x, goal_y, goal_z),
                 orientation=Quaternion(0.0, 0.0, q_z, q_w),
             ),
             frame_id=self._planning_frame_id, ts=0.0,
         ))
         return json.dumps({
             "status": "navigating",
-            "goal": [x, y],
-            "yaw": yaw,
+            "goal": [goal_x, goal_y, goal_z],
+            "yaw": goal_yaw,
             "frame_id": self._planning_frame_id,
         })
+
+    def _resolve_goal_z(self, z: float | None) -> float:
+        if z is not None:
+            try:
+                z_value = float(z)
+                if math.isfinite(z_value):
+                    return z_value
+            except (TypeError, ValueError):
+                pass
+            raise ValueError("z must be finite")
+        try:
+            current_z = float(self._robot_pos[2])
+            if math.isfinite(current_z):
+                return current_z
+        except (AttributeError, IndexError, TypeError, ValueError):
+            pass
+        return 0.0
 
     @skill
     def stop_navigation(self) -> str:
@@ -1955,6 +2129,7 @@ class NavigationModule(Module, layer=5):
             ),
             "replan_on_costmap_update": self._replan_on_costmap_update,
             "last_plan_report": self._current_plan_report(),
+            "map_artifact_gate": getattr(self._planner_svc, "map_artifact_gate", {}),
             "direct_goal_fallback": self._direct_goal_fallback_status,
         })
 
@@ -1992,6 +2167,7 @@ class NavigationModule(Module, layer=5):
                 "observe",
             ),
             "last_plan_report": self._current_plan_report(),
+            "map_artifact_gate": getattr(self._planner_svc, "map_artifact_gate", {}),
             "state": self._state,
             "wp_index": self._tracker.wp_index,
             "wp_total": self._tracker.path_length,

@@ -32,11 +32,14 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from core.runtime_interface import map_frame_id
 from core.utils.sanitize import safe_json_dump, safe_json_dumps, sanitize_position
 from memory.knowledge.belief.propagation import BeliefPropagationMixin
 
 from .projection import Detection3D
 from .room_manager import RoomManagerMixin
+
+INSTANCE_TRACKER_MAP_FRAME_ID = map_frame_id()
 
 # ── 从子模块导入所有公开符号 (向后兼容: 外部 from .instance_tracker import X 继续有效) ──
 from .tracked_objects import (
@@ -766,7 +769,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
 
         scene_graph_dict = {
             "timestamp": time.time(),
-            "frame_id": "map",
+            "frame_id": INSTANCE_TRACKER_MAP_FRAME_ID,
             "graph_level": "hierarchical",
             "graph_version": "3.0",
             "object_count": len(objects_list),

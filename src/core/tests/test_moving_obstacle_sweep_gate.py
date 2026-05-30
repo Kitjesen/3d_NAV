@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+import sys
 from pathlib import Path
 
 from sim.scripts import moving_obstacle_sweep_gate
@@ -326,6 +327,89 @@ def test_moving_obstacle_sweep_builds_runtime_matrix_parameters(tmp_path: Path):
     assert env["LINGTU_MUJOCO_LIVE_WORLD"] == "industrial_park"
     assert env["ROS_DOMAIN_ID"] == "99"
     assert env["LINGTU_MUJOCO_LIVE_SCAN_TIME_PROFILE"] == "physical_rolling"
+
+
+def test_moving_obstacle_sweep_preflight_rejects_missing_launch_script(tmp_path: Path):
+    preflight = moving_obstacle_sweep_gate.run_matrix_preflight(
+        launch_script=tmp_path / "missing_launcher.sh",
+        world=None,
+        inspection_tomogram=None,
+    )
+
+    assert preflight["ok"] is False
+    assert preflight["launch_script"]["exists"] is False
+    assert any("launch_script missing" in item for item in preflight["environment_blockers"])
+    assert preflight["blocking_subsystems"] == ["environment_runtime"]
+
+
+def test_moving_obstacle_sweep_preflight_rejects_missing_world_file(tmp_path: Path):
+    launch = tmp_path / "launch.sh"
+    launch.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+
+    preflight = moving_obstacle_sweep_gate.run_matrix_preflight(
+        launch_script=launch,
+        world=tmp_path / "missing_world.xml",
+        inspection_tomogram=None,
+    )
+
+    assert preflight["ok"] is False
+    assert preflight["world"]["path_checked"] is True
+    assert preflight["world"]["exists"] is False
+    assert any("world file missing" in item for item in preflight["artifact_blockers"])
+    assert preflight["blocking_subsystems"] == ["artifact_contract"]
+
+
+def test_moving_obstacle_sweep_preflight_rejects_missing_inspection_tomogram(
+    tmp_path: Path,
+):
+    launch = tmp_path / "launch.sh"
+    launch.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+
+    preflight = moving_obstacle_sweep_gate.run_matrix_preflight(
+        launch_script=launch,
+        world="industrial_park",
+        inspection_tomogram=tmp_path / "missing_tomogram.pickle",
+    )
+
+    assert preflight["ok"] is False
+    assert preflight["inspection_tomogram"]["exists"] is False
+    assert any(
+        "inspection_tomogram missing" in item
+        for item in preflight["artifact_blockers"]
+    )
+    assert preflight["blocking_subsystems"] == ["artifact_contract"]
+
+
+def test_moving_obstacle_sweep_run_matrix_skips_runner_when_preflight_fails(
+    tmp_path: Path,
+    monkeypatch,
+):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("run_matrix_cases should not run after preflight failure")
+
+    output = tmp_path / "moving_obstacle_sweep_report.json"
+    monkeypatch.setattr(moving_obstacle_sweep_gate, "run_matrix_cases", fail_if_called)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "moving_obstacle_sweep_gate.py",
+            "--run-matrix",
+            "--launch-script",
+            str(tmp_path / "missing_launcher.sh"),
+            "--json-out",
+            str(output),
+            "--strict",
+        ],
+    )
+
+    assert moving_obstacle_sweep_gate.main() == 1
+    summary = json.loads(output.read_text(encoding="utf-8"))
+    assert summary["ok"] is False
+    assert summary["case_count"] == 0
+    assert summary["run_matrix"]["case_count"] == 0
+    assert summary["preflight"]["ok"] is False
+    assert any("launch_script missing" in item for item in summary["environment_blockers"])
 
 
 def test_moving_obstacle_sweep_run_matrix_collects_child_reports(tmp_path: Path):

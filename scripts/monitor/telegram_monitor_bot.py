@@ -12,6 +12,8 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
+from runtime_contract import STATUS_TOPIC
+
 
 class TelegramMonitorBot(Node):
     """ROS2 node + Telegram Bot integration."""
@@ -26,7 +28,7 @@ class TelegramMonitorBot(Node):
         # ROS2 subscription
         self.sub_status = self.create_subscription(
             String,
-            '/nav/semantic/status',
+            STATUS_TOPIC,
             self.status_callback,
             10
         )

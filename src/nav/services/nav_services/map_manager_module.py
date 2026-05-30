@@ -5,15 +5,15 @@ Manages map listing/saving/deleting/renaming/activation and POI CRUD.
 Maps are stored as directories under map_dir:
 
     ~/data/inovxio/data/maps/
-    ├── active -> building_2f/     (symlink pointing to the active map dir)
-    ├── building_2f/
-    │   ├── map.pcd                (SLAM point cloud)
-    │   ├── tomogram.pickle        (global planning map, auto-generated)
-    │   └── occupancy.npz          (2D static occupancy grid, auto-generated)
-    └── warehouse/
-        ├── map.pcd
-        ├── tomogram.pickle
-        └── occupancy.npz
+    active -> building_2f/     (symlink pointing to the active map dir)
+    building_2f/
+        map.pcd                (SLAM point cloud)
+        tomogram.pickle        (global planning map, auto-generated)
+        occupancy.npz          (2D static occupancy grid, auto-generated)
+    warehouse/
+        map.pcd
+        tomogram.pickle
+        occupancy.npz
 
 Ports:
     In:  map_command (str)   -- JSON command string
@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pickle
 import shutil
 import threading
 from pathlib import Path
@@ -34,6 +35,13 @@ import numpy as np
 
 from core import In, Module, Out, skill
 from core.msgs.sensor import PointCloud2
+from core.runtime_interface import TOPICS, topic_default_frame_id
+from nav.services.nav_services.same_source_map_artifacts import (
+    build_saved_map_metadata,
+    sha256_file,
+    validate_saved_map_artifact_dir,
+    validate_same_source_map_metadata,
+)
 from nav.services.nav_services.yaml_helpers import load_yaml, save_yaml
 
 logger = logging.getLogger(__name__)
@@ -50,7 +58,7 @@ class MapManagerModule(Module, layer=6):
         map.pcd          -- SLAM point cloud saved via ROS2 SaveMaps service
         tomogram.pickle  -- global planning index auto-built from map.pcd
         occupancy.npz    -- static 2D occupancy grid derived from map.pcd
-                           keys: grid (int8 H×W, 0=free/100=occupied),
+                           keys: grid (int8 HxW, 0=free/100=occupied),
                                  resolution (float, metres/cell),
                                  origin (float[2], world XY of grid[0,0])
 
@@ -76,7 +84,7 @@ class MapManagerModule(Module, layer=6):
             "map_dir",
             os.environ.get(
                 "NAV_MAP_DIR",
-                # Canonical map dir on sunrise — REPL `map list`, Gateway,
+                # Canonical map dir on sunrise: REPL `map list`, Gateway,
                 # and cli/profiles_data.py:_resolve_tomogram all read from
                 # here. Stay consistent or saved maps won't be visible to
                 # the nav profile.
@@ -103,6 +111,17 @@ class MapManagerModule(Module, layer=6):
             or os.environ.get("LINGTU_SLAM_PROFILE")
             or ""
         ).strip().lower()
+        self._runtime_data_source = str(
+            config.get("data_source")
+            or os.environ.get("LINGTU_RUNTIME_DATA_SOURCE")
+            or "real_s100p"
+        ).strip() or "real_s100p"
+        self._source_profile = str(
+            config.get("source_profile")
+            or config.get("profile")
+            or os.environ.get("LINGTU_PROFILE")
+            or self._runtime_data_source
+        ).strip() or self._runtime_data_source
         self._map_cloud_lock = threading.Lock()
         self._latest_map_points: np.ndarray | None = None
 
@@ -205,21 +224,21 @@ class MapManagerModule(Module, layer=6):
 
         Pipeline
         --------
-        1. ROS2 ``/pgo/save_maps`` → ``<map_dir>/<name>/map.pcd``
+        1. ROS2 ``/pgo/save_maps`` -> ``<map_dir>/<name>/map.pcd``
            Raw SLAM point cloud; required for all downstream steps.
 
-        2. ``_build_tomogram(name)`` → ``<map_dir>/<name>/tomogram.pickle``
+        2. ``_build_tomogram(name)`` -> ``<map_dir>/<name>/tomogram.pickle``
            PCT global planner (ele_planner.so) and A* backend both load this
            file at startup.  This step is required; failure blocks the save.
 
-        3. ``_build_occupancy_snapshot(name)`` → ``<map_dir>/<name>/occupancy.npz``
+        3. ``_build_occupancy_snapshot(name)`` -> ``<map_dir>/<name>/occupancy.npz``
            Static 2D occupancy grid derived from map.pcd (numpy-only, no ROS2).
-           Stored as npz with keys: ``grid`` (int8 H×W, 0=free/100=occupied),
+           Stored as npz with keys: ``grid`` (int8 HxW, 0=free/100=occupied),
            ``resolution`` (float, metres per cell), ``origin`` (float[2],
            world-frame XY of grid[0,0]).
            Used by: A* backend as a static planning grid before the first live
            costmap arrives; Dashboard for map tile rendering.
-           This step is optional — failure is logged but does NOT block the save.
+           This step is optional: failure is logged but does NOT block the save.
 
         Local planning note
         -------------------
@@ -250,7 +269,7 @@ class MapManagerModule(Module, layer=6):
                 **capability_fields,
             }
 
-        # Step 1 — Call the ROS2 SLAM save_maps service
+        # Step 1: call the ROS2 SLAM save_maps service.
         try:
             if resolved_slam_profile == "super_lio":
                 snapshot_resp = self._save_live_map_cloud_snapshot(pcd_path)
@@ -313,13 +332,14 @@ class MapManagerModule(Module, layer=6):
                 **capability_fields,
             }
 
-        # Step 1½ — DUFOMap dynamic-obstacle filter (shared with gateway path).
-        # 走统一 helper 以防两处逻辑漂移 (env var / 参数 / 错误处理).
-        # 详见 docs/05-specialized/dynamic_obstacle_removal.md Phase 2.
+        # Step 1.5: DUFOMap dynamic-obstacle filter (shared with gateway path).
+        # Keep this in one helper so env-var, parameter, and error handling
+        # stay aligned with the gateway save path.
+        # See docs/05-specialized/dynamic_obstacle_removal.md Phase 2.
         from gateway.gateway_module import _apply_dynamic_filter_step1half
         dufo_result: dict[str, Any] | None = _apply_dynamic_filter_step1half(map_dir)
 
-        # Step 2 — Auto-build tomogram (required for global planner)
+        # Step 2: auto-build tomogram (required for global planner).
         tomo_result = self._build_tomogram(name)
         tomo_ok = bool(tomo_result.get("success", False))
         if not tomo_ok and resolved_slam_profile != "super_lio":
@@ -340,8 +360,17 @@ class MapManagerModule(Module, layer=6):
                 **capability_fields,
             }
 
-        # Step 3 — Build static 2D occupancy snapshot (optional, non-blocking)
+        # Step 3: build static 2D occupancy snapshot (optional, non-blocking).
         occ_result = self._build_occupancy_snapshot(name)
+        metadata_result = (
+            occ_result.get("metadata")
+            or tomo_result.get("metadata")
+            or self._write_saved_map_metadata(
+                name,
+                slam_profile=resolved_slam_profile,
+                mapping_source=capability_fields["map_save_source"],
+            )
+        )
 
         resp: dict[str, Any] = {
             "action": "save",
@@ -354,6 +383,8 @@ class MapManagerModule(Module, layer=6):
             "tomogram_ok": tomo_ok,
             "occupancy": occ_result.get("occupancy"),
             "occupancy_ok": occ_result.get("success", False),
+            "metadata": metadata_result.get("path"),
+            "metadata_ok": bool(metadata_result.get("ok")),
             **capability_fields,
         }
         if resolved_slam_profile == "super_lio":
@@ -508,6 +539,136 @@ class MapManagerModule(Module, layer=6):
             "relocation": "super_lio_relocation",
         }.get(profile, profile)
 
+    def _write_saved_map_metadata(
+        self,
+        name: str,
+        *,
+        slam_profile: str | None = None,
+        mapping_source: str = "map_manager",
+        tomogram_shape: list[int] | None = None,
+        occupancy_shape: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """Write metadata.json binding map.pcd and derived planning artifacts."""
+
+        map_dir = self._map_dir / name
+        pcd_path = map_dir / "map.pcd"
+        metadata_path = map_dir / "metadata.json"
+        if not pcd_path.exists():
+            return {
+                "ok": False,
+                "path": str(metadata_path),
+                "blockers": [f"no PCD file at {pcd_path}"],
+            }
+
+        resolved_slam = self._normalize_slam_profile(
+            slam_profile or self._slam_profile or self._resolve_slam_profile(None)
+        ) or "unknown"
+        frame_id = topic_default_frame_id(TOPICS.saved_map_cloud)
+        pcd_sha = sha256_file(pcd_path)
+        artifacts: dict[str, dict[str, Any]] = {
+            "map_pcd": {
+                "path": str(pcd_path),
+                "sha256": pcd_sha,
+                "source_profile": self._source_profile,
+                "data_source": self._runtime_data_source,
+                "slam_source": resolved_slam,
+                "frame_id": frame_id,
+                "point_count": self._pcd_point_count(pcd_path),
+            }
+        }
+
+        tomogram_path = map_dir / "tomogram.pickle"
+        if tomogram_path.exists():
+            shape = tomogram_shape or self._load_tomogram_shape(tomogram_path)
+            artifacts["tomogram"] = {
+                "path": str(tomogram_path),
+                "sha256": sha256_file(tomogram_path),
+                "source_map_sha256": pcd_sha,
+                "source_profile": self._source_profile,
+                "data_source": self._runtime_data_source,
+                "frame_id": frame_id,
+                "shape": shape,
+            }
+
+        occupancy_path = map_dir / "occupancy.npz"
+        if occupancy_path.exists():
+            artifacts["occupancy_grid"] = {
+                "path": str(occupancy_path),
+                "sha256": sha256_file(occupancy_path),
+                "source_map_sha256": pcd_sha,
+                "source_profile": self._source_profile,
+                "data_source": self._runtime_data_source,
+                "frame_id": frame_id,
+                "shape": occupancy_shape or self._load_occupancy_shape(occupancy_path),
+            }
+
+        metadata = build_saved_map_metadata(
+            source_profile=self._source_profile,
+            data_source=self._runtime_data_source,
+            slam_source=resolved_slam,
+            localization_source=resolved_slam,
+            mapping_source=mapping_source,
+            frame_id=frame_id,
+            artifacts=artifacts,
+            extra_metadata={"map_name": name, "source": "map_manager"},
+        )
+        validation = validate_same_source_map_metadata(metadata)
+        metadata_path.write_text(
+            json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return {
+            "ok": validation["ok"],
+            "path": str(metadata_path),
+            "sha256": sha256_file(metadata_path),
+            "blockers": list(validation["blockers"]),
+        }
+
+    @staticmethod
+    def _pcd_point_count(path: Path) -> int:
+        try:
+            with path.open("rb") as fh:
+                for raw in fh:
+                    line = raw.decode("ascii", errors="ignore").strip()
+                    upper = line.upper()
+                    if upper.startswith("POINTS"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            return int(parts[1])
+                    if upper.startswith("DATA"):
+                        break
+        except Exception:
+            return 0
+        return 0
+
+    @staticmethod
+    def _tomogram_shape_from_data(data: Any) -> list[int]:
+        if not isinstance(data, dict):
+            return []
+        if isinstance(data.get("shape"), (list, tuple)):
+            return [int(value) for value in data["shape"]]
+        for key in ("data", "tomogram"):
+            if key in data:
+                arr = np.asarray(data[key])
+                return [int(value) for value in arr.shape]
+        return []
+
+    @classmethod
+    def _load_tomogram_shape(cls, path: Path) -> list[int]:
+        try:
+            with path.open("rb") as fh:
+                return cls._tomogram_shape_from_data(pickle.load(fh))
+        except Exception:
+            return []
+
+    @staticmethod
+    def _load_occupancy_shape(path: Path) -> list[int]:
+        try:
+            data = np.load(str(path))
+            return [int(value) for value in np.asarray(data["grid"]).shape]
+        except Exception:
+            return []
+
     def _build_tomogram(self, name: str) -> dict[str, Any]:
         """Build tomogram.pickle from map.pcd using the PCT planner pipeline."""
         if not name:
@@ -529,11 +690,29 @@ class MapManagerModule(Module, layer=6):
                 build_tomogram_from_pcd,
             )
 
-            build_tomogram_from_pcd(str(pcd_path), str(tomogram_path))
+            tomogram_data = build_tomogram_from_pcd(str(pcd_path), str(tomogram_path))
+            metadata = self._write_saved_map_metadata(
+                name,
+                slam_profile=self._slam_profile,
+                mapping_source="map_manager_build_tomogram",
+                tomogram_shape=self._tomogram_shape_from_data(tomogram_data),
+            )
+            if not metadata["ok"]:
+                return {
+                    "action": "build_tomogram",
+                    "success": False,
+                    "message": (
+                        "saved map metadata contract failed: "
+                        + "; ".join(metadata["blockers"])
+                    ),
+                    "tomogram": str(tomogram_path),
+                    "metadata": metadata,
+                }
             return {
                 "action": "build_tomogram",
                 "success": True,
                 "tomogram": str(tomogram_path),
+                "metadata": metadata,
             }
         except Exception as e:
             return {
@@ -546,13 +725,13 @@ class MapManagerModule(Module, layer=6):
         """Build ROS2-compatible 2D occupancy grid from SLAM output.
 
         Outputs in <map_dir>/<name>/:
-            occupancy.npz  — numpy (grid int8: -1/0/100, resolution, origin)
-            map.pgm        — ROS2 map_server PGM (254=free, 0=occ, 205=unknown)
-            map.yaml       — ROS2 map_server metadata
+            occupancy.npz  -- numpy (grid int8: -1/0/100, resolution, origin)
+            map.pgm        -- ROS2 map_server PGM (254=free, 0=occ, 205=unknown)
+            map.yaml       -- ROS2 map_server metadata
 
         Prefers log-odds Bayesian raycasting when PGO wrote poses.txt + patches/;
         falls back to height-filtered XY projection (binary, no unknown) if PGO
-        didn't save patches — matches legacy behaviour so Fast-LIO2-only setups
+        didn't save patches, matching legacy behaviour so Fast-LIO2-only setups
         still produce a usable grid.
         """
         if not name:
@@ -601,12 +780,30 @@ class MapManagerModule(Module, layer=6):
                 "Occupancy '%s' (%s) shape=%s res=%.3f  unknown=%d free=%d occupied=%d",
                 name, mode, grid.shape, resolution, n_unk, n_fre, n_occ,
             )
+            metadata = self._write_saved_map_metadata(
+                name,
+                slam_profile=self._slam_profile,
+                mapping_source=f"map_manager_build_occupancy_{mode}",
+                occupancy_shape=[int(value) for value in grid.shape],
+            )
+            if not metadata["ok"]:
+                return {
+                    "action": "build_occupancy_snapshot",
+                    "success": False,
+                    "message": (
+                        "saved map metadata contract failed: "
+                        + "; ".join(metadata["blockers"])
+                    ),
+                    "occupancy": str(occ_path),
+                    "metadata": metadata,
+                }
             return {
                 "action":     "build_occupancy_snapshot",
                 "success":    True,
                 "occupancy":  str(occ_path),
                 "pgm":        str(pgm_path),
                 "yaml":       str(yaml_path),
+                "metadata":   metadata,
                 "mode":       mode,
                 "grid_shape": list(grid.shape),
                 "resolution": float(resolution),
@@ -677,7 +874,7 @@ class MapManagerModule(Module, layer=6):
         grid_w = int(np.ceil((xy_max[0] + border - origin[0]) / resolution)) + 1
         grid_h = int(np.ceil((xy_max[1] + border - origin[1]) / resolution)) + 1
         if grid_w <= 0 or grid_h <= 0 or grid_w * grid_h > 25_000_000:
-            raise RuntimeError(f"grid size out of range: {grid_w}×{grid_h}")
+            raise RuntimeError(f"grid size out of range: {grid_w}x{grid_h}")
 
         log_odds = np.zeros((grid_h, grid_w), dtype=np.float32)
 
@@ -847,7 +1044,7 @@ class MapManagerModule(Module, layer=6):
 
     @staticmethod
     def _quat_to_rot(q: np.ndarray) -> np.ndarray:
-        """Quaternion (w, x, y, z) → 3×3 rotation matrix."""
+        """Quaternion (w, x, y, z) -> 3x3 rotation matrix."""
         w, x, y, z = float(q[0]), float(q[1]), float(q[2]), float(q[3])
         n = np.sqrt(w * w + x * x + y * y + z * z)
         if n < 1e-9:
@@ -867,7 +1064,7 @@ class MapManagerModule(Module, layer=6):
         Falls back to a numpy ASCII reader for plain-text PCD files.
         Returns float32 (N, 3) array or None on failure.
         """
-        # Attempt 1: open3d (preferred — handles binary and compressed PCD)
+        # Attempt 1: open3d (preferred; handles binary and compressed PCD).
         try:
             import open3d as o3d  # type: ignore
             cloud = o3d.io.read_point_cloud(pcd_path)
@@ -888,7 +1085,7 @@ class MapManagerModule(Module, layer=6):
                         if line.upper().startswith("DATA"):
                             data_fmt = line.split()[-1].lower() if len(line.split()) > 1 else ""
                             if data_fmt not in ("ascii", ""):
-                                # Binary PCD without open3d — cannot parse
+                                # Binary PCD without open3d cannot be parsed here.
                                 return None
                             in_data = True
                         continue
@@ -981,6 +1178,25 @@ class MapManagerModule(Module, layer=6):
                 "action": "set_active",
                 "success": False,
                 "message": f"map not found: {name}",
+            }
+        artifact_gate = validate_saved_map_artifact_dir(
+            map_dir,
+            require_tomogram=True,
+            expected_frame_id=topic_default_frame_id(TOPICS.saved_map_cloud),
+        )
+        artifact_gate["required"] = True
+        if artifact_gate.get("ok") is not True:
+            blockers = [
+                str(item)
+                for item in (artifact_gate.get("blockers") or [])
+                if str(item)
+            ]
+            detail = "; ".join(blockers) if blockers else "unknown blocker"
+            return {
+                "action": "set_active",
+                "success": False,
+                "message": f"saved map artifact gate failed: {detail}",
+                "artifact_gate": artifact_gate,
             }
 
         active_link = self._map_dir / "active"

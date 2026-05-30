@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 
 from core.module import Module
-from core.runtime_interface import FRAMES, TOPICS
+from core.runtime_interface import TOPICS, topic_default_frame_id
 from core.stream import In
 
 logger = logging.getLogger(__name__)
@@ -23,12 +23,16 @@ class ROS2GridBridgeModule(Module, layer=2):
         self,
         node_name: str = "nav_grid_bridge",
         exploration_grid_topic: str = TOPICS.exploration_grid,
+        default_frame_id: str | None = None,
         qos_depth: int = 2,
         **kw: Any,
     ) -> None:
         super().__init__(**kw)
         self._node_name = str(node_name)
         self._exploration_grid_topic = str(exploration_grid_topic)
+        self._default_frame_id = str(
+            default_frame_id or topic_default_frame_id(TOPICS.exploration_grid)
+        )
         self._qos_depth = int(qos_depth)
         self._node = None
         self._executor = None
@@ -99,7 +103,7 @@ class ROS2GridBridgeModule(Module, layer=2):
         from nav_msgs.msg import OccupancyGrid as ROSOccupancyGrid
 
         msg = ROSOccupancyGrid()
-        msg.header.frame_id = str(grid.get("frame_id") or FRAMES.odom)
+        msg.header.frame_id = str(grid.get("frame_id") or self._default_frame_id)
         if self._node is not None:
             msg.header.stamp = self._node.get_clock().now().to_msg()
 

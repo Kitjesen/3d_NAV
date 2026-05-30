@@ -13,7 +13,12 @@ from typing import Any
 
 import numpy as np
 
-from core.runtime_interface import FRAMES
+from core.runtime_interface import FRAME_LINKS, TOPICS, topic_default_frame_id
+
+
+MUJOCO_ODOM_FRAME_ID = topic_default_frame_id(TOPICS.odometry)
+MUJOCO_BODY_FRAME_ID = FRAME_LINKS["odom_to_body"].child
+MUJOCO_RAW_IMU_FRAME_ID = MUJOCO_BODY_FRAME_ID
 
 
 def quat_xyzw_to_matrix(q: np.ndarray) -> np.ndarray:
@@ -242,7 +247,7 @@ def make_imu_msg(
 ) -> Any:
     msg = imu_cls()
     msg.header.stamp = stamp
-    msg.header.frame_id = FRAMES.body
+    msg.header.frame_id = MUJOCO_RAW_IMU_FRAME_ID
     gyro = np.asarray(state.imu_gyro, dtype=np.float64)
     acc = specific_force_body(state, prev_velocity, dt, mode=acc_mode)
     msg.angular_velocity.x = float(gyro[0])
@@ -257,8 +262,8 @@ def make_imu_msg(
 def make_sim_odometry_msg(*, state: Any, stamp: Any, odometry_cls: Any) -> Any:
     msg = odometry_cls()
     msg.header.stamp = stamp
-    msg.header.frame_id = FRAMES.odom
-    msg.child_frame_id = FRAMES.body
+    msg.header.frame_id = MUJOCO_ODOM_FRAME_ID
+    msg.child_frame_id = MUJOCO_BODY_FRAME_ID
     pos = np.asarray(state.position, dtype=np.float64)
     quat = np.asarray(state.orientation, dtype=np.float64)
     lin = np.asarray(state.linear_velocity, dtype=np.float64)
@@ -308,8 +313,8 @@ def make_odom_body_tf(*, state: Any, stamp: Any, transform_cls: Any) -> Any:
     return make_transform_msg(
         stamp=stamp,
         transform_cls=transform_cls,
-        parent=FRAMES.odom,
-        child=FRAMES.body,
+        parent=FRAME_LINKS["odom_to_body"].parent,
+        child=FRAME_LINKS["odom_to_body"].child,
         translation_xyz=np.asarray(state.position, dtype=np.float64),
         rotation_xyzw=np.asarray(state.orientation, dtype=np.float64),
     )

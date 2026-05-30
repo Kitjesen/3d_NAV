@@ -233,6 +233,22 @@ export interface RoutecheckLatestResponse {
   ts: number
 }
 
+export interface RealRuntimeEvidenceLatestResponse {
+  schema_version?: string | number
+  ok?: boolean
+  runtime_evidence_ok?: boolean
+  report_age_s?: number | null
+  max_age_s?: number | null
+  runtime_contract?: string | null
+  simulation_only?: boolean | null
+  real_robot_motion?: boolean | null
+  cmd_vel_sent_to_hardware?: boolean | null
+  reason?: string | null
+  blockers?: string[]
+  ts?: number | null
+  [key: string]: unknown
+}
+
 export interface DeviceEntry {
   [key: string]: unknown
 }
@@ -368,6 +384,116 @@ export interface GoalCandidateResponse {
   preview?: PlanPreviewResponse | null
   reasons: string[]
   error?: string | null
+  ts: number
+}
+
+export type InspectionAcceptanceMode = 'non_motion' | 'simulation' | 'field'
+
+export interface InspectionAcceptanceRequest {
+  mode?: InspectionAcceptanceMode
+  points?: string[]
+  tag?: string | null
+  map_dir?: string | null
+  require_tomogram?: boolean
+  require_occupancy?: boolean
+  expected_data_source?: string | null
+  expected_source_profile?: string | null
+  expected_frame_id?: string | null
+  client_id?: string
+}
+
+export interface InspectionAcceptanceTargetResult {
+  name: string
+  status: string
+  ok: boolean
+  target_type?: string | null
+  source?: string | null
+  location_name?: string | null
+  preview_feasible: boolean
+  preview_count?: number | null
+  planner?: string | null
+  distance_m?: number | null
+  non_motion: boolean
+  command_published: boolean
+  reasons: string[]
+  error?: string | null
+}
+
+export interface InspectionAcceptanceResponse {
+  schema_version: string
+  ok: boolean
+  summary: string
+  gateway_url?: string | null
+  mode: string
+  field_ready: boolean
+  field_summary: string
+  target_count: number
+  pass_count: number
+  fail_count: number
+  locations_count?: number | null
+  motion_safety: Record<string, unknown>
+  frontier_preview: Record<string, unknown>
+  runtime_switch: Record<string, unknown>
+  targets: InspectionAcceptanceTargetResult[]
+  blockers: string[]
+  advisories: string[]
+  evidence: Record<string, unknown>
+  commands: Record<string, string>
+  ts: number
+}
+
+export interface ProductFieldCheckRequest {
+  mode?: InspectionAcceptanceMode
+  map_dir?: string | null
+  require_tomogram?: boolean
+  require_occupancy?: boolean
+  expected_data_source?: string | null
+  expected_source_profile?: string | null
+  expected_frame_id?: string | null
+}
+
+export interface ProductFieldCheckResponse {
+  schema_version: string
+  ok: boolean
+  mode: string
+  summary: string
+  map: Record<string, unknown>
+  runtime: Record<string, unknown>
+  stage_evidence: Record<string, unknown>
+  navigation: Record<string, unknown>
+  frontier_preview: Record<string, unknown>
+  runtime_switch: Record<string, unknown>
+  evidence: Record<string, unknown>
+  algorithm: Record<string, unknown>
+  blockers: string[]
+  advisories: string[]
+  commands: Record<string, string>
+}
+
+export interface AlgorithmBenchmarkLatestResponse {
+  schema_version: 'lingtu.algorithm_benchmark_latest.v1'
+  ok: boolean
+  read_only: boolean
+  ros2_topic_required: boolean
+  publishes: string[]
+  artifacts_root: string
+  count: number
+  summary_path?: string | null
+  report_mtime?: number | null
+  report_age_s?: number | null
+  max_age_s: number
+  preset: string
+  source: string
+  summary_schema_version?: string | null
+  claim_allowed: boolean
+  missing_or_failed: string[]
+  required_gate_sequence: string[]
+  validation_flow: Record<string, unknown>[]
+  claim_boundary: Record<string, unknown>
+  blocking_categories: Record<string, string[]>
+  blockers: string[]
+  reason?: string | null
+  latest?: Record<string, unknown> | null
   ts: number
 }
 
@@ -535,6 +661,11 @@ export interface ClientLinks {
   path?: string
   localization_status?: string
   navigation_status?: string
+  runtime_dataflow?: string
+  runtime_dataflow_topic?: string
+  runtime_dataflow_subscribe?: string
+  runtime_switch_plan?: string
+  algorithm_benchmark_latest?: string
   devices?: string
   readiness?: string
   auth_login?: string
@@ -555,6 +686,7 @@ export interface ClientLinks {
   session_end?: string
   navigation_goal_candidate?: string
   navigation_plan?: string
+  inspection_acceptance?: string
   navigation_cancel?: string
   goal?: string
   navigate_click?: string
@@ -584,7 +716,9 @@ export interface ClientLinks {
   memory_temporal?: string
   memory_temporal_semantic?: string
   diagnostic_pack?: string
+  field_check?: string
   routecheck_latest?: string
+  real_runtime_evidence_latest?: string
   [key: string]: string | undefined
 }
 
@@ -756,6 +890,185 @@ export interface AppTrafficResponse {
   }
   warnings: string[]
   links: ClientLinks
+}
+
+export interface RuntimeDataflowPortSummary {
+  module: string
+  port: string
+  direction: 'in' | 'out'
+  type?: string | null
+  msg_count: number
+  rate_hz: number
+  stale_ms?: number | null
+  connected?: boolean | null
+  callbacks?: number | null
+}
+
+export interface RuntimeDataflowObservability {
+  observable: boolean
+  observable_via: string[]
+  module_port_candidates: RuntimeDataflowPortSummary[]
+  gateway_channels: Array<Record<string, unknown>>
+  live_module_samples: boolean
+  has_fresh_module_sample: boolean
+  fresh_stale_ms_limit?: number | null
+  ros2_topic_required: boolean
+}
+
+export interface RuntimeDataflowCommunication {
+  allowed: boolean
+  interfaces: Array<Record<string, unknown>>
+  arbitrary_publish_supported: boolean
+  policy: string
+}
+
+export interface RuntimeDataflowTokenEvidence {
+  token: string
+  kind: string
+  observable: boolean
+  live: boolean
+  reason: string
+  module_ports: RuntimeDataflowPortSummary[]
+  gateway_channels: Array<Record<string, unknown>>
+}
+
+export interface RuntimeDataflowStageEvidence {
+  name: string
+  owner?: string | null
+  frame_role?: string | null
+  map_dependency?: string | null
+  inputs: string[]
+  outputs: string[]
+  input_evidence: RuntimeDataflowTokenEvidence[]
+  output_evidence: RuntimeDataflowTokenEvidence[]
+  observable: boolean
+  live: boolean
+  status: string
+  missing_inputs: string[]
+  missing_outputs: string[]
+  not_live_inputs: string[]
+  not_live_outputs: string[]
+}
+
+export interface RuntimeDataflowTopicInspection {
+  observable?: boolean
+  observation_level?: string
+  live?: boolean
+  module_stats_available?: boolean
+  module_stats?: RuntimeDataflowPortSummary[]
+  payload_available?: boolean
+  payload_interfaces?: Array<Record<string, unknown>>
+  stream_interfaces?: Array<Record<string, unknown>>
+  communicate?: boolean
+  write_interfaces?: Array<Record<string, unknown>>
+  arbitrary_publish_supported?: boolean
+  ros2_topic_required?: boolean
+  policy?: string
+  [key: string]: unknown
+}
+
+export interface RuntimeDataflowTopicSummary {
+  topic: string
+  message_formats: string[]
+  default_frame_id?: string | null
+  allowed_frame_ids: string[]
+  required_for_real_runtime_frame_evidence: boolean
+  data_flow_stages: Array<Record<string, unknown>>
+  observability: RuntimeDataflowObservability
+  communication: RuntimeDataflowCommunication
+  inspection: RuntimeDataflowTopicInspection
+}
+
+export interface RuntimeDataflowResponse {
+  schema_version: number
+  ts: number
+  runtime_contract?: string | null
+  runtime_boundary: Record<string, unknown>
+  transport_layers: Record<string, Record<string, unknown>>
+  ros2_topic_required: boolean
+  module_ports: Record<string, unknown>
+  topics: RuntimeDataflowTopicSummary[]
+  stage_evidence: RuntimeDataflowStageEvidence[]
+  control_boundary: {
+    arbitrary_publish_supported?: boolean
+    policy?: string
+    command_interfaces?: Array<Record<string, unknown>>
+    [key: string]: unknown
+  }
+  links: ClientLinks
+}
+
+export interface RuntimeDataflowTopicDetailResponse {
+  schema_version: number
+  ok: boolean
+  ts: number
+  selector: string
+  topic?: RuntimeDataflowTopicSummary | null
+  runtime_contract?: string | null
+  runtime_boundary: Record<string, unknown>
+  inspection: RuntimeDataflowTopicInspection
+  control_boundary: RuntimeDataflowResponse['control_boundary']
+  available_topics: string[]
+  links: ClientLinks
+  error?: string | null
+}
+
+export interface RuntimeDataflowSubscribeRequest {
+  selector: string
+  transport?: 'gateway_sse'
+  max_rate_hz?: number | null
+}
+
+export interface RuntimeDataflowSubscribeResponse {
+  schema_version: 'lingtu.runtime_dataflow_subscription.v1'
+  ok: boolean
+  ts: number
+  read_only: boolean
+  ros2_topic_required: boolean
+  arbitrary_publish_supported: boolean
+  publishes: string[]
+  selector: string
+  topic?: string | null
+  transport: 'gateway_sse'
+  stream_url: string
+  event_types: string[]
+  stream_interfaces: Array<Record<string, unknown>>
+  blockers: string[]
+  links: ClientLinks
+}
+
+export interface RuntimeSwitchPlanRequest {
+  current_profile?: string | null
+  target_profile?: string | null
+  current_endpoint?: string | null
+  target_endpoint?: string | null
+  endpoint?: string | null
+}
+
+export interface RuntimeSwitchValidationSummary {
+  ok: boolean
+  blockers: string[]
+  warnings: string[]
+}
+
+export interface RuntimeSwitchPlanResponse {
+  schema_version: 'lingtu.runtime_switch_plan.v1'
+  ok: boolean
+  ts: number
+  read_only: boolean
+  dry_run: boolean
+  motion: boolean
+  publishes: string[]
+  lifecycle: string
+  inputs: Record<string, unknown>
+  from: Record<string, unknown>
+  to: Record<string, unknown>
+  changed: string[]
+  current_validation: RuntimeSwitchValidationSummary
+  target_validation: RuntimeSwitchValidationSummary
+  blockers: string[]
+  links: ClientLinks
+  error?: string | null
 }
 
 export interface AppBootstrapResponse {
@@ -1256,7 +1569,7 @@ export interface Toast {
   kind: ToastKind
 }
 
-export type Tab = 'console' | 'scene' | 'map' | 'slam'
+export type Tab = 'console' | 'scene' | 'map' | 'slam' | 'dataflow' | 'inspection'
 
 export type SlamProfile = 'fastlio2' | 'localizer' | 'super_lio' | 'super_lio_relocation' | 'stop'
 

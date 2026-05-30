@@ -25,12 +25,15 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from core.runtime_interface import map_frame_id
+
 if TYPE_CHECKING:
     from .goal_resolver import GoalResult
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+FAST_PATH_MAP_FRAME_ID = map_frame_id()
 
 # ── Multi-source confidence weights (AdaNav uncertainty fusion) ──
 # Loaded from config/semantic_scoring.yaml [fast_path_fusion] on first call.
@@ -488,7 +491,7 @@ class FastPathMixin:
                         ),
                         is_valid=True,
                         path="fast",
-                        frame_id=sg.get("frame_id", "map"),
+                        frame_id=sg.get("frame_id", FAST_PATH_MAP_FRAME_ID),
                     )
 
             # ── Room 级 fallback: 区域指令匹配 ("去厨房"、"到走廊") ──
@@ -556,7 +559,7 @@ class FastPathMixin:
         )
 
         # 从场景图获取坐标系，默认为 map
-        target_frame = sg.get("frame_id", "map")
+        target_frame = sg.get("frame_id", FAST_PATH_MAP_FRAME_ID)
 
         # ── 来源降级: KG 先验只做搜索区域, 不做精确导航目标 ──
         best_source = best_obj.get("source", "observed")
@@ -841,7 +844,7 @@ class FastPathMixin:
             reasoning=f"Fast path room fallback: '{room_name}' match={best_match:.2f}",
             is_valid=True,
             path="fast",
-            frame_id=scene_graph.get("frame_id", "map"),
+            frame_id=scene_graph.get("frame_id", FAST_PATH_MAP_FRAME_ID),
             hint_room=room_name,
             hint_room_center=[cx, cy, cz],
         )

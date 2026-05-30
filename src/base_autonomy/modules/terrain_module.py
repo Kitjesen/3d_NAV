@@ -26,6 +26,7 @@ from core.module import Module
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
+from core.runtime_interface import TOPICS, topic_default_frame_id
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
@@ -220,7 +221,7 @@ class TerrainModule(Module, layer=2):
             arr = np.array(result.terrain_points, dtype=np.float32).reshape(-1, 4)
             self.terrain_map.publish(PointCloud2(
                 points=arr,
-                frame_id="map",
+                frame_id=topic_default_frame_id(TOPICS.terrain_map),
                 ts=ts,
             ))
             self.traversability.publish({

@@ -15,7 +15,7 @@ def navigation(
     enable_native: bool = True,
     **config,
 ) -> Blueprint:
-    """Global planning + local autonomy (terrain → local planner → path follower)."""
+    """Global planning + local autonomy (terrain -> local planner -> path follower)."""
     bp = Blueprint()
     enable_ros2_bridge = bool(config.get("enable_ros2_bridge", False))
 
@@ -113,6 +113,37 @@ def navigation(
             )
         except ImportError as e:
             logger.warning("FrontierExplorer not available: %s", e)
+
+    if config.get("enable_traversable_frontier", False):
+        try:
+            from nav.traversable_frontier_module import TraversableFrontierModule
+
+            bp.add(
+                TraversableFrontierModule,
+                min_frontier_size=config.get("traversable_frontier_min_size", 5),
+                safe_distance=config.get("traversable_frontier_safe_distance", 1.0),
+                lookahead_distance=config.get("traversable_frontier_lookahead", 5.0),
+                max_explored_distance=config.get("traversable_frontier_max_dist", 15.0),
+                info_gain_threshold=config.get("traversable_frontier_info_gain", 0.03),
+                goal_timeout=config.get("traversable_frontier_goal_timeout", 30.0),
+                explore_rate=config.get("traversable_frontier_rate", 2.0),
+                blocked_goal_radius=config.get(
+                    "traversable_frontier_blocked_goal_radius",
+                    1.0,
+                ),
+                blocked_goal_ttl=config.get(
+                    "traversable_frontier_blocked_goal_ttl",
+                    120.0,
+                ),
+                max_slope_deg=config.get("traversable_frontier_max_slope_deg", 35.0),
+                max_frontier_cost=config.get("traversable_frontier_max_cost", 80.0),
+                semantic_prior_weight=config.get(
+                    "traversable_frontier_semantic_prior_weight",
+                    0.0,
+                ),
+            )
+        except ImportError as e:
+            logger.warning("TraversableFrontierModule not available: %s", e)
 
     try:
         from base_autonomy.modules.autonomy_module import add_autonomy_stack

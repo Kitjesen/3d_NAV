@@ -12,7 +12,7 @@ from .paths import pid_file, run_dir, run_json_file
 
 
 def _lingtu_version() -> str:
-    """Best-effort version lookup: pyproject.toml → package metadata → 'unknown'."""
+    """Best-effort version lookup: pyproject.toml -> package metadata -> 'unknown'."""
     try:
         from importlib.metadata import version as _pkg_version
 
@@ -44,6 +44,7 @@ def save_run_state(
     status: str = "initializing",
     module_count: int | None = None,
     wire_count: int | None = None,
+    runtime: dict | None = None,
 ) -> None:
     run_dir().mkdir(exist_ok=True)
     if log_format == "json":
@@ -72,6 +73,8 @@ def save_run_state(
         payload["module_count"] = int(module_count)
     if wire_count is not None:
         payload["wire_count"] = int(wire_count)
+    if runtime is not None:
+        payload["runtime"] = runtime
     run_json_file().write_text(json.dumps(payload, indent=2))
 
 
@@ -79,7 +82,7 @@ def update_run_state(**fields) -> bool:
     """Patch selected fields in run.json without touching the rest.
 
     Returns True on success, False if run.json is missing or unreadable.
-    Best-effort: failures are swallowed — never block the main lifecycle.
+    Best-effort: failures are swallowed; never block the main lifecycle.
     """
     state = read_run_state()
     if state is None:

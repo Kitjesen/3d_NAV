@@ -83,10 +83,30 @@ def test_app_bootstrap_service_returns_client_contract():
     assert payload["links"]["auth_check"] == "/api/v1/auth/check"
     assert payload["links"]["localization_status"] == "/api/v1/localization/status"
     assert payload["links"]["navigation_status"] == "/api/v1/navigation/status"
+    assert payload["links"]["runtime_dataflow"] == "/api/v1/runtime/dataflow"
+    assert (
+        payload["links"]["runtime_dataflow_topic"]
+        == "/api/v1/runtime/dataflow/topic"
+    )
+    assert (
+        payload["links"]["runtime_dataflow_subscribe"]
+        == "/api/v1/runtime/dataflow/subscribe"
+    )
+    assert payload["links"]["runtime_switch_plan"] == "/api/v1/runtime/switch-plan"
     assert payload["links"]["navigation_goal_candidate"] == "/api/v1/navigation/goal_candidate"
     assert payload["links"]["navigation_plan"] == "/api/v1/navigation/plan"
+    assert payload["links"]["field_check"] == "/api/v1/diagnostics/field-check"
+    assert payload["links"]["inspection_acceptance"] == "/api/v1/inspection/acceptance"
     assert payload["links"]["navigation_cancel"] == "/api/v1/navigation/cancel"
     assert payload["links"]["routecheck_latest"] == "/api/v1/diagnostics/routecheck/latest"
+    assert (
+        payload["links"]["real_runtime_evidence_latest"]
+        == "/api/v1/diagnostics/real-runtime-evidence/latest"
+    )
+    assert (
+        payload["links"]["algorithm_benchmark_latest"]
+        == "/api/v1/diagnostics/algorithm-benchmark/latest"
+    )
     assert payload["links"]["teleop_ws"] == "/ws/teleop"
     assert payload["links"]["camera_ws"] == "/ws/camera"
     assert payload["links"]["session_start"] == "/api/v1/session/start"
@@ -99,6 +119,9 @@ def test_app_bootstrap_service_returns_client_contract():
     assert capabilities["server"]["time"] == capabilities["ts"]
     assert capabilities["features"]["exploration"] is True
     assert capabilities["features"]["localization"] is True
+    assert capabilities["features"]["runtime_dataflow"] is True
+    assert capabilities["features"]["runtime_switch_plan"] is True
+    assert capabilities["features"]["algorithm_benchmark"] is True
     assert capabilities["features"]["webrtc"] is True
     assert capabilities["endpoints"]["app"]["bootstrap"]["path"] == "/api/v1/app/bootstrap"
     assert capabilities["endpoints"]["app"]["traffic"]["path"] == "/api/v1/app/traffic"
@@ -112,11 +135,44 @@ def test_app_bootstrap_service_returns_client_contract():
         capabilities["endpoints"]["state"]["navigation_status"]["path"]
         == "/api/v1/navigation/status"
     )
+    assert (
+        capabilities["endpoints"]["state"]["runtime_dataflow"]["path"]
+        == "/api/v1/runtime/dataflow"
+    )
+    assert (
+        capabilities["endpoints"]["state"]["runtime_dataflow_topic"]["path"]
+        == "/api/v1/runtime/dataflow/topic"
+    )
+    assert (
+        capabilities["endpoints"]["state"]["runtime_dataflow_subscribe"]["path"]
+        == "/api/v1/runtime/dataflow/subscribe"
+    )
+    assert (
+        capabilities["endpoints"]["state"]["runtime_dataflow_subscribe"]["method"]
+        == "POST"
+    )
     assert capabilities["endpoints"]["state"]["readiness"]["path"] == "/api/v1/readiness"
     assert capabilities["endpoints"]["control"]["goal"]["method"] == "POST"
     assert capabilities["endpoints"]["control"]["navigation_goal_candidate"]["method"] == "POST"
     assert capabilities["endpoints"]["control"]["navigation_plan"]["method"] == "POST"
     assert capabilities["endpoints"]["control"]["navigation_cancel"]["method"] == "POST"
+    endpoint_paths: set[str] = set()
+
+    def collect_endpoint_paths(value):
+        if isinstance(value, dict):
+            path = value.get("path")
+            if isinstance(path, str):
+                endpoint_paths.add(path)
+            for child in value.values():
+                collect_endpoint_paths(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_endpoint_paths(child)
+
+    collect_endpoint_paths(capabilities["endpoints"])
+    assert "/api/v1/publish" not in endpoint_paths
+    assert "/api/v1/runtime/dataflow/publish" not in endpoint_paths
+    assert not any(path.endswith("/publish") for path in endpoint_paths)
     assert capabilities["endpoints"]["map"]["maps"]["path"] == "/api/v1/slam/maps"
     assert capabilities["endpoints"]["map"]["map_lifecycle"]["method"] == "POST"
     assert capabilities["endpoints"]["map"]["map_activate"]["path"] == "/api/v1/map/activate"
@@ -131,6 +187,29 @@ def test_app_bootstrap_service_returns_client_contract():
         capabilities["endpoints"]["ops"]["routecheck_latest"]["path"]
         == "/api/v1/diagnostics/routecheck/latest"
     )
+    assert (
+        capabilities["endpoints"]["ops"]["real_runtime_evidence_latest"]["path"]
+        == "/api/v1/diagnostics/real-runtime-evidence/latest"
+    )
+    assert (
+        capabilities["endpoints"]["ops"]["algorithm_benchmark_latest"]["path"]
+        == "/api/v1/diagnostics/algorithm-benchmark/latest"
+    )
+    assert (
+        capabilities["endpoints"]["ops"]["inspection_acceptance"]["path"]
+        == "/api/v1/inspection/acceptance"
+    )
+    assert (
+        capabilities["endpoints"]["ops"]["field_check"]["path"]
+        == "/api/v1/diagnostics/field-check"
+    )
+    assert (
+        capabilities["endpoints"]["ops"]["runtime_switch_plan"]["path"]
+        == "/api/v1/runtime/switch-plan"
+    )
+    assert capabilities["endpoints"]["ops"]["field_check"]["method"] == "POST"
+    assert capabilities["endpoints"]["ops"]["runtime_switch_plan"]["method"] == "POST"
+    assert capabilities["endpoints"]["ops"]["inspection_acceptance"]["method"] == "POST"
     assert capabilities["realtime"]["events"]["transport"] == "sse"
     assert capabilities["realtime"]["events"]["event_schema"] == "SSEEventEnvelope"
     assert capabilities["realtime"]["events"]["event_id_field"] == "event_id"
@@ -427,6 +506,12 @@ def test_app_capabilities_enriches_specs_from_openapi():
     localization = capabilities["endpoints"]["state"]["localization_status"]
     navigation = capabilities["endpoints"]["state"]["navigation_status"]
     readiness = capabilities["endpoints"]["state"]["readiness"]
+    runtime_dataflow_topic = capabilities["endpoints"]["state"][
+        "runtime_dataflow_topic"
+    ]
+    runtime_dataflow_subscribe = capabilities["endpoints"]["state"][
+        "runtime_dataflow_subscribe"
+    ]
     control = capabilities["endpoints"]["control"]
     navigation_goal_candidate = capabilities["endpoints"]["control"][
         "navigation_goal_candidate"
@@ -443,6 +528,10 @@ def test_app_capabilities_enriches_specs_from_openapi():
     slam_relocalize = capabilities["endpoints"]["ops"]["slam_relocalize"]
     bag_start = capabilities["endpoints"]["ops"]["bag_start"]
     memory_semantic = capabilities["endpoints"]["ops"]["memory_temporal_semantic"]
+    field_check = capabilities["endpoints"]["ops"]["field_check"]
+    runtime_switch_plan = capabilities["endpoints"]["ops"]["runtime_switch_plan"]
+    algorithm_benchmark = capabilities["endpoints"]["ops"]["algorithm_benchmark_latest"]
+    inspection_acceptance = capabilities["endpoints"]["ops"]["inspection_acceptance"]
     webrtc_offer = capabilities["endpoints"]["media"]["webrtc_offer"]
     events = capabilities["endpoints"]["realtime"]["events"]
     camera = capabilities["endpoints"]["media"]["camera_snapshot"]
@@ -458,6 +547,18 @@ def test_app_capabilities_enriches_specs_from_openapi():
     assert localization["response_schema"] == "LocalizationStatusResponse"
     assert navigation["response_schema"] == "NavigationStatusResponse"
     assert readiness["response_schema"] == "ReadinessResponse"
+    assert (
+        runtime_dataflow_topic["response_schema"]
+        == "RuntimeDataflowTopicDetailResponse"
+    )
+    assert (
+        runtime_dataflow_subscribe["request_schema"]
+        == "RuntimeDataflowSubscribeRequest"
+    )
+    assert (
+        runtime_dataflow_subscribe["response_schema"]
+        == "RuntimeDataflowSubscribeResponse"
+    )
     assert navigation_goal_candidate["request_schema"] == "GoalCandidateRequest"
     assert navigation_goal_candidate["response_schema"] == "GoalCandidateResponse"
     assert navigation_plan["request_schema"] == "PlanPreviewRequest"
@@ -491,6 +592,13 @@ def test_app_capabilities_enriches_specs_from_openapi():
     assert slam_relocalize["request_schema"] == "SlamRelocalizeRequest"
     assert bag_start["request_schema"] == "BagStartRequest"
     assert memory_semantic["request_schema"] == "TemporalSemanticRequest"
+    assert field_check["request_schema"] == "ProductFieldCheckRequest"
+    assert field_check["response_schema"] == "ProductFieldCheckResponse"
+    assert runtime_switch_plan["request_schema"] == "RuntimeSwitchPlanRequest"
+    assert runtime_switch_plan["response_schema"] == "RuntimeSwitchPlanResponse"
+    assert algorithm_benchmark["response_schema"] == "AlgorithmBenchmarkLatestResponse"
+    assert inspection_acceptance["request_schema"] == "InspectionAcceptanceRequest"
+    assert inspection_acceptance["response_schema"] == "InspectionAcceptanceResponse"
     assert webrtc_offer["request_schema"] == "WebRTCOfferRequest"
     assert events["response_schema"] == "SSEEventEnvelope"
     assert events["response_content_types"] == ["text/event-stream"]
@@ -703,6 +811,10 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
         == "ReadinessResponse"
     )
     assert (
+        capabilities_payload["endpoints"]["state"]["runtime_dataflow_topic"]["path"]
+        == "/api/v1/runtime/dataflow/topic"
+    )
+    assert (
         capabilities_payload["endpoints"]["auth"]["login"]["request_schema"]
         == "AuthLoginRequest"
     )
@@ -850,6 +962,57 @@ def test_app_web_events_stream_flushes_live_event_before_heartbeat_delay():
     assert first["type"] == "snapshot"
     assert second["type"] == "mission_status"
     assert second["data"]["state"] == "IDLE"
+    assert second["event_id"] > first["event_id"]
+    assert gateway._traffic_stats_snapshot()["sse"]["clients"] == 0
+
+
+def test_app_web_events_stream_filters_runtime_dataflow_topic():
+    from core.msgs.nav import Odometry
+    from gateway.gateway_module import GatewayModule
+
+    def decode_payload(chunk):
+        text = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        data_line = next(line for line in text.splitlines() if line.startswith("data: "))
+        return json.loads(data_line.removeprefix("data: "))
+
+    async def read_filtered_payloads(gateway):
+        route = next(
+            route
+            for route in gateway._app.routes
+            if route.path == "/api/v1/events"
+        )
+        response = await route.endpoint(topic="odometry")
+        iterator = response.body_iterator
+        next_chunk_task = None
+        try:
+            first_payload = decode_payload(await iterator.__anext__())
+            next_chunk_task = asyncio.create_task(iterator.__anext__())
+            await asyncio.sleep(0.01)
+            gateway.push_event({"type": "mission_status", "data": {"state": "IDLE"}})
+            await asyncio.sleep(0.01)
+            gateway.odometry._deliver(Odometry())
+            second_payload = decode_payload(
+                await asyncio.wait_for(next_chunk_task, timeout=0.5)
+            )
+            return first_payload, second_payload
+        finally:
+            if next_chunk_task is not None and not next_chunk_task.done():
+                next_chunk_task.cancel()
+            close = getattr(iterator, "aclose", None)
+            if close is not None:
+                await close()
+
+    gateway = GatewayModule()
+    gateway.setup()
+
+    first, second = asyncio.run(read_filtered_payloads(gateway))
+
+    assert first["type"] == "runtime_dataflow_subscription"
+    assert first["data"]["ok"] is True
+    assert first["data"]["selector"] == "odometry"
+    assert first["data"]["event_types"] == ["odometry"]
+    assert first["data"]["ros2_topic_required"] is False
+    assert second["type"] == "odometry"
     assert second["event_id"] > first["event_id"]
     assert gateway._traffic_stats_snapshot()["sse"]["clients"] == 0
 

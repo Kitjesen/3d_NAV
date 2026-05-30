@@ -7,7 +7,7 @@ from typing import Any
 
 from core.module import Module
 from core.msgs.nav import Path
-from core.runtime_interface import FRAMES
+from core.runtime_interface import TOPICS, topic_default_frame_id
 from core.stream import In
 
 logger = logging.getLogger(__name__)
@@ -22,9 +22,9 @@ class ROS2PathBridgeModule(Module, layer=5):
     def __init__(
         self,
         node_name: str = "nav_path_bridge",
-        global_path_topic: str = "/nav/global_path",
-        local_path_topic: str = "/nav/local_path",
-        default_frame_id: str = FRAMES.odom,
+        global_path_topic: str = TOPICS.global_path,
+        local_path_topic: str = TOPICS.local_path,
+        default_frame_id: str | None = None,
         qos_depth: int = 10,
         **kw,
     ) -> None:
@@ -32,7 +32,12 @@ class ROS2PathBridgeModule(Module, layer=5):
         self._node_name = node_name
         self._global_path_topic = global_path_topic
         self._local_path_topic = local_path_topic
-        self._default_frame_id = str(default_frame_id or FRAMES.odom)
+        self._global_default_frame_id = str(
+            default_frame_id or topic_default_frame_id(TOPICS.global_path)
+        )
+        self._local_default_frame_id = str(
+            default_frame_id or topic_default_frame_id(TOPICS.local_path)
+        )
         self._qos_depth = int(qos_depth)
         self._node = None
         self._executor = None
@@ -92,18 +97,23 @@ class ROS2PathBridgeModule(Module, layer=5):
 
     def _on_global_path(self, path: list) -> None:
         if self._pub_global is not None:
-            self._pub_global.publish(self._to_ros_path(path))
+            self._pub_global.publish(
+                self._to_ros_path(path, default_frame_id=self._global_default_frame_id)
+            )
 
     def _on_local_path(self, path: Path) -> None:
         if self._pub_local is not None:
-            self._pub_local.publish(self._to_ros_path(path))
+            self._pub_local.publish(
+                self._to_ros_path(path, default_frame_id=self._local_default_frame_id)
+            )
 
-    def _to_ros_path(self, path: Path | list):
+    def _to_ros_path(self, path: Path | list, *, default_frame_id: str | None = None):
         from geometry_msgs.msg import PoseStamped as ROSPoseStamped
         from nav_msgs.msg import Path as ROSPath
 
         msg = ROSPath()
-        frame_id = str(getattr(path, "frame_id", "") or self._default_frame_id)
+        effective_default_frame_id = default_frame_id or self._local_default_frame_id
+        frame_id = str(getattr(path, "frame_id", "") or effective_default_frame_id)
         stamp = self._node.get_clock().now().to_msg() if self._node is not None else None
         msg.header.frame_id = frame_id
         if stamp is not None:

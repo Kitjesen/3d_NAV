@@ -287,6 +287,7 @@ def apply_full_stack_wires(
         "TerrainModule",
         "VoxelGridModule",
         "WavefrontFrontierExplorer",
+        "TraversableFrontierModule",
         "RerunBridgeModule",
         "LocalPlannerModule",
         "PathFollowerModule",
@@ -316,18 +317,33 @@ def apply_full_stack_wires(
         [
             WireSpec("OccupancyGridModule", "costmap", "TraversabilityCostModule", "costmap"),
             WireSpec("OccupancyGridModule", "exploration_grid", "WavefrontFrontierExplorer", "exploration_grid"),
+            WireSpec("OccupancyGridModule", "exploration_grid", "TraversableFrontierModule", "exploration_grid"),
             WireSpec("OccupancyGridModule", "exploration_grid", "ROS2GridBridgeModule", "exploration_grid"),
             WireSpec("ElevationMapModule", "elevation_map", "TraversabilityCostModule", "elevation_map"),
+            WireSpec("ElevationMapModule", "elevation_map", "TraversableFrontierModule", "elevation_map"),
             WireSpec("ESDFModule", "esdf", "TraversabilityCostModule", "esdf"),
             WireSpec("TerrainModule", "traversability", "TraversabilityCostModule", "traversability"),
+            # NAV CONTRACT (docs/architecture/NAVIGATION_COMPUTE_CONTRACT.md) L2 安全门控:
+            # fused_cost = 风险栅格 (occupancy+slope+ESDF). 它只喂全局安全门控与可视化,
+            # 【绝不】作为局部规划主评分输入. 局部主输入是 terrain_map (见下方 L2 局部规划线).
             WireSpec("TraversabilityCostModule", "fused_cost", "NavigationModule", "costmap"),
+            # ESDF 预留口: LocalPlannerCore (nav_core) 目前无 set_esdf 绑定, 该线缓存而不参与
+            # 局部主评分. 升级前不得声称"局部规划用了 ESDF". 详见契约 §5.
             WireSpec("TraversabilityCostModule", "esdf_field", "LocalPlannerModule", "esdf"),
+            WireSpec("TraversabilityCostModule", "fused_cost", "TraversableFrontierModule", "costmap"),
+            WireSpec("TraversabilityCostModule", "fused_cost", "TraversableFrontierModule", "fused_cost"),
+            WireSpec("TraversabilityCostModule", "slope_grid", "TraversableFrontierModule", "slope_grid"),
+            WireSpec("TraversabilityCostModule", "esdf_field", "TraversableFrontierModule", "esdf_field"),
+            WireSpec("TraversableFrontierModule", "traversable_frontiers", "GatewayModule", "traversable_frontiers"),
+            WireSpec("TraversableFrontierModule", "frontier_candidate", "GatewayModule", "frontier_candidate"),
             WireSpec("TraversabilityCostModule", "fused_cost", "GatewayModule", "costmap"),
             WireSpec("TraversabilityCostModule", "slope_grid", "GatewayModule", "slope_grid"),
+            WireSpec("NavigationModule", "mission_status", "TraversableFrontierModule", "navigation_status"),
             WireSpec("NavigationModule", "mission_status", "MissionLoggerModule", "mission_status"),
             WireSpec("PerceptionModule", "scene_graph", "GatewayModule", "scene_graph"),
             WireSpec("PerceptionModule", "scene_graph", "MCPServerModule", "scene_graph"),
             WireSpec("PerceptionModule", "scene_graph", "ReconstructionModule", "scene_graph"),
+            WireSpec("PerceptionModule", "scene_graph", "TraversableFrontierModule", "scene_graph"),
             WireSpec("PerceptionModule", "scene_graph", "SemanticMapperModule", "scene_graph"),
             WireSpec("PerceptionModule", "scene_graph", "EpisodicMemoryModule", "scene_graph"),
             WireSpec("PerceptionModule", "scene_graph", "VectorMemoryModule", "scene_graph"),
@@ -380,9 +396,13 @@ def apply_full_stack_wires(
         bp,
         names,
         [
+            # NAV CONTRACT L2 局部规划: terrain_map (局部几何障碍点云) 是 LocalPlanner 的
+            # 主输入, global_path/waypoint 是 L5 下发的阶段目标 (指令派发, 非依赖反转).
+            # LocalPlanner 用 CMU/nav_core 点云体素评分产出 local_path (非 costmap 滚动优化).
             WireSpec("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint"),
             WireSpec("NavigationModule", "clear_path", "LocalPlannerModule", "clear_path"),
             WireSpec("TerrainModule", "terrain_map", "LocalPlannerModule", "terrain_map"),
+            # NAV CONTRACT L2 控制跟踪: PathFollower 把 local_path 跟成 cmd_vel.
             WireSpec("LocalPlannerModule", "local_path", "PathFollowerModule", "local_path"),
             WireSpec("LocalPlannerModule", "local_path", "SafetyRingModule", "path"),
             WireSpec("LocalPlannerModule", "control_hint", "PathFollowerModule", "control_hint"),

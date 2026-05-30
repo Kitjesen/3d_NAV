@@ -26,7 +26,15 @@ from core.msgs.nav import Odometry
 from core.msgs.semantic import SceneGraph
 from core.msgs.sensor import Image
 from core.registry import register
+from core.runtime_interface import (
+    body_frame_id as runtime_body_frame_id,
+    odom_frame_id as runtime_odom_frame_id,
+)
 from core.stream import In, Out
+
+
+STUB_ODOM_FRAME_ID = runtime_odom_frame_id()
+STUB_BODY_FRAME_ID = runtime_body_frame_id()
 
 
 @register("driver", "stub", priority=0, description="Fake driver for CI/testing, no hardware")
@@ -56,8 +64,8 @@ class StubDogModule(Module, layer=1):
         initial_x: float = 0.0,
         initial_y: float = 0.0,
         initial_yaw: float = 0.0,
-        odom_frame_id: str = "odom",
-        child_frame_id: str = "body",
+        odom_frame_id: str = STUB_ODOM_FRAME_ID,
+        child_frame_id: str = STUB_BODY_FRAME_ID,
         **kw: Any,
     ) -> None:
         super().__init__(**kw)

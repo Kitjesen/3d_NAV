@@ -199,20 +199,80 @@ def test_large_terrain_validation_records_blocked_pct_without_faking_success(tmp
             raise RuntimeError("GlobalPlannerService: planner returned empty path")
 
     monkeypatch.setattr(mod, "GlobalPlannerService", BlockedService)
-    monkeypatch.setattr(mod, "_pct_runtime_evidence", lambda: {"ok": False, "missing": ["ele_planner"]})
+    monkeypatch.setattr(
+        mod,
+        "_pct_runtime_evidence",
+        lambda: {
+            "ok": False,
+            "canonical_arch": "x86_64",
+            "python_tag": "py313",
+            "missing": ["ele_planner"],
+            "error": "No runnable PCT native modules",
+        },
+    )
 
     report = mod.run_validation(tmp_path, routes=("terrain_short",), planners=("pct",))
 
     assert report["ok"] is False
+    assert report["native_runtime"]["ok"] is False
+    assert report["native_runtime"]["python_tag"] == "py313"
+    assert "PCT native runtime unavailable" in report["environment_blockers"]
     plan = report["cases"][0]["planning"][0]
     assert plan["planner"] == "pct"
     assert plan["feasible"] is False
     assert plan["blocked"] is True
+    assert plan["status"] == "blocked"
+    assert plan["failure_category"] == "environment_runtime"
     assert plan["native_backend_used"] is False
     assert plan["native_runtime"]["ok"] is False
     assert plan["route_ok"] is False
     assert report["cases"][0]["selection"]["selected_planner"] == ""
     assert report["cases"][0]["selection"]["selected_route_ok"] is False
+    assert report["cases"][0]["selection"]["rejected_planners"][0]["reason"] == "environment_blocked"
+
+
+def test_large_terrain_pct_runtime_evidence_preserves_host_diagnostics(monkeypatch):
+    from sim.scripts import large_terrain_nav_validation as mod
+
+    monkeypatch.setattr(
+        mod,
+        "inspect_pct_runtime",
+        lambda root: {
+            "ok": False,
+            "canonical_arch": "x86_64",
+            "python_tag": "py313",
+            "known_good_python_tag": "py310",
+            "python_abi_matches_known_good": False,
+            "platform_system": "windows",
+            "native_binary_format": "linux_elf",
+            "host_platform_supported": False,
+            "host_platform_blocker": "PCT native artifacts are Linux ELF extension modules",
+            "lib_dir": "pct/lib/x86_64",
+            "missing": ["a_star.cpython-313-x86_64-linux-gnu.so"],
+            "shared_missing": ["libmetis-gtsam.so"],
+            "candidate_diagnostics": [
+                {
+                    "path": "pct/lib/x86_64",
+                    "available_extension_modules": [
+                        "a_star.cpython-310-x86_64-linux-gnu.so",
+                    ],
+                    "has_current_abi_extensions": False,
+                },
+            ],
+            "recommended_build_command": (
+                "bash src/global_planning/PCT_planner_runnable/build_host_x86_64.sh"
+            ),
+            "error": "No runnable PCT native modules",
+        },
+    )
+
+    evidence = mod._pct_runtime_evidence()
+
+    assert evidence["platform_system"] == "windows"
+    assert evidence["host_platform_supported"] is False
+    assert evidence["python_abi_matches_known_good"] is False
+    assert evidence["candidate_diagnostics"][0]["has_current_abi_extensions"] is False
+    assert "build_host_x86_64.sh" in evidence["recommended_build_command"]
 
 
 def test_large_terrain_validation_records_safe_fallback_selection(tmp_path, monkeypatch):

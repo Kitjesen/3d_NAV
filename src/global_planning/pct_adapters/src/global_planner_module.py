@@ -32,6 +32,8 @@ from global_planning.PCT_planner_runnable.runtime import load_tomogram_planner
 
 logger = logging.getLogger(__name__)
 
+_PCT_HEIGHT_SNAP_TOLERANCE_M = 0.25
+
 # ---------------------------------------------------------------------------
 # PCT backend: native terrain-aware planner
 # ---------------------------------------------------------------------------
@@ -58,6 +60,7 @@ class _PCTBackend:
         self._obstacle_thr = obstacle_thr
         self._available = False
         self._load_error: str = ""
+        self._last_plan_error: str = ""
 
         # 2D ground-floor grid for _find_safe_goal BFS (extracted from tomogram)
         self._grid: np.ndarray | None = None
@@ -248,12 +251,14 @@ class _PCTBackend:
             List of (x, y, z) tuples; empty list means planning failed.
             Caller (GlobalPlannerService) raises RuntimeError on empty return.
         """
+        self._last_plan_error = ""
         if self._planner is None:
             logger.error(
                 "PCT planner unavailable (%s); cannot plan. "
                 "Is this running with native PCT .so files matching this arch/Python ABI?",
                 self._load_error,
             )
+            self._last_plan_error = "pct planner unavailable"
             return []
 
         start_pos = np.asarray(start[:2], dtype=np.float64)
@@ -261,14 +266,28 @@ class _PCTBackend:
         # Choose heights that land on traversable tomogram slices at each XY.
         # A raw 2-D goal often arrives with z=0, while get_surface_height()
         # can snap to an upper slice whose traversability is a hard barrier.
-        start_h = self._select_traversable_height(
-            start_pos,
-            float(start[2]) if len(start) > 2 else 0.0,
-        )
-        goal_h = self._select_traversable_height(
-            goal_pos,
-            float(goal[2]) if len(goal) > 2 else 0.0,
-        )
+        try:
+            start_h = self._select_traversable_height(
+                start_pos,
+                float(start[2]) if len(start) > 2 else 0.0,
+                max_snap_m=_PCT_HEIGHT_SNAP_TOLERANCE_M,
+                reject_out_of_bounds=True,
+            )
+            goal_h = self._select_traversable_height(
+                goal_pos,
+                float(goal[2]) if len(goal) > 2 else 0.0,
+                max_snap_m=_PCT_HEIGHT_SNAP_TOLERANCE_M,
+                reject_out_of_bounds=True,
+            )
+        except ValueError as exc:
+            self._last_plan_error = str(exc)
+            logger.warning(
+                "PCT rejected start/goal before planning: start=%s goal=%s reason=%s",
+                start,
+                goal,
+                exc,
+            )
+            return []
         if self._is_near_zero_route(start_pos, goal_pos):
             logger.info(
                 "PCT native plan bypassed for near-zero route: start=%s goal=%s",
@@ -283,12 +302,14 @@ class _PCTBackend:
         try:
             result = self._planner.plan(start_pos, goal_pos, start_h, goal_h)
         except Exception:
+            self._last_plan_error = "pct native plan raised exception"
             logger.exception(
                 "PCT plan() raised exception for start=%s goal=%s", start, goal
             )
             return []
 
         if result is None or len(result) == 0:
+            self._last_plan_error = "pct native plan returned no path"
             logger.warning(
                 "PCT plan() returned no path: start=%s goal=%s", start, goal
             )
@@ -302,15 +323,29 @@ class _PCTBackend:
             elif arr.ndim == 2 and arr.shape[1] == 2:
                 return [(float(p[0]), float(p[1]), goal_h) for p in arr]
             else:
+                self._last_plan_error = f"unexpected pct result shape: {arr.shape}"
                 logger.error("Unexpected PCT result shape: %s", arr.shape)
                 return []
         except Exception:
+            self._last_plan_error = "pct result conversion failed"
             logger.exception("PCT result conversion failed")
             return []
 
-    def _select_traversable_height(self, pos: np.ndarray, fallback_z: float) -> float:
+    def _select_traversable_height(
+        self,
+        pos: np.ndarray,
+        fallback_z: float,
+        *,
+        max_snap_m: float | None = None,
+        reject_out_of_bounds: bool = False,
+    ) -> float:
         """Return a height that maps to a traversable tomogram slice."""
-        fallback = float(fallback_z) if np.isfinite(fallback_z) else 0.0
+        if not np.isfinite(fallback_z):
+            if reject_out_of_bounds:
+                raise ValueError("goal height must be finite")
+            fallback = 0.0
+        else:
+            fallback = float(fallback_z)
         planner = self._planner
         trav = getattr(planner, "layers_t", None)
         if trav is None:
@@ -323,16 +358,32 @@ class _PCTBackend:
             return fallback
 
         try:
-            idx = planner.pos2idx(np.asarray(pos[:2], dtype=np.float64))
-            col = int(np.clip(idx[0], 0, trav.shape[2] - 1))
-            row = int(np.clip(idx[1], 0, trav.shape[1] - 1))
+            pos_xy = np.asarray(pos[:2], dtype=np.float64)
+        except (TypeError, ValueError) as exc:
+            if reject_out_of_bounds:
+                raise ValueError("goal xy must be numeric") from exc
+            return fallback
+        if pos_xy.shape[0] < 2 or not np.all(np.isfinite(pos_xy[:2])):
+            if reject_out_of_bounds:
+                raise ValueError("goal xy must be finite")
+            return fallback
+
+        try:
+            idx = planner.pos2idx(pos_xy)
+            raw_col = int(round(float(idx[0])))
+            raw_row = int(round(float(idx[1])))
         except Exception:
             if self._resolution <= 0:
+                if reject_out_of_bounds:
+                    raise ValueError("tomogram resolution must be positive")
                 return fallback
-            col = int(round((float(pos[0]) - self._origin[0]) / self._resolution))
-            row = int(round((float(pos[1]) - self._origin[1]) / self._resolution))
-            col = int(np.clip(col, 0, trav.shape[2] - 1))
-            row = int(np.clip(row, 0, trav.shape[1] - 1))
+            raw_col = int(round((float(pos_xy[0]) - self._origin[0]) / self._resolution))
+            raw_row = int(round((float(pos_xy[1]) - self._origin[1]) / self._resolution))
+        if not (0 <= raw_col < trav.shape[2] and 0 <= raw_row < trav.shape[1]):
+            if reject_out_of_bounds:
+                raise ValueError("goal xy is outside tomogram bounds")
+        col = int(np.clip(raw_col, 0, trav.shape[2] - 1))
+        row = int(np.clip(raw_row, 0, trav.shape[1] - 1))
 
         elev = getattr(planner, "layers_g", None)
         if elev is not None:
@@ -340,22 +391,17 @@ class _PCTBackend:
             if elev.shape != trav.shape:
                 elev = None
 
-        def to_slice(z: float) -> int:
+        def raw_slice_value(z: float) -> float:
             try:
-                raw_slice = round(float(planner.pos2slice(float(z))))
-                return int(
-                    np.clip(raw_slice, 0, trav.shape[0] - 1)
-                )
+                return float(planner.pos2slice(float(z)))
             except Exception:
                 if self._slice_dh == 0:
-                    return 0
-                return int(
-                    np.clip(
-                        round((float(z) - self._slice_h0) / self._slice_dh),
-                        0,
-                        trav.shape[0] - 1,
-                    )
-                )
+                    return 0.0
+                return (float(z) - self._slice_h0) / self._slice_dh
+
+        def to_slice(z: float) -> int:
+            raw_slice = round(raw_slice_value(z))
+            return int(np.clip(raw_slice, 0, trav.shape[0] - 1))
 
         def slice_height(slice_idx: int, preferred: float | None = None) -> float:
             if (
@@ -369,6 +415,19 @@ class _PCTBackend:
                 if np.isfinite(height):
                     return height
             return float(self._slice_h0 + slice_idx * self._slice_dh)
+
+        if reject_out_of_bounds and max_snap_m is not None:
+            raw_fallback_slice = raw_slice_value(fallback)
+            layer_tolerance = (
+                float(max_snap_m) / abs(float(self._slice_dh))
+                if self._slice_dh
+                else 0.0
+            )
+            if (
+                raw_fallback_slice < -layer_tolerance
+                or raw_fallback_slice > (trav.shape[0] - 1) + layer_tolerance
+            ):
+                raise ValueError("goal height is outside tomogram layers")
 
         candidates: list[tuple[int, float | None]] = [(to_slice(fallback), fallback)]
         try:
@@ -386,9 +445,24 @@ class _PCTBackend:
             if slice_idx in seen:
                 continue
             seen.add(slice_idx)
+            candidate_h = slice_height(slice_idx, preferred_h)
+            if (
+                max_snap_m is not None
+                and np.isfinite(candidate_h)
+                and abs(candidate_h - fallback) > float(max_snap_m)
+            ):
+                continue
             cost = float(trav[slice_idx, row, col])
             if np.isfinite(cost) and cost < self._obstacle_thr:
-                return slice_height(slice_idx, preferred_h)
+                return candidate_h
+
+        if reject_out_of_bounds:
+            raise ValueError(
+                "no traversable tomogram slice within "
+                f"{float(max_snap_m):.2f}m of requested height"
+                if max_snap_m is not None
+                else "no traversable tomogram slice at requested xy"
+            )
 
         return fallback
 

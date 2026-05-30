@@ -7,6 +7,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from core.runtime_validation_gates import runtime_validation_gates
 from gateway.services.media_status import build_media_status
 from gateway.services.runtime_status import (
     build_localization_status_from_parts,
@@ -47,6 +48,10 @@ CLIENT_LINKS: dict[str, str] = {
     "path": "/api/v1/path",
     "localization_status": "/api/v1/localization/status",
     "navigation_status": "/api/v1/navigation/status",
+    "runtime_dataflow": "/api/v1/runtime/dataflow",
+    "runtime_dataflow_topic": "/api/v1/runtime/dataflow/topic",
+    "runtime_dataflow_subscribe": "/api/v1/runtime/dataflow/subscribe",
+    "runtime_switch_plan": "/api/v1/runtime/switch-plan",
     "devices": "/api/v1/devices",
     "health": "/api/v1/health",
     "readiness": "/api/v1/readiness",
@@ -69,6 +74,7 @@ CLIENT_LINKS: dict[str, str] = {
     "navigate_click": "/api/v1/navigate/click",
     "navigation_goal_candidate": "/api/v1/navigation/goal_candidate",
     "navigation_plan": "/api/v1/navigation/plan",
+    "inspection_acceptance": "/api/v1/inspection/acceptance",
     "navigation_cancel": "/api/v1/navigation/cancel",
     "stop": "/api/v1/stop",
     "instruction": "/api/v1/instruction",
@@ -96,7 +102,11 @@ CLIENT_LINKS: dict[str, str] = {
     "memory_temporal": "/api/v1/memory/temporal",
     "memory_temporal_semantic": "/api/v1/memory/temporal/semantic",
     "diagnostic_pack": "/api/v1/diagnostic_pack",
+    "field_check": "/api/v1/diagnostics/field-check",
     "routecheck_latest": "/api/v1/diagnostics/routecheck/latest",
+    "real_runtime_evidence_latest": "/api/v1/diagnostics/real-runtime-evidence/latest",
+    "algorithm_benchmark_latest": "/api/v1/diagnostics/algorithm-benchmark/latest",
+    "runtime_contract": "/api/v1/diagnostics/runtime-contract",
 }
 
 CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
@@ -124,6 +134,18 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
         "navigation_status": {
             "method": "GET",
             "path": CLIENT_LINKS["navigation_status"],
+        },
+        "runtime_dataflow": {
+            "method": "GET",
+            "path": CLIENT_LINKS["runtime_dataflow"],
+        },
+        "runtime_dataflow_topic": {
+            "method": "GET",
+            "path": CLIENT_LINKS["runtime_dataflow_topic"],
+        },
+        "runtime_dataflow_subscribe": {
+            "method": "POST",
+            "path": CLIENT_LINKS["runtime_dataflow_subscribe"],
         },
         "devices": {"method": "GET", "path": CLIENT_LINKS["devices"]},
         "health": {"method": "GET", "path": CLIENT_LINKS["health"]},
@@ -188,7 +210,28 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
         "memory_temporal": {"method": "GET", "path": CLIENT_LINKS["memory_temporal"]},
         "memory_temporal_semantic": {"method": "POST", "path": CLIENT_LINKS["memory_temporal_semantic"]},
         "diagnostic_pack": {"method": "GET", "path": CLIENT_LINKS["diagnostic_pack"]},
+        "field_check": {
+            "method": "POST",
+            "path": CLIENT_LINKS["field_check"],
+        },
+        "runtime_switch_plan": {
+            "method": "POST",
+            "path": CLIENT_LINKS["runtime_switch_plan"],
+        },
+        "inspection_acceptance": {
+            "method": "POST",
+            "path": CLIENT_LINKS["inspection_acceptance"],
+        },
         "routecheck_latest": {"method": "GET", "path": CLIENT_LINKS["routecheck_latest"]},
+        "real_runtime_evidence_latest": {
+            "method": "GET",
+            "path": CLIENT_LINKS["real_runtime_evidence_latest"],
+        },
+        "algorithm_benchmark_latest": {
+            "method": "GET",
+            "path": CLIENT_LINKS["algorithm_benchmark_latest"],
+        },
+        "runtime_contract": {"method": "GET", "path": CLIENT_LINKS["runtime_contract"]},
     },
 }
 
@@ -383,6 +426,9 @@ def _feature_flags(gw: Any) -> dict[str, bool]:
         "mapping": True,
         "localization": True,
         "navigation": True,
+        "runtime_dataflow": True,
+        "runtime_switch_plan": True,
+        "algorithm_benchmark": True,
         "exploration": explorer_available,
         "teleop": True,
         "camera_snapshot": True,
@@ -543,7 +589,8 @@ def _enrich_endpoint_specs(
             item: dict[str, Any] = dict(spec)
             method = str(item.get("method", "")).upper()
             lookup_method = "GET" if method == "SSE" else method
-            contract = contracts.get((lookup_method, str(item.get("path", ""))))
+            lookup_path = str(item.get("path", "")).split("?", 1)[0]
+            contract = contracts.get((lookup_method, lookup_path))
             if contract:
                 for key, value in contract.items():
                     if value in (None, []):
@@ -568,6 +615,7 @@ def build_app_capabilities(gw: Any) -> dict[str, Any]:
         "features": _feature_flags(gw),
         "endpoints": _enrich_endpoint_specs(gw, CLIENT_ENDPOINTS),
         "probes": _enrich_endpoint_specs(gw, {"probes": PROBE_ENDPOINTS})["probes"],
+        "validation_gates": runtime_validation_gates(),
         "realtime": {
             "events": {
                 "path": CLIENT_LINKS["events"],

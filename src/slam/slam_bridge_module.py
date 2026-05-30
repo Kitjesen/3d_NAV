@@ -29,7 +29,11 @@ from core.msgs.gnss import GnssFixType, GnssOdom
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
-from core.runtime_interface import FRAMES, TOPICS
+from core.runtime_interface import (
+    TOPICS,
+    normalize_frame_id,
+    topic_default_frame_id,
+)
 from core.runtime_policy import slam_backend_contract
 from core.stream import In, Out
 from core.utils.scene_mode_detector import SceneModeConfig, SceneModeDetector
@@ -358,7 +362,7 @@ class SlamBridgeModule(Module, layer=1):
             # so frontend sees both saved_map (already map frame) and map_cloud
             # (Fast-LIO2 odom frame) overlaid in the same reference frame.
             self._reader.on_tf("/tf", self._on_dds_tf)
-            # Note: only subscribe to cloud_topic — set cloud_topic="/nav/registered_cloud"
+            # Note: only subscribe to cloud_topic; use TOPICS.registered_cloud
             # for localizer mode (avoids duplicate accumulation when both topics fire)
             logger.info("SlamBridgeModule: using cyclonedds (lightweight)")
             return True
@@ -409,7 +413,7 @@ class SlamBridgeModule(Module, layer=1):
                 node, PointCloud2, self._saved_map_topic,
                 self._on_rclpy_saved_map, saved_map_qos,
                 callback_group=saved_map_group)
-            # Note: only subscribe to cloud_topic — set cloud_topic="/nav/registered_cloud"
+            # Note: only subscribe to cloud_topic; use TOPICS.registered_cloud
             # for localizer mode (avoids duplicate accumulation when both topics fire)
             self._create_subscription(
                 node, ROS2Odom, self._odom_topic, self._on_rclpy_odom,
@@ -1276,6 +1280,10 @@ class SlamBridgeModule(Module, layer=1):
                     angular=Vector3(x=t.angular.x, y=t.angular.y, z=t.angular.z),
                 ),
                 ts=stamp,
+                frame_id=self._frame_from_msg_header(
+                    msg, default=topic_default_frame_id(TOPICS.odometry)),
+                child_frame_id=self._child_frame_from_msg(
+                    msg, default=topic_default_frame_id(TOPICS.cmd_vel)),
             )
             fused = self._fuse_odometry(slam_odom)
 
@@ -1312,7 +1320,8 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                source_frame = self._cloud_frame_from_msg(msg, default=FRAMES.odom)
+                source_frame = self._cloud_frame_from_msg(
+                    msg, default=topic_default_frame_id(TOPICS.odometry))
                 xyz_map, frame_id = self._map_cloud_points_and_frame(xyz, source_frame)
                 self._mark_cloud_received()
                 self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id=frame_id))
@@ -1337,7 +1346,8 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id=FRAMES.map))
+                self.saved_map.publish(PointCloud2.from_numpy(
+                    xyz, frame_id=topic_default_frame_id(TOPICS.saved_map_cloud)))
         except Exception as e:
             logger.debug("SlamBridge dds saved_map error: %s", e)
 
@@ -1439,7 +1449,8 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                source_frame = self._cloud_frame_from_msg(msg, default=FRAMES.odom)
+                source_frame = self._cloud_frame_from_msg(
+                    msg, default=topic_default_frame_id(TOPICS.odometry))
                 xyz_map, frame_id = self._map_cloud_points_and_frame(xyz, source_frame)
                 self._mark_cloud_received()
                 self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id=frame_id))
@@ -1464,7 +1475,8 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id=FRAMES.map))
+                self.saved_map.publish(PointCloud2.from_numpy(
+                    xyz, frame_id=topic_default_frame_id(TOPICS.saved_map_cloud)))
         except Exception as e:
             logger.debug("SlamBridge rclpy saved_map error: %s", e)
 
@@ -1481,9 +1493,18 @@ class SlamBridgeModule(Module, layer=1):
         return (xyz @ R.T) + t
 
     def _cloud_frame_from_msg(self, msg, *, default: str) -> str:
+        return self._frame_from_msg_header(msg, default=default)
+
+    def _frame_from_msg_header(self, msg, *, default: str) -> str:
         header = getattr(msg, "header", None)
-        frame_id = str(getattr(header, "frame_id", "") or default).strip().lstrip("/")
-        return frame_id or default
+        frame_id = normalize_frame_id(getattr(header, "frame_id", None))
+        return frame_id or normalize_frame_id(default) or topic_default_frame_id(
+            TOPICS.odometry)
+
+    def _child_frame_from_msg(self, msg, *, default: str) -> str:
+        child_frame_id = normalize_frame_id(getattr(msg, "child_frame_id", None))
+        return child_frame_id or normalize_frame_id(default) or topic_default_frame_id(
+            TOPICS.cmd_vel)
 
     def _map_cloud_points_and_frame(
         self,
@@ -1492,9 +1513,20 @@ class SlamBridgeModule(Module, layer=1):
     ) -> tuple[np.ndarray, str]:
         """Return map-cloud points without relabeling odom data as map data."""
 
-        if getattr(self, "_T_map_odom", None) is not None and self._should_apply_map_odom_tf():
-            return self._apply_map_odom_to_points(xyz), FRAMES.map
-        return xyz, (source_frame or FRAMES.odom)
+        normalized_source = (
+            normalize_frame_id(source_frame)
+            or topic_default_frame_id(TOPICS.odometry)
+        )
+        if (
+            normalized_source == topic_default_frame_id(TOPICS.odometry)
+            and getattr(self, "_T_map_odom", None) is not None
+            and self._should_apply_map_odom_tf()
+        ):
+            return (
+                self._apply_map_odom_to_points(xyz),
+                topic_default_frame_id(TOPICS.map_cloud),
+            )
+        return xyz, normalized_source
 
     def _should_apply_map_odom_tf(self) -> bool:
         """Return whether incoming SLAM data needs localizer map->odom lift.
@@ -1521,7 +1553,17 @@ class SlamBridgeModule(Module, layer=1):
         return self._apply_map_odom_to_points(xyz)
 
     def _maybe_apply_map_odom_to_odometry(self, odom: Odometry) -> Odometry:
+        odom.frame_id = (
+            normalize_frame_id(getattr(odom, "frame_id", None))
+            or topic_default_frame_id(TOPICS.odometry)
+        )
+        odom.child_frame_id = (
+            normalize_frame_id(getattr(odom, "child_frame_id", None))
+            or topic_default_frame_id(TOPICS.cmd_vel)
+        )
         if getattr(self, "_T_map_odom", None) is None:
+            return odom
+        if odom.frame_id != topic_default_frame_id(TOPICS.odometry):
             return odom
         if not self._should_apply_map_odom_tf():
             return odom
@@ -1587,7 +1629,7 @@ class SlamBridgeModule(Module, layer=1):
         odom.pose.orientation.y = float(ny)
         odom.pose.orientation.z = float(nz)
         odom.pose.orientation.w = float(nw)
-        odom.frame_id = FRAMES.map
+        odom.frame_id = topic_default_frame_id(TOPICS.map_cloud)
         return odom
 
     def _cache_map_odom_tf(self, tx, ty, tz, qx, qy, qz, qw):
@@ -1666,9 +1708,12 @@ class SlamBridgeModule(Module, layer=1):
     def _on_rclpy_tf(self, msg) -> None:
         try:
             for t in msg.transforms:
-                parent = t.header.frame_id or ""
-                child = t.child_frame_id or ""
-                if parent == "map" and child == "odom":
+                parent = normalize_frame_id(t.header.frame_id)
+                child = normalize_frame_id(t.child_frame_id)
+                if (
+                    parent == topic_default_frame_id(TOPICS.map_cloud)
+                    and child == topic_default_frame_id(TOPICS.odometry)
+                ):
                     tr = t.transform.translation
                     q = t.transform.rotation
                     self._cache_map_odom_tf(
@@ -1695,9 +1740,12 @@ class SlamBridgeModule(Module, layer=1):
         try:
             transforms = getattr(msg, "transforms", None) or []
             for t in transforms:
-                parent = getattr(t.header, "frame_id", "") or ""
-                child = getattr(t, "child_frame_id", "") or ""
-                if parent == "map" and child == "odom":
+                parent = normalize_frame_id(getattr(t.header, "frame_id", None))
+                child = normalize_frame_id(getattr(t, "child_frame_id", None))
+                if (
+                    parent == topic_default_frame_id(TOPICS.map_cloud)
+                    and child == topic_default_frame_id(TOPICS.odometry)
+                ):
                     trans = t.transform.translation
                     rot = t.transform.rotation
                     tf_msg = {
@@ -1731,8 +1779,10 @@ class SlamBridgeModule(Module, layer=1):
                     linear=Vector3(x=float(t.linear.x), y=float(t.linear.y), z=float(t.linear.z)),
                     angular=Vector3(x=float(t.angular.x), y=float(t.angular.y), z=float(t.angular.z)),
                 ),
-                frame_id=str(getattr(msg.header, "frame_id", "") or FRAMES.odom),
-                child_frame_id=str(getattr(msg, "child_frame_id", "") or FRAMES.body),
+                frame_id=self._frame_from_msg_header(
+                    msg, default=topic_default_frame_id(TOPICS.odometry)),
+                child_frame_id=self._child_frame_from_msg(
+                    msg, default=topic_default_frame_id(TOPICS.cmd_vel)),
             )
             # Track max position covariance from IESKF P matrix (filled by lio_node.cpp)
             cov = msg.pose.covariance  # 36-element row-major 6x6

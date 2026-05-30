@@ -285,7 +285,7 @@ tomogram:
   interval_min: 0.50           # 最小可通行间隔 — 地面到障碍物 (m)
   interval_free: 0.65          # 自由通行间隔 — 机器人高度 (m)
   slope_max: 1.00              # 最大坡度 (tan值, 45°) — 四足极限
-  step_max: 0.17               # 最大台阶高度 (m)
+  step_max: 0.25               # 最大台阶高度 (m)
   standable_ratio: 0.20        # 可站立面积比例
   cost_barrier: 50.0           # 障碍物代价阈值 (≥此值不可通行)
   safe_margin: 0.4             # 安全边距 (m)

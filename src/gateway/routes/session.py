@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi.responses import JSONResponse
 
+from core.runtime_interface import TOPICS, topic_default_frame_id
 from core.runtime_policy import (
     default_slam_profile_for_mode,
     is_supported_slam_profile,
@@ -23,6 +24,9 @@ from gateway.schemas import (
 )
 from gateway.services.map_paths import nav_map_root
 from gateway.services.map_safety import safe_map_name
+from nav.services.nav_services.same_source_map_artifacts import (
+    validate_saved_map_artifact_dir,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -213,6 +217,25 @@ def register_session_routes(app, gw) -> None:
                         f"Map '{map_name}' has no tomogram - build it "
                         f"first (REPL: map build {map_name})"
                     ),
+                )
+            artifact_gate = validate_saved_map_artifact_dir(
+                base,
+                require_tomogram=True,
+                expected_frame_id=topic_default_frame_id(TOPICS.saved_map_cloud),
+            )
+            artifact_gate["required"] = True
+            if artifact_gate.get("ok") is not True:
+                blockers = [
+                    str(item)
+                    for item in (artifact_gate.get("blockers") or [])
+                    if str(item)
+                ]
+                detail = "; ".join(blockers) if blockers else "unknown blocker"
+                return _transition_response(
+                    False,
+                    status_code=409,
+                    message=f"saved map artifact gate failed: {detail}",
+                    detail={"artifact_gate": artifact_gate},
                 )
             active = map_root / "active"
             try:

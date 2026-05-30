@@ -13,6 +13,7 @@
 - 消息统计 (msg_count, last_ts, latest)
 """
 
+import json
 import logging
 import time
 
@@ -1417,6 +1418,23 @@ class TestRpc:
 # ============================================================================
 # TestWorker — Worker process and WorkerManager
 # ============================================================================
+
+# ============================================================================
+# TestSkillSchema - @skill schema generation
+# ============================================================================
+
+class TestSkillSchema:
+    def test_optional_pep604_numeric_arg_stays_numeric_and_optional(self):
+        class MyModule(Module):
+            @skill
+            def navigate_to(self, x: float, y: float, z: float | None = None) -> str:
+                return "ok"
+
+        schema = json.loads(MyModule().get_skill_infos()[0].args_schema)
+
+        assert schema["properties"]["z"]["type"] == "number"
+        assert "z" not in schema["required"]
+
 
 class _SkillModDoThing(Module):
     """Module with a @skill method — must be module-level for multiprocessing pickle."""

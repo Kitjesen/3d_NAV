@@ -4,6 +4,9 @@ Feishu (Lark) bot configuration template.
 Copy this file to feishu_config.py and fill in your actual credentials.
 """
 
+from runtime_contract import STATUS_TOPIC
+
+
 # ============================================
 # Feishu app credentials
 # Obtain from https://open.feishu.cn/
@@ -30,8 +33,7 @@ RECEIVE_ID_TYPE = "open_id"
 # ROS2 configuration
 # ============================================
 
-# Topic to subscribe to
-STATUS_TOPIC = "/nav/semantic/status"
+# Topic to subscribe to. Imported from the LingTu runtime contract.
 
 # ROS2 node name
 NODE_NAME = "feishu_monitor_bot"

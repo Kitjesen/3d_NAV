@@ -11,9 +11,12 @@ Product profiles are the field-facing LingTu stacks:
 - `map`
 - `nav`
 - `explore`
-- `tare_explore`
-- `super_lio`
-- `super_lio_relocation`
+- `tare_explore` when the external TARE binary and gate are installed
+
+Experimental SLAM backends such as `super_lio` and `super_lio_relocation` are
+advanced runtime choices, not default field-facing product profiles. They must
+prove the same Gateway, map, and real-runtime-evidence gates before any field
+readiness claim.
 
 Simulation and development profiles are separate:
 
@@ -44,44 +47,112 @@ contracts:
 
 Simulation may enter only through explicit boundary adapters:
 
-1. The simulator publishes sensor, odometry, map, terrain, or waypoint topics.
-2. A simulation adapter converts those topics into LingTu's canonical contracts:
+1. The simulator publishes sensor, odometry, map, terrain, or waypoint native streams or topics.
+2. A simulation adapter converts those streams into LingTu's canonical runtime stream tokens:
    `/nav/*` for navigation data and `/exploration/*` for exploration data.
 3. LingTu modules run the same global planning, local planning, path following,
    safety, and gateway contracts that product profiles use.
 4. Any command relay back to a simulator must be isolated to a non-default ROS
    domain and marked `simulation_only=true`.
 
+## Dimos-Style Operator Model
+
+Use product task plus endpoint as the primary operator model. The product task
+is what LingTu should do; the endpoint is where sensors, state, and command
+output are connected.
+
+Target operator examples:
+
+```bash
+python lingtu.py explore --endpoint mujoco_live --record
+python lingtu.py nav --endpoint replay status
+python lingtu.py tare_explore --endpoint cmu_unity --record
+python lingtu.py runtime-contract --json
+python lingtu.py runtime-spec explore --endpoint mujoco_live
+python lingtu.py nav --robot thunder --dog-host 192.168.66.190
+```
+
+The algorithm graph remains the same across these forms. The endpoint supplies
+the data source and owns the command sink. Simulation and replay endpoints must
+report `cmd_vel_sent_to_hardware=false`; real targets must route commands only
+through `CmdVelMux` and the hardware driver. Endpoint-specific evidence still
+controls what claims a run can support.
+
 ## Unified Runtime Interface
 
 LingTu core must not care whether the endpoint is a real S100P, MuJoCo, Gazebo,
 CMU Unity, or a future simulator. Each endpoint must satisfy the same runtime
 port contract. The only endpoint-specific code is the adapter that converts
-native topics, frames, and commands into this contract.
+native streams or topics, frames, and commands into this contract.
 
 The canonical Python interface is defined in `src/core/runtime_interface.py`.
 `config/topic_contract.yaml` mirrors it for operators and diagnostics. New
 simulators or robot variants must add/choose a data-source contract there
 instead of creating new `/nav/*` meanings.
+Use `python lingtu.py runtime-contract` for the operator summary of frames,
+topic frame_id rules, resolved real runtime data-flow, stage-interface
+bindings, and algorithm interfaces. Add `--json` to export the full canonical
+manifest that defines topics, data sources, endpoint command sinks, saved
+artifact formats, and the same frame/data-flow/interface contracts.
+The same manifest exports required TF links (`map->odom`, `odom->body`, and
+`body->lidar`) plus the LiDAR mounting profiles, so endpoint adapters can be
+checked against one frame contract instead of duplicating coordinate rules.
+Algorithm interfaces also expose `map_dependency`, which is the boundary that
+separates live SLAM/map use from saved artifacts such as a PCT tomogram.
 
 `src/core/blueprints/runtime_endpoint.py` defines the Dimos-style split between
 task and connection layer. The product task remains `map`, `nav`, `explore`, or
-`tare_explore`; `--endpoint real_s100p|mujoco_live|gazebo|cmu_unity` selects the
-runtime source/sink. Compatibility profiles such as `sim_mujoco_live`,
+`tare_explore`; `--endpoint real_s100p|mujoco_live|gazebo|cmu_unity|replay`
+selects the runtime source/sink. Compatibility profiles such as `sim_mujoco_live`,
 `sim_industrial`, and `sim_cmu_tare` are launcher aliases for gates and demos,
 not independent product architectures.
 
 Examples:
 
 ```bash
-python lingtu.py explore --endpoint mujoco_live
-python lingtu.py explore --endpoint gazebo --record
+python lingtu.py explore --endpoint mujoco_live --record
+python lingtu.py nav --endpoint replay status
 python lingtu.py tare_explore --endpoint cmu_unity --record
+python lingtu.py nav --robot thunder --dog-host 192.168.66.190
 ```
+
+External runtime launchers and `lingtu status` print the resolved boundary:
+`Runtime`, `SLAM`, `Frames`, `Topic frames`, and `Flow`. This is the quick
+operator check that the selected profile is using the expected data source,
+SLAM/localization/map owner, TF links, topic frame_id contract, and command
+sink. Use `switch-plan` when the full sim/replay/real diff is needed before
+switching targets.
+Use `runtime-contract` when the canonical interface summary is needed, and
+`runtime-contract --json` when the full machine-checkable manifest is needed.
+Use `runtime-spec` when a single profile or endpoint needs its resolved
+data-flow, topic frame rules, frame links, validation blockers, and runtime
+environment inspected without launching modules; add `--json` for the
+machine-checkable payload.
+During a live Gateway run, `/api/v1/navigation/status` exposes the same current
+process boundary under `runtime`: `profile`, `endpoint`, `data_source`,
+`runtime_contract`, `command_sink`, `frame_links`, `topic_allowed_frame_ids`,
+`required_topic_frame_ids`, `runtime_data_flow_topics`, and
+`resolved_runtime_data_flow`. `/api/v1/ready` mirrors the same boundary summary
+under `runtime.boundary`, so readiness failures can be traced back to the exact
+data source, topic frame contract, required frame-id evidence, data-flow topic
+set, and command sink. Treat mismatches in `runtime.blockers` or
+`runtime.boundary.blockers` as a run configuration error before accepting
+navigation evidence.
+`/api/v1/runtime/dataflow` is the live Module-first discovery surface for
+Gateway clients. It lists canonical runtime stream tokens, matching ModulePorts,
+Gateway payload channels, and whitelisted command interfaces while keeping
+`ros2_topic_required=false`. For one stream, use
+`/api/v1/runtime/dataflow/topic?topic=odometry` or the canonical token such as
+`/nav/odometry`; this reports fresh ModulePort samples, payload interfaces, and
+whether communication is allowed through Gateway commands. For UI clients that
+need a live view, `POST /api/v1/runtime/dataflow/subscribe` returns a read-only
+Gateway SSE subscription plan, typically `/api/v1/events?topic=...`, for a
+whitelisted stream. It is an observation/whitelist contract, not arbitrary
+publish access into ModulePorts, and not a ROS2 topic browser.
 
 ### Canonical Port Groups
 
-| Group | Canonical topics/artifacts | Producer | Consumer | Required for |
+| Group | Canonical stream tokens/artifacts | Producer | Consumer | Required for |
 | --- | --- | --- | --- | --- |
 | Canonical SLAM input | `/nav/lidar_scan`, `/nav/imu` | Real LiDAR/IMU adapter | Fast-LIO or equivalent SLAM backend | Production mapping/localization |
 | Raw SLAM validation input | `/points_raw`, `/imu_raw` | Raw-sensor simulator adapter | Fast-LIO or equivalent SLAM backend | LingTu-owned mapping/localization validation |
@@ -124,6 +195,113 @@ Simulation must not:
 - enable direct-goal or direct-track planning bypasses in product profiles;
 - relay `/nav/cmd_vel` to hardware or a default ROS domain;
 - use cumulative debug clouds as proof of product SLAM quality.
+
+## Fast Switching Between Sim, Replay, And Real
+
+Fast switching means the product task graph stays stable while the endpoint
+changes. Before moving between simulation, replay, and real targets, operators
+should use a switch plan to inspect the boundary change:
+
+```bash
+python lingtu.py switch-plan sim_mujoco_live explore
+python lingtu.py switch-plan explore explore --current-endpoint mujoco_live --endpoint real_s100p
+python lingtu.py switch-plan nav nav --endpoint replay
+python lingtu.py switch-plan explore nav --endpoint real_s100p
+```
+
+The default switch-plan output is an operator summary. Use `--json` or
+`--json-out` for the full machine-readable diff. Both forms should make these
+fields explicit:
+
+- `endpoint`
+- `robot_preset`
+- `data_source`
+- `runtime_contract`
+- `slam_source`
+- `localization_source`
+- `mapping_source`
+- `lidar_extrinsic_profile`
+- `command_sink`
+- `frame_links`
+- `topic_allowed_frame_ids`
+- `required_topic_frame_ids`
+- `runtime_data_flow_topics`
+- `resolved_runtime_data_flow`
+- `simulation_only`
+- `launcher` and `launcher_args`
+- `current_validation`, `target_validation`, and top-level `ok`
+
+A valid diff changes the endpoint boundary without changing the product task
+semantics. Simulation and replay targets must never use
+`hardware_driver_after_cmd_vel_mux`. Real targets must use
+`hardware_driver_after_cmd_vel_mux` only through `CmdVelMux`; direct hardware
+actuation paths are outside the contract.
+
+Compatibility profiles are resolved back to their runtime endpoint in the
+switch plan. For example, `sim_mujoco_live -> explore` should report
+`mujoco_live -> real_s100p`, not an anonymous in-process source. Real targets
+must report `runtime_contract=real_s100p` and must not carry launcher
+arguments; simulation and replay targets may carry the gate or recording action
+used by their external launcher.
+Both sides of the switch plan must validate; a clean target does not hide a
+broken current runtime boundary.
+
+`switch-plan` is a dry-run/preflight contract, not an in-process hot-swap
+operation. Switching endpoints requires a fresh launcher boundary or an explicit
+stop/start lifecycle so stale simulation state cannot be mistaken for real
+field evidence.
+
+## Data Flow And Frames
+
+The endpoint boundary is also the data-flow boundary:
+
+```text
+sensor/log/simulator source
+  -> endpoint adapter
+  -> canonical LingTu topics
+  -> SLAM or relayed localization/map
+  -> map layers and exploration
+  -> global planner
+  -> local planner and path follower
+  -> CmdVelMux
+  -> endpoint command sink
+```
+
+The machine-checkable template is `runtime_data_flow` in
+`runtime_contract_manifest()` and `config/topic_contract.yaml`. Each stage names
+its inputs, outputs, owner, frame role, and map dependency. The current stages
+are `endpoint_adapter`, `slam_or_relayed_localization_map`,
+`map_layers_and_exploration`, `global_planning`,
+`local_planning_and_following`, and `command_boundary`.
+
+For an actual endpoint, use `resolved_runtime_data_flow.<data_source>` or
+`resolved_runtime_data_flow(data_source)`. That expanded contract replaces
+template placeholders with concrete source topics and command sinks. Examples:
+`real_s100p` resolves to `/nav/lidar_scan + /nav/imu -> /nav/odometry +
+/nav/registered_cloud + /nav/map_cloud -> hardware_driver_after_cmd_vel_mux`;
+`mujoco_fastlio2_live` resolves to `/points_raw + /imu_raw -> Fast-LIO ->
+/nav/* -> mujoco_velocity_adapter`; `gazebo_industrial` resolves native Gazebo
+topics into `/nav/*` and ends at `/lingtu/gazebo/cmd_vel`.
+
+The coordinate contract is:
+
+```text
+map -> odom -> body -> lidar_link
+```
+
+Endpoint reports must preserve evidence for these links when a gate requires
+frame validation. `map->odom` and `body->lidar` may be static links, while
+`odom->body` must be observed from live odometry or an equivalent relayed state
+stream. Registered clouds are body-frame local planning inputs; map clouds and
+saved artifacts are map-frame products unless the artifact metadata says
+otherwise.
+
+Runtime topic `frame_id` validation is topic-specific, not a single global
+frame assertion. `/nav/odometry` is valid when it reports either the active
+planning frame (`map` by default) or the canonical odometry frame (`odom`);
+Gateway reports any other odometry frame, such as `camera_link`, as a
+`frame_mismatch_odometry` blocker. Costmap and goal evidence stay stricter:
+their reported frames must match the active planning frame.
 
 ## SLAM Source Boundary
 
@@ -191,6 +369,7 @@ The adapter boundary is:
 | `cmu_unity_baseline` | CMU Unity | CMU TARE/FAR | CMU exploration stack | CMU `localPlanner` | CMU `pathFollower` | CMU path follower to Unity simulator | Reference effect only; not LingTu validation |
 | `cmu_unity_external` | CMU Unity | External CMU TARE waypoint source | LingTu navigation, optionally PCT when the gate requires it | LingTu navigation | LingTu path follower | LingTu adapter relay to CMU simulator | LingTu can ingest CMU/TARE waypoints and execute in simulation |
 | `mujoco_fastlio2_live` | MuJoCo raw LiDAR/IMU | LingTu frontier when `explore/video` is used | LingTu navigation when `explore/video` is used | LingTu navigation when `explore/video` is used | LingTu path follower when `explore/video` is used | MuJoCo velocity adapter or fixed gate motion | Fast-LIO raw sensor to canonical `/nav/*`; optional live exploration/navigation gate |
+| `real_s100p` | S100P MID-360/IMU | LingTu frontier or TARE profile | LingTu navigation/PCT | LingTu navigation | LingTu path follower | LingTu `CmdVelMux` to hardware driver | Real hardware runtime boundary; field readiness still requires robot-side evidence |
 
 Forbidden claims are part of the runtime contract:
 

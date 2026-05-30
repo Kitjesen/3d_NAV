@@ -25,6 +25,7 @@ def test_sim_blueprint_wires_real_semantic_pipeline(robot, driver_name, camera_s
 
     assert driver_name in system.modules
     assert "PerceptionModule" in system.modules
+    assert "EncoderModule" not in system.modules
     assert "VisualServoModule" in system.modules
     assert "SemanticPlannerModule" in system.modules
 
@@ -64,3 +65,18 @@ def test_sim_mujoco_blueprint_enables_camera_for_semantics():
 
     driver = system.get_module("MujocoDriverModule")
     assert driver._enable_camera is True
+
+
+def test_semantic_blueprint_can_opt_into_standalone_encoder():
+    system = full_stack_blueprint(
+        robot="stub",
+        slam_profile="none",
+        enable_native=False,
+        enable_semantic=True,
+        enable_gateway=False,
+        enable_map_modules=False,
+        enable_standalone_encoder=True,
+    ).build()
+
+    assert "PerceptionModule" in system.modules
+    assert "EncoderModule" in system.modules

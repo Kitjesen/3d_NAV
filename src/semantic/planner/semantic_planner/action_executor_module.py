@@ -21,9 +21,11 @@ from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.semantic import GoalResult as MsgGoalResult
 from core.msgs.semantic import SceneGraph
+from core.runtime_interface import map_frame_id
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
+ACTION_EXECUTOR_MODULE_MAP_FRAME_ID = map_frame_id()
 
 
 class ActionExecutorModule(Module, layer=4):
@@ -106,7 +108,7 @@ class ActionExecutorModule(Module, layer=4):
                 position=Vector3(goal.target_x, goal.target_y, goal.target_z),
                 orientation=Quaternion(x=0.0, y=0.0, z=qz, w=qw),
             ),
-            frame_id="map",
+            frame_id=ACTION_EXECUTOR_MODULE_MAP_FRAME_ID,
         )
         self.goal_pose.publish(pose)
         self.execution_status.publish(json.dumps({

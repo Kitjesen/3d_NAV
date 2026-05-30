@@ -26,6 +26,7 @@ from core.msgs.geometry import Pose, Quaternion, Vector3
 from core.msgs.nav import OccupancyGrid, Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
+from core.runtime_interface import TOPICS, topic_default_frame_id
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ class OccupancyGridModule(Module, layer=2):
         inflation_radius: float = 0.25,
         robot_clear_radius: float = 0.60,
         publish_hz: float = 2.0,
-        frame_id: str = "map",
+        frame_id: str | None = None,
         raycast_free_space: bool = False,
         unknown_as_obstacle_for_costmap: bool = False,
         raycast_max_rays: int = 1800,
@@ -70,7 +71,7 @@ class OccupancyGridModule(Module, layer=2):
         self._inf_radius = float(inflation_radius)
         self._robot_clear_radius = float(robot_clear_radius)
         self._interval = 1.0 / max(float(publish_hz), 1e-6)
-        self._frame_id = str(frame_id or "map")
+        self._frame_id = str(frame_id or topic_default_frame_id(TOPICS.exploration_grid))
         self._raycast_free_space = bool(raycast_free_space)
         self._unknown_as_obstacle_for_costmap = bool(unknown_as_obstacle_for_costmap)
         self._raycast_max_rays = max(1, int(raycast_max_rays))

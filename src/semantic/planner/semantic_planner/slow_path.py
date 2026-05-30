@@ -24,12 +24,15 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from core.runtime_interface import map_frame_id
+
 if TYPE_CHECKING:
     from .goal_resolver import GoalResult
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+SLOW_PATH_MAP_FRAME_ID = map_frame_id()
 
 
 class SlowPathMixin:
@@ -430,7 +433,7 @@ class SlowPathMixin:
         )
 
         # 从场景图获取坐标系
-        frame_id = sg.get("frame_id", "map")
+        frame_id = sg.get("frame_id", SLOW_PATH_MAP_FRAME_ID)
 
         return GoalResult(
             action="explore",
@@ -834,9 +837,9 @@ class SlowPathMixin:
             target = data.get("target", {})
 
             # 从场景图获取坐标系，默认为 map
-            frame_id = "map"
+            frame_id = SLOW_PATH_MAP_FRAME_ID
             if scene_graph is not None:
-                frame_id = scene_graph.get("frame_id", "map")
+                frame_id = scene_graph.get("frame_id", SLOW_PATH_MAP_FRAME_ID)
 
             # LLM 可能返回 NaN/Inf 坐标，用 sanitize_position 防御
             pos = sanitize_position([

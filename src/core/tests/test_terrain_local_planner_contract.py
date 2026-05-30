@@ -7,6 +7,7 @@ from base_autonomy.modules.terrain_module import TerrainModule
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 from core.msgs.nav import Odometry, Path
 from core.msgs.sensor import PointCloud2
+from core.runtime_interface import TOPICS, topic_default_frame_id
 
 
 class _FakeTerrainResult:
@@ -76,10 +77,35 @@ def test_terrain_nanobind_preserves_height_intensity_for_local_planner():
 
     assert len(published) == 1
     terrain = published[0]
-    assert terrain.frame_id == "map"
+    assert terrain.frame_id == topic_default_frame_id(TOPICS.terrain_map)
     assert terrain.points.shape == (2, 4)
     np.testing.assert_allclose(terrain.points[:, 3], np.array([0.35, 0.60], dtype=np.float32))
     assert [field.name for field in terrain.fields] == ["x", "y", "z", "intensity"]
+
+
+def test_local_planner_default_path_frame_uses_runtime_topic_contract():
+    module = LocalPlannerModule(backend="simple")
+
+    assert module._path_frame_id == topic_default_frame_id(TOPICS.local_path)
+
+
+def test_local_planner_corridor_goal_prefers_current_floor_at_same_xy():
+    module = LocalPlannerModule(backend="simple", corridor_lookahead_m=1.0)
+    module._robot_pos = np.asarray([0.0, 0.0, 0.0], dtype=float)
+    module._global_path_points = np.asarray(
+        [
+            [0.0, 0.0, 3.0],
+            [1.0, 0.0, 3.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+        ],
+        dtype=float,
+    )
+
+    goal = module._select_corridor_goal(np.asarray([4.0, 0.0, 0.0], dtype=float))
+
+    np.testing.assert_allclose(goal, np.asarray([1.0, 0.0, 0.0], dtype=float))
 
 
 def _run_cmu_py_local_plan(obstacle_half_width: float) -> tuple[np.ndarray, np.ndarray]:

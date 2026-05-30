@@ -15,7 +15,14 @@ import copy
 import math
 from typing import Any, Callable
 
-from core.runtime_interface import FRAMES, TOPICS
+from core.runtime_interface import TOPICS, topic_default_frame_id
+
+
+FASTLIO_ODOM_FRAME_ID = topic_default_frame_id(TOPICS.odometry)
+FASTLIO_REGISTERED_CLOUD_FRAME_ID = topic_default_frame_id(TOPICS.registered_cloud)
+# Fast-LIO live mapping has no saved-map relocalization transform yet, so its
+# world cloud stays in odom until a localizer owns map->odom.
+FASTLIO_LIVE_MAP_CLOUD_FRAME_ID = topic_default_frame_id(TOPICS.odometry)
 
 
 class FastLio2NavBridgeRuntime:
@@ -93,10 +100,10 @@ class FastLio2NavBridgeRuntime:
     @staticmethod
     def nav_frame_msg(msg: Any, frame_id: str) -> Any:
         cloned = copy.deepcopy(msg)
-        try:
-            cloned.header.frame_id = frame_id
-        except Exception:
-            pass
+        header = getattr(cloned, "header", None)
+        if header is None or not hasattr(header, "frame_id"):
+            raise ValueError("Fast-LIO nav bridge message missing header.frame_id")
+        header.frame_id = frame_id
         return cloned
 
     @staticmethod
@@ -132,7 +139,7 @@ class FastLio2NavBridgeRuntime:
 
     def on_odom(self, msg: Any) -> None:
         self.odom_out.append(msg)
-        nav_msg = self.nav_frame_msg(msg, FRAMES.odom)
+        nav_msg = self.nav_frame_msg(msg, FASTLIO_ODOM_FRAME_ID)
         if self.use_fastlio_for_nav:
             self.publish_nav_odom(nav_msg)
 
@@ -164,15 +171,13 @@ class FastLio2NavBridgeRuntime:
 
     def on_registered_cloud(self, msg: Any) -> None:
         self.registered_cloud_out.append(msg)
-        nav_msg = self.nav_frame_msg(msg, FRAMES.body)
+        nav_msg = self.nav_frame_msg(msg, FASTLIO_REGISTERED_CLOUD_FRAME_ID)
         if self.use_fastlio_for_nav:
             self.publish_nav_registered_cloud(nav_msg)
 
     def on_map_cloud(self, msg: Any) -> None:
         self.map_cloud_out.append(msg)
-        # Fast-LIO live mapping has no saved-map relocalization transform yet,
-        # so its world cloud stays in odom until a localizer owns map->odom.
-        nav_msg = self.nav_frame_msg(msg, FRAMES.odom)
+        nav_msg = self.nav_frame_msg(msg, FASTLIO_LIVE_MAP_CLOUD_FRAME_ID)
         if self.use_fastlio_for_nav:
             self.publish_nav_map_cloud(nav_msg)
         self.slam_bridge._process_rclpy_cloud(nav_msg)

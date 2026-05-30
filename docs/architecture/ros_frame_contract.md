@@ -17,6 +17,9 @@ adapter normalizes into the same runtime frames, topics, and algorithm inputs.
 | `odom` | Continuous local odometry frame. LIO publishes odometry here before global relocalization correction. | Fast-LIO2 / Point-LIO / simulation bridge |
 | `body` | LingTu control body frame. Local planner paths and velocity commands are body-relative. | runtime contract |
 | `base_link` | Robot model root link used by URDF/MJCF/Gazebo assets. | robot model |
+| `lidar_link` | LingTu canonical LiDAR frame after source-adapter normalization. | runtime contract |
+| `livox_frame` | Physical MID-360/raw driver frame alias accepted only at adapter/calibration boundaries. | hardware adapter |
+| `camera_link` | LingTu canonical camera frame. | runtime contract |
 | `world` | Simulator world frame only. It must be aliased into `map` or `odom` before entering LingTu runtime topics. | simulator |
 
 `body` and `base_link` are not interchangeable inside the codebase. The bridge
@@ -40,23 +43,49 @@ Body axes are fixed as `x` forward, `y` left, `z` up. LiDAR source adapters
 must prove this with known front/left/up point checks before their clouds are
 accepted as LingTu runtime data.
 
+`lidar_link` is the LingTu canonical LiDAR frame. `livox_frame` is a physical
+driver alias; runtime gates may accept it only when an adapter explicitly
+declares and normalizes the alias. Gate reports must show whether an alias was
+accepted or whether canonical `lidar_link` was observed directly.
+
 For simulation, `world` may be identical to `map` at startup, but it should not
 appear as the frame on `/nav/*` topics. Publish `map -> odom` as identity when
 there is no relocalization correction.
 
 ## Navigation Topic Frames
 
-| Topic | Type | Required frame |
-| --- | --- | --- |
-| `/nav/goal_pose` | `geometry_msgs/PoseStamped` | `map` |
-| `/nav/global_path` | `nav_msgs/Path` | `map` |
-| `/nav/way_point` | `geometry_msgs/PointStamped` | `odom` when consumed by ROS local planner, `map` when consumed by `NavigationModule` only |
-| `/nav/odometry` | `nav_msgs/Odometry` | `map` for `NavigationModule`; `odom` is allowed only when an adapter transforms it before module entry |
-| `/nav/map_cloud` | `sensor_msgs/PointCloud2` | `map` or `odom` world/local-map coordinates, never body-relative points |
-| `/nav/registered_cloud` | `sensor_msgs/PointCloud2` | `body` |
-| `/nav/terrain_map` | `sensor_msgs/PointCloud2` | `body` or `odom`, matching the local planner profile |
-| `/nav/local_path` | `nav_msgs/Path` | `body` |
-| `/nav/cmd_vel` | `geometry_msgs/TwistStamped` | `body` |
+Topic frame validation is topic-specific and runtime-specific. The table below
+is a human-readable mirror of `runtime_topic_allowed_frame_ids()` in
+`src/core/runtime_interface.py`; update that source first, then update this
+table and the mirror tests.
+
+| Topic | Real default frame | General allowed frames | Real S100P evidence required | Real S100P allowed frames |
+| --- | --- | --- | --- | --- |
+| `/nav/lidar_scan` | `lidar_link` | `lidar_link` | yes | `lidar_link` |
+| `/nav/imu` | `lidar_link` | `lidar_link` | yes | `lidar_link` |
+| `/nav/odometry` | `odom` | `odom`, `map` | yes | `odom`, `map` |
+| `/nav/state_estimation_at_scan` | `odom` | `odom` | no | `odom` |
+| `/nav/registered_cloud` | `body` | `body` | yes | `body` |
+| `/nav/map_cloud` | `map` | `map`, `odom` | yes | `map` |
+| `/nav/cumulative_map_cloud` | `map` | `map`, `odom` | no | `map`, `odom` |
+| `/nav/saved_map_cloud` | `map` | `map`, `odom` | no | `map`, `odom` |
+| `/nav/exploration_grid` | `map` | `map`, `odom` | no | `map`, `odom` |
+| `/nav/traversable_frontiers` | `map` | `map`, `odom` | no | `map` |
+| `/nav/frontier_candidate` | `map` | `map`, `odom` | no | `map` |
+| `/nav/terrain_map` | `map` | `map`, `odom` | no | `map`, `odom` |
+| `/nav/terrain_map_ext` | `map` | `map`, `odom` | no | `map`, `odom` |
+| `/nav/global_path` | `map` | `map`, `odom` | yes | `map` |
+| `/nav/local_path` | `map` | `map`, `odom`, `body` | yes | `map`, `odom`, `body` |
+| `/nav/cmd_vel` | `body` | `body` | yes | `body` |
+
+`/nav/map_cloud` and `/nav/global_path` are deliberately stricter on real
+S100P than in replay or simulation: real runtime evidence must prove both are
+in `map`. `/nav/map_cloud` is a map/world cloud, never body-relative points.
+`/nav/local_path` may be fixed-frame or body-frame because the local planner
+and path follower boundary is allowed to expose either representation, but the
+report must declare which frame was observed. `/nav/registered_cloud` is the
+current body-frame scan for local planning; it must not be treated as a map
+product.
 
 ## Raw Sensor And Algorithm Boundary
 
@@ -68,12 +97,15 @@ there is no relocalization correction.
 | Global planning | `/nav/odometry`, `/nav/map_cloud`, `/exploration/way_point` or `/nav/goal_pose` | `/nav/global_path` | LingTu navigation |
 | Local planning/following | `/nav/odometry`, `/nav/registered_cloud`, `/nav/global_path` | `/nav/local_path`, `/nav/cmd_vel` | LingTu autonomy |
 
-The Python `NavigationModule` deliberately rejects odometry, goals, and
-costmaps that do not match its configured `planning_frame_id`. Real robot
-`nav` and `explore` profiles currently set `planning_frame_id="odom"` because
-their external SLAM services publish the live navigation contract in that
-frame. Saved-map global navigation should move toward `map` once the
-`map -> odom` transform is consistently available and tested.
+The Python `NavigationModule` deliberately rejects goals, costmaps, and
+odometry that do not match its configured `planning_frame_id`. Product saved-map
+navigation fixes that frame to `map`: 3D goals, PCT inputs, global paths, and
+Navigation odometry are all consumed in `map`.
+
+SLAM, native local planners, and lower-level ROS components may still operate in
+`odom`, but the `map -> odom` correction must be applied by the SLAM
+bridge/localizer/adapter before data enters Python Navigation. Navigation must
+not silently mix `odom` odometry with `map` goals or PCT paths.
 
 ## Gazebo/GZ Integration Boundary
 
@@ -100,10 +132,11 @@ ports. It should translate model frames into the canonical contract above.
 2. `body`/`base_link` aliasing is still bridge-level convention, not enforced by
    a real TF validation gate.
 3. `/nav/map_cloud` semantics are mixed across legacy simulation code. New code
-   must keep map/world clouds separate from body-frame registered clouds.
-4. The ROS local planner consumes `odom` and `body` frames, while the Python
-   navigation module can be configured for `map` or `odom`. Tests must state
-   which path is being validated.
+   must keep map/world clouds separate from body-frame registered clouds, and
+   real S100P evidence must reject `/nav/map_cloud` outside `map`.
+4. The ROS local planner may consume `odom` and `body` frames, while the product
+   Python navigation path consumes `map`. Tests must state whether they validate
+   the lower-level ROS path or the product saved-map Navigation path.
 5. Gazebo sensor/controller plugins still need runtime verification on a ROS 2
    host. Static tests verify the model/topic contract; they do not prove Gazebo
    is publishing every bridged topic at rate.

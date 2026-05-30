@@ -1,7 +1,7 @@
 """ROS2SimDriverModule — bridges ROS2 topics from mujoco_ros2_bridge to Module ports.
 
-Subscribes to ROS2: /nav/odometry, /nav/registered_cloud, /camera/color/image_raw
-Publishes to ROS2:  /nav/cmd_vel (TwistStamped)
+Subscribes to ROS2 canonical odometry, registered-cloud, and camera topics.
+Publishes to the ROS2 canonical cmd_vel topic (TwistStamped).
 
 Module ports are identical to MujocoDriverModule for drop-in replacement.
 
@@ -27,13 +27,25 @@ from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat, PointCloud2
 from core.registry import register
-from core.runtime_interface import FRAMES, TOPICS
+from core.runtime_interface import (
+    FRAMES,
+    TOPICS,
+    runtime_fixed_path_frame_ids,
+    topic_default_frame_id,
+)
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
 # PointCloud2 point step when the cloud is XYZI (x,y,z,intensity each float32)
 _XYZI_POINT_STEP = 16  # 4 × float32
+ROS2_SIM_ODOM_FRAME_ID = topic_default_frame_id(TOPICS.odometry)
+ROS2_SIM_REGISTERED_CLOUD_FRAME_ID = topic_default_frame_id(TOPICS.registered_cloud)
+# The ROS2 simulation bridge has no map->odom localizer; live map cloud remains odom-frame.
+ROS2_SIM_LIVE_MAP_CLOUD_FRAME_ID = ROS2_SIM_ODOM_FRAME_ID
+ROS2_SIM_CMD_VEL_FRAME_ID = topic_default_frame_id(TOPICS.cmd_vel)
+ROS2_SIM_GOAL_FRAME_ID = runtime_fixed_path_frame_ids()[0]
+ROS2_SIM_CAMERA_FRAME_ID = FRAMES.camera
 
 
 @register("driver", "sim_ros2", description="ROS2 bridge driver for MuJoCo simulation")
@@ -41,12 +53,12 @@ class ROS2SimDriverModule(Module, layer=1):
     """Bridges ROS2 topics from mujoco_ros2_bridge to Module ports.
 
     Subscribes to ROS2:
-      /nav/odometry          — nav_msgs/Odometry   @ 50 Hz
-      /nav/registered_cloud  — sensor_msgs/PointCloud2 (XYZI) @ 10 Hz
+      canonical odometry         — nav_msgs/Odometry @ 50 Hz
+      canonical registered cloud — sensor_msgs/PointCloud2 (XYZI) @ 10 Hz
       /camera/color/image_raw — sensor_msgs/Image (optional, BGR8)
 
     Publishes to ROS2:
-      /nav/cmd_vel  — geometry_msgs/TwistStamped
+      canonical cmd_vel — geometry_msgs/TwistStamped
 
     Module ports mirror MujocoDriverModule for drop-in replacement.
     """
@@ -183,10 +195,10 @@ class ROS2SimDriverModule(Module, layer=1):
                     self._image_topic, self._depth_topic, self._info_topic,
                 )
 
-            # Goal pose subscriber — bridges ROS2 /nav/goal_pose to Module port
+            # Goal pose subscriber bridges ROS2 TOPICS.goal_pose to Module port.
             from geometry_msgs.msg import PoseStamped as ROS2PoseStamped
             self._create_subscription(
-                node, ROS2PoseStamped, "/nav/goal_pose", self._on_ros2_goal,
+                node, ROS2PoseStamped, TOPICS.goal_pose, self._on_ros2_goal,
                 control_qos, callback_group=control_group)
 
             # Publisher
@@ -288,7 +300,7 @@ class ROS2SimDriverModule(Module, layer=1):
                 ),
             ),
             ts=time.time(),
-            frame_id=msg.header.frame_id or "odom",
+            frame_id=msg.header.frame_id or ROS2_SIM_ODOM_FRAME_ID,
         )
         self.odometry.publish(odom)
 
@@ -368,12 +380,18 @@ class ROS2SimDriverModule(Module, layer=1):
             return None
 
     def _process_registered_cloud(self, msg) -> None:
-        cloud = self._pointcloud_from_ros2(msg, default_frame=FRAMES.body)
+        cloud = self._pointcloud_from_ros2(
+            msg,
+            default_frame=ROS2_SIM_REGISTERED_CLOUD_FRAME_ID,
+        )
         if cloud is not None:
             self.lidar_cloud.publish(cloud)
 
     def _process_map_cloud(self, msg) -> None:
-        cloud = self._pointcloud_from_ros2(msg, default_frame=FRAMES.odom)
+        cloud = self._pointcloud_from_ros2(
+            msg,
+            default_frame=ROS2_SIM_LIVE_MAP_CLOUD_FRAME_ID,
+        )
         if cloud is not None:
             self.map_cloud.publish(cloud)
 
@@ -402,7 +420,7 @@ class ROS2SimDriverModule(Module, layer=1):
                 data=arr.copy(),
                 format=fmt,
                 ts=time.time(),
-                frame_id=msg.header.frame_id or "camera",
+                frame_id=msg.header.frame_id or ROS2_SIM_CAMERA_FRAME_ID,
             ))
         except Exception as e:
             logger.error("ROS2SimDriverModule: image conversion error: %s", e)
@@ -428,7 +446,7 @@ class ROS2SimDriverModule(Module, layer=1):
                 data=arr.copy(),
                 format=fmt,
                 ts=time.time(),
-                frame_id=msg.header.frame_id or "camera",
+                frame_id=msg.header.frame_id or ROS2_SIM_CAMERA_FRAME_ID,
             ))
         except Exception as e:
             logger.error("ROS2SimDriverModule: depth conversion error: %s", e)
@@ -459,7 +477,7 @@ class ROS2SimDriverModule(Module, layer=1):
                     position=Vector3(float(p.x), float(p.y), float(p.z)),
                     orientation=Quaternion(float(q.x), float(q.y), float(q.z), float(q.w)),
                 ),
-                frame_id=msg.header.frame_id or "map",
+                frame_id=msg.header.frame_id or ROS2_SIM_GOAL_FRAME_ID,
                 ts=time.time(),
             ))
             logger.info("ROS2SimDriverModule: goal received (%.1f, %.1f)", p.x, p.y)
@@ -489,7 +507,7 @@ class ROS2SimDriverModule(Module, layer=1):
     # -- ROS2 publish helpers ------------------------------------------------
 
     def _publish_cmd_vel(self) -> None:
-        """Publish current velocity command to ROS2 /nav/cmd_vel."""
+        """Publish current velocity command to the canonical ROS2 cmd_vel topic."""
         if self._pub_cmd_vel is None or self._node is None:
             return
         try:
@@ -500,7 +518,7 @@ class ROS2SimDriverModule(Module, layer=1):
             now = time.time()
             msg.header.stamp.sec = int(now)
             msg.header.stamp.nanosec = int((now % 1.0) * 1e9)
-            msg.header.frame_id = "body"
+            msg.header.frame_id = ROS2_SIM_CMD_VEL_FRAME_ID
             msg.twist.linear.x = self._cmd_vx
             msg.twist.linear.y = self._cmd_vy
             msg.twist.linear.z = 0.0

@@ -21,7 +21,12 @@ from typing import Any, ClassVar, Dict, Optional, Tuple
 
 import numpy as np
 
+from core.runtime_interface import camera_frame_id, map_frame_id
+
 from .geometry import Quaternion, Vector3
+
+SENSOR_CAMERA_FRAME_ID = camera_frame_id()
+SENSOR_MAP_FRAME_ID = map_frame_id()
 
 # ---------------------------------------------------------------------------
 # ImageFormat
@@ -66,7 +71,7 @@ class Image:
     data: np.ndarray = field(default_factory=lambda: np.zeros((1, 1, 3), dtype=np.uint8))
     format: ImageFormat = field(default=ImageFormat.BGR)
     ts: float = field(default_factory=time.time)
-    frame_id: str = field(default="camera")
+    frame_id: str = field(default=SENSOR_CAMERA_FRAME_ID)
 
     def __post_init__(self) -> None:
         if not isinstance(self.data, np.ndarray):
@@ -76,13 +81,13 @@ class Image:
 
     @classmethod
     def from_numpy(cls, arr: np.ndarray, fmt: ImageFormat = ImageFormat.BGR,
-                   frame_id: str = "camera") -> Image:
+                   frame_id: str = SENSOR_CAMERA_FRAME_ID) -> Image:
         """Wrap an existing array."""
         return cls(data=np.asarray(arr), format=fmt, frame_id=frame_id)
 
     @classmethod
     def from_file(cls, path: str | Path, fmt: ImageFormat | None = None,
-                  frame_id: str = "camera") -> Image:
+                  frame_id: str = SENSOR_CAMERA_FRAME_ID) -> Image:
         """Load from an image file.  Requires *cv2* (optional dependency)."""
         try:
             import cv2  # type: ignore[import-untyped]
@@ -441,7 +446,7 @@ class PointCloud2:
 
     points: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), dtype=np.float32))
     ts: float = field(default_factory=time.time)
-    frame_id: str = field(default="map")
+    frame_id: str = field(default=SENSOR_MAP_FRAME_ID)
     height: int = 1
     width: int = 0
     fields: list[PointField] = field(default_factory=list)
@@ -506,12 +511,17 @@ class PointCloud2:
     # -- factory methods -----------------------------------------------------
 
     @classmethod
-    def from_numpy(cls, points: np.ndarray, frame_id: str = "map", **kw) -> PointCloud2:
+    def from_numpy(
+        cls,
+        points: np.ndarray,
+        frame_id: str = SENSOR_MAP_FRAME_ID,
+        **kw,
+    ) -> PointCloud2:
         return cls(points=points, frame_id=frame_id, **kw)
 
     @classmethod
     def from_depth(cls, depth: np.ndarray, intrinsics: CameraIntrinsics,
-                   frame_id: str = "camera") -> PointCloud2:
+                   frame_id: str = SENSOR_CAMERA_FRAME_ID) -> PointCloud2:
         """Back-project a depth image to a 3-D point cloud.
 
         Parameters

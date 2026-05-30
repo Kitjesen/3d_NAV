@@ -23,9 +23,12 @@ import numpy as np
 from core.module import Module
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
+from core.runtime_interface import TOPICS, topic_default_frame_id
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
+
+SIM_POINTCLOUD_MAP_FRAME_ID = topic_default_frame_id(TOPICS.map_cloud)
 
 
 class SimPointCloudProvider(Module, layer=1):
@@ -66,7 +69,7 @@ class SimPointCloudProvider(Module, layer=1):
         if len(points) == 0:
             logger.warning("No obstacle points extracted from %s", path)
             return
-        self._cloud = PointCloud2(points=points, frame_id="map")
+        self._cloud = PointCloud2(points=points, frame_id=SIM_POINTCLOUD_MAP_FRAME_ID)
         logger.info(
             "SimPointCloudProvider: %d points from %d geoms in %s",
             len(points), self._geom_count, path.name,

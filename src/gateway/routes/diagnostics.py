@@ -11,7 +11,60 @@ import tarfile
 import tempfile
 import time
 from datetime import datetime
+from collections.abc import Mapping
 from typing import Any
+
+from gateway.schemas import AlgorithmBenchmarkLatestResponse
+from gateway.schemas import InspectionAcceptanceRequest
+from gateway.schemas import InspectionAcceptanceResponse
+from gateway.schemas import ProductFieldCheckRequest
+from gateway.schemas import ProductFieldCheckResponse
+from gateway.schemas import RealRuntimeEvidenceLatestResponse
+from gateway.schemas import RoutecheckLatestResponse
+from gateway.schemas import RuntimeContractResponse
+
+
+ALGORITHM_BENCHMARK_SCHEMA_VERSION = "lingtu.algorithm_benchmark_latest.v1"
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[3]
+INSPECTION_MVP_REQUIRED_GATES = (
+    "routecheck_preflight",
+    "large_terrain",
+    "fastlio2_dynamic_inspection",
+    "dynamic_obstacle_local_planner",
+    "moving_obstacle_sweep",
+)
+DIMOS_BENCHMARK_REQUIRED_GATES = (
+    "routecheck_preflight",
+    "large_terrain",
+    "native_pct_mujoco",
+    "dynamic_obstacle_local_planner",
+    "fastlio2_dynamic_inspection",
+    "moving_obstacle_sweep",
+    "large_loop_closure",
+    "gazebo_runtime",
+    "saved_map_relocalize",
+    "pct_saved_map_navigation",
+)
+ALGORITHM_PRODUCT_PROFILES: dict[str, dict[str, Any]] = {
+    "inspection_mvp": {
+        "label": "Inspection MVP",
+        "claim": "routine_inspection_simulation_readiness",
+        "purpose": (
+            "Product-facing patrol readiness through Gateway/ModulePorts; "
+            "ROS2 evidence is adapter evidence, not the product API."
+        ),
+        "required_gate_sequence": INSPECTION_MVP_REQUIRED_GATES,
+    },
+    "dimos_benchmark": {
+        "label": "Dimos benchmark",
+        "claim": "strict_full_algorithm_reference",
+        "purpose": (
+            "Strict reference suite for whole-algorithm closure across "
+            "mapping, localization, planning, dynamic obstacles, and saved maps."
+        ),
+        "required_gate_sequence": DIMOS_BENCHMARK_REQUIRED_GATES,
+    },
+}
 
 
 def _json_ready(value: Any) -> Any:
@@ -20,6 +73,14 @@ def _json_ready(value: Any) -> Any:
         return value
     except Exception:
         return str(value)
+
+
+def _json_payload(value: Any) -> Any:
+    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def _location_entries(gw: Any) -> list[Any]:
@@ -112,32 +173,66 @@ def _routecheck_artifacts_root(explicit: str | os.PathLike[str] | None = None) -
     return pathlib.Path.home() / "data" / "SLAM" / "navigation" / "artifacts"
 
 
+def _routecheck_artifacts_roots(
+    explicit: str | os.PathLike[str] | None = None,
+) -> list[pathlib.Path]:
+    roots = [_routecheck_artifacts_root(explicit)]
+    if explicit or os.environ.get("LINGTU_ROUTECHECK_ARTIFACT_ROOT"):
+        return roots
+    roots.append(PROJECT_ROOT / "artifacts")
+
+    unique: list[pathlib.Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
+
+def _iter_routecheck_summary_paths(root: pathlib.Path) -> list[pathlib.Path]:
+    paths: list[pathlib.Path] = []
+    seen: set[str] = set()
+    for pattern in ("*/summary.json", "*/*/summary.json"):
+        for path in root.glob(pattern):
+            key = str(path)
+            if key not in seen:
+                seen.add(key)
+                paths.append(path)
+    return paths
+
+
 def build_routecheck_latest_summary(
     artifacts_root: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
-    root = _routecheck_artifacts_root(artifacts_root)
+    roots = _routecheck_artifacts_roots(artifacts_root)
     summaries: list[tuple[float, pathlib.Path, dict[str, Any]]] = []
-    if root.is_dir():
-        for summary_path in root.glob("*/summary.json"):
-            try:
-                data = json.loads(summary_path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if not isinstance(data, dict):
-                continue
-            if data.get("mode") != "routecheck_non_motion":
-                continue
-            try:
-                mtime = summary_path.stat().st_mtime
-            except OSError:
-                mtime = 0.0
-            summaries.append((mtime, summary_path, data))
+    for root in roots:
+        if root.is_dir():
+            for summary_path in _iter_routecheck_summary_paths(root):
+                try:
+                    data = json.loads(summary_path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                if data.get("mode") != "routecheck_non_motion":
+                    continue
+                try:
+                    mtime = summary_path.stat().st_mtime
+                except OSError:
+                    mtime = 0.0
+                summaries.append((mtime, summary_path, data))
 
+    primary_root = roots[0]
+    searched_roots = [str(root) for root in roots]
     if not summaries:
         return {
             "schema_version": 1,
             "ok": False,
-            "artifacts_root": str(root),
+            "artifacts_root": str(primary_root),
+            "searched_roots": searched_roots,
             "count": 0,
             "artifact_dir": None,
             "summary_path": None,
@@ -150,10 +245,15 @@ def build_routecheck_latest_summary(
     report_mtime, summary_path, latest = summaries[0]
     generated_at = time.time()
     published = latest.get("published") if isinstance(latest.get("published"), dict) else None
+    selected_root = next(
+        (root for root in roots if summary_path.is_relative_to(root)),
+        summary_path.parent,
+    )
     return {
         "schema_version": 1,
         "ok": True,
-        "artifacts_root": str(root),
+        "artifacts_root": str(selected_root),
+        "searched_roots": searched_roots,
         "count": len(summaries),
         "artifact_dir": str(summary_path.parent),
         "summary_path": str(summary_path),
@@ -169,6 +269,516 @@ def build_routecheck_latest_summary(
         "latest": latest,
         "reason": None,
         "ts": generated_at,
+    }
+
+
+def _real_runtime_evidence_artifacts_root(
+    explicit: str | os.PathLike[str] | None = None,
+) -> pathlib.Path:
+    if explicit:
+        return pathlib.Path(explicit).expanduser()
+    env_root = os.environ.get("LINGTU_REAL_RUNTIME_EVIDENCE_ROOT")
+    if env_root:
+        return pathlib.Path(env_root).expanduser()
+    env_artifacts = os.environ.get("LINGTU_ARTIFACT_ROOT")
+    if env_artifacts:
+        return pathlib.Path(env_artifacts).expanduser() / "real_s100p_runtime"
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
+    return repo_root / "artifacts" / "real_s100p_runtime"
+
+
+def _real_runtime_evidence_max_age_s(explicit: float | None = None) -> float:
+    if explicit is not None:
+        return float(explicit)
+    raw = os.environ.get("LINGTU_REAL_RUNTIME_EVIDENCE_MAX_AGE_SEC")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return 3600.0
+
+
+def _load_json_file(path: pathlib.Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _algorithm_benchmark_artifacts_root(
+    explicit: str | os.PathLike[str] | None = None,
+) -> pathlib.Path:
+    if explicit:
+        return pathlib.Path(explicit).expanduser()
+    env_root = os.environ.get("LINGTU_ALGORITHM_BENCHMARK_ROOT")
+    if env_root:
+        return pathlib.Path(env_root).expanduser()
+    env_artifacts = os.environ.get("LINGTU_ARTIFACT_ROOT")
+    if env_artifacts:
+        return pathlib.Path(env_artifacts).expanduser() / "server_sim_closure"
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
+    return repo_root / "artifacts" / "server_sim_closure"
+
+
+def _algorithm_benchmark_max_age_s(explicit: float | None = None) -> float:
+    if explicit is not None:
+        return float(explicit)
+    raw = os.environ.get("LINGTU_ALGORITHM_BENCHMARK_MAX_AGE_SEC")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return 86400.0
+
+
+def _is_algorithm_benchmark_summary(data: dict[str, Any]) -> bool:
+    validation = data.get("algorithm_validation")
+    if not isinstance(validation, dict):
+        return False
+    return isinstance(data.get("missing_or_failed"), list)
+
+
+def _algorithm_benchmark_candidates(
+    root: pathlib.Path,
+) -> list[tuple[float, pathlib.Path, dict[str, Any]]]:
+    patterns = (
+        "summary_inspection_mvp*.json",
+        "summary_dimos_benchmark*.json",
+        "summary_core_algorithm*.json",
+        "summary*.json",
+    )
+    seen: set[pathlib.Path] = set()
+    candidates: list[tuple[float, pathlib.Path, dict[str, Any]]] = []
+    if not root.is_dir():
+        return candidates
+    for pattern in patterns:
+        for summary_path in root.glob(pattern):
+            if summary_path in seen or not summary_path.is_file():
+                continue
+            seen.add(summary_path)
+            data = _load_json_file(summary_path)
+            if data is None or not _is_algorithm_benchmark_summary(data):
+                continue
+            try:
+                mtime = summary_path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            candidates.append((mtime, summary_path, data))
+    return sorted(candidates, key=lambda item: item[0], reverse=True)
+
+
+def _algorithm_profile_unavailable(reason: str) -> dict[str, dict[str, Any]]:
+    profiles: dict[str, dict[str, Any]] = {}
+    for name, profile in ALGORITHM_PRODUCT_PROFILES.items():
+        profiles[name] = {
+            "name": name,
+            "label": profile["label"],
+            "claim": profile["claim"],
+            "purpose": profile["purpose"],
+            "ok": False,
+            "status": "FAIL",
+            "read_only": True,
+            "ros2_topic_required": False,
+            "publishes": [],
+            "claim_allowed": False,
+            "required_gate_sequence": list(profile["required_gate_sequence"]),
+            "missing_or_failed": list(profile["required_gate_sequence"]),
+            "blockers": [reason],
+        }
+    return profiles
+
+
+def _algorithm_gate_failing(gate: Mapping[str, Any]) -> bool:
+    status = str(gate.get("status") or "").lower()
+    return gate.get("ok") is False or status in {
+        "fail",
+        "failed",
+        "missing",
+        "stale",
+        "error",
+    }
+
+
+def _algorithm_product_profile_status(
+    name: str,
+    profile: Mapping[str, Any],
+    *,
+    latest: Mapping[str, Any],
+    missing_or_failed: list[str],
+    required_sequence: list[str],
+    report_age_s: float,
+    freshness: float,
+    claim_boundary_ok: bool,
+) -> dict[str, Any]:
+    required = [str(item) for item in profile.get("required_gate_sequence") or () if item]
+    required_set = set(required_sequence)
+    missing_set = set(missing_or_failed)
+    gates = _mapping(latest.get("gates"))
+    profile_missing: list[str] = []
+    blockers: list[str] = []
+
+    if report_age_s > freshness:
+        blockers.append("algorithm benchmark summary is stale")
+    if not claim_boundary_ok:
+        blockers.append("algorithm claim boundary must keep live_costmap local-only")
+
+    for gate in required:
+        gate_payload = _mapping(gates.get(gate))
+        gate_failed = bool(gate_payload) and _algorithm_gate_failing(gate_payload)
+        if gate not in required_set:
+            profile_missing.append(gate)
+            blockers.append(f"profile required gate missing from summary: {gate}")
+        elif gate in missing_set or gate_failed:
+            profile_missing.append(gate)
+            blockers.append(f"profile required gate is not passing: {gate}")
+
+    if name == "dimos_benchmark" and latest.get("ok") is not True:
+        blockers.append("strict benchmark summary is not passing")
+
+    profile_missing = list(dict.fromkeys(profile_missing))
+    blockers = list(dict.fromkeys(blockers))
+    ok = not blockers and not profile_missing
+    return {
+        "name": name,
+        "label": profile.get("label") or name,
+        "claim": profile.get("claim") or name,
+        "purpose": profile.get("purpose") or "",
+        "ok": ok,
+        "status": "PASS" if ok else "FAIL",
+        "read_only": True,
+        "ros2_topic_required": False,
+        "publishes": [],
+        "claim_allowed": ok,
+        "required_gate_sequence": required,
+        "missing_or_failed": profile_missing,
+        "blockers": blockers,
+    }
+
+
+def build_algorithm_benchmark_latest_summary(
+    artifacts_root: str | os.PathLike[str] | None = None,
+    *,
+    max_age_s: float | None = None,
+) -> dict[str, Any]:
+    root = _algorithm_benchmark_artifacts_root(artifacts_root)
+    freshness = _algorithm_benchmark_max_age_s(max_age_s)
+    now = time.time()
+    candidates = _algorithm_benchmark_candidates(root)
+    base = {
+        "schema_version": ALGORITHM_BENCHMARK_SCHEMA_VERSION,
+        "ok": False,
+        "read_only": True,
+        "ros2_topic_required": False,
+        "publishes": [],
+        "artifacts_root": str(root),
+        "count": len(candidates),
+        "summary_path": None,
+        "report_mtime": None,
+        "report_age_s": None,
+        "max_age_s": freshness,
+        "preset": "dimos_benchmark",
+        "source": "server_sim_closure",
+        "active_product_profile": "inspection_mvp",
+        "strict_benchmark_profile": "dimos_benchmark",
+        "summary_schema_version": None,
+        "claim_allowed": False,
+        "missing_or_failed": [],
+        "required_gate_sequence": list(DIMOS_BENCHMARK_REQUIRED_GATES),
+        "validation_flow": [],
+        "claim_boundary": {},
+        "product_profiles": _algorithm_profile_unavailable(
+            "algorithm benchmark summary not found"
+        ),
+        "blocking_categories": {},
+        "blockers": [],
+        "reason": None,
+        "latest": None,
+        "ts": now,
+    }
+    if not candidates:
+        base["reason"] = "algorithm_benchmark_report_not_found"
+        base["blockers"] = ["algorithm benchmark summary not found"]
+        return base
+
+    report_mtime, summary_path, latest = candidates[0]
+    report_age_s = max(0.0, now - report_mtime)
+    validation = latest.get("algorithm_validation")
+    validation = validation if isinstance(validation, dict) else {}
+    missing_or_failed = [
+        str(item) for item in latest.get("missing_or_failed") or [] if item
+    ]
+    required_sequence = [
+        str(item)
+        for item in (
+            validation.get("required_gate_sequence")
+            or latest.get("required")
+            or DIMOS_BENCHMARK_REQUIRED_GATES
+        )
+        if item
+    ]
+    claim_boundary = _mapping(validation.get("claim_boundary"))
+    claim_allowed = validation.get("claim_allowed") is True
+    blockers: list[str] = []
+    if report_age_s > freshness:
+        blockers.append("algorithm benchmark summary is stale")
+    if latest.get("ok") is not True:
+        blockers.append("algorithm benchmark summary is not passing")
+    if claim_allowed is not True:
+        blockers.append("algorithm validation claim_allowed is not true")
+    if missing_or_failed:
+        blockers.append(
+            "algorithm benchmark missing_or_failed: "
+            + ",".join(missing_or_failed)
+        )
+    if set(DIMOS_BENCHMARK_REQUIRED_GATES) - set(required_sequence):
+        blockers.append("algorithm benchmark required gate set is incomplete")
+    if (
+        claim_boundary.get("live_costmap_role")
+        != "local_planning_and_safety_only"
+        or claim_boundary.get("global_planning_source") == "live_costmap"
+    ):
+        blockers.append(
+            "algorithm claim boundary must keep live_costmap local-only"
+        )
+    claim_boundary_ok = (
+        claim_boundary.get("live_costmap_role")
+        == "local_planning_and_safety_only"
+        and claim_boundary.get("global_planning_source") != "live_costmap"
+    )
+    product_profiles = {
+        name: _algorithm_product_profile_status(
+            name,
+            profile,
+            latest=latest,
+            missing_or_failed=missing_or_failed,
+            required_sequence=required_sequence,
+            report_age_s=report_age_s,
+            freshness=freshness,
+            claim_boundary_ok=claim_boundary_ok,
+        )
+        for name, profile in ALGORITHM_PRODUCT_PROFILES.items()
+    }
+    reason = None
+    if blockers:
+        reason = (
+            "algorithm_benchmark_report_stale"
+            if report_age_s > freshness
+            else "algorithm_benchmark_not_passing"
+        )
+
+    return {
+        **base,
+        "ok": not blockers,
+        "summary_path": str(summary_path),
+        "report_mtime": report_mtime,
+        "report_age_s": report_age_s,
+        "summary_schema_version": latest.get("schema_version"),
+        "claim_allowed": claim_allowed,
+        "missing_or_failed": missing_or_failed,
+        "required_gate_sequence": required_sequence,
+        "validation_flow": list(validation.get("validation_flow") or []),
+        "claim_boundary": claim_boundary,
+        "product_profiles": product_profiles,
+        "blocking_categories": _mapping(validation.get("blocking_categories")),
+        "blockers": blockers,
+        "reason": reason,
+        "latest": latest,
+        "ts": now,
+    }
+
+
+def _real_runtime_report_candidates(root: pathlib.Path) -> list[pathlib.Path]:
+    if not root.is_dir():
+        return []
+    candidates: list[pathlib.Path] = []
+    direct = root / "report.json"
+    if direct.is_file():
+        candidates.append(direct)
+    for path in root.glob("*/report.json"):
+        if path.is_file() and path not in candidates:
+            candidates.append(path)
+    return candidates
+
+
+def _all_required_section_entries_ok(section: Any) -> bool:
+    if not isinstance(section, dict) or not section:
+        return False
+    for entry in section.values():
+        if isinstance(entry, dict):
+            if entry.get("required") is False:
+                continue
+            if entry.get("ok") is not True:
+                return False
+        elif entry is not True:
+            return False
+    return True
+
+
+def _real_runtime_evidence_summary_from_report(
+    report_path: pathlib.Path,
+    *,
+    now: float,
+    max_age_s: float,
+) -> dict[str, Any] | None:
+    report = _load_json_file(report_path)
+    if report is None:
+        return None
+
+    validation = report.get("runtime_evidence")
+    validation_path = report_path.parent / "runtime_evidence.json"
+    if not isinstance(validation, dict) and validation_path.is_file():
+        validation = _load_json_file(validation_path)
+    if not isinstance(validation, dict):
+        validation = {}
+
+    try:
+        report_mtime = report_path.stat().st_mtime
+    except OSError:
+        report_mtime = 0.0
+    if validation_path.is_file():
+        try:
+            report_mtime = max(report_mtime, validation_path.stat().st_mtime)
+        except OSError:
+            pass
+
+    age_s = max(0.0, now - report_mtime)
+    runtime_contract = report.get("runtime_contract")
+    runtime_contract = runtime_contract if isinstance(runtime_contract, dict) else {}
+    contract_name = (
+        runtime_contract.get("name")
+        or validation.get("expected_contract")
+        or validation.get("runtime_contract")
+    )
+    real_motion = validation.get("checked_real_motion_evidence")
+    real_motion = real_motion if isinstance(real_motion, dict) else {}
+    hardware = validation.get("checked_hardware_boundary_evidence")
+    hardware = hardware if isinstance(hardware, dict) else {}
+    freshness = validation.get("checked_live_topic_freshness")
+    data_flow = validation.get("checked_runtime_data_flow_evidence")
+    frame_links = validation.get("checked_frame_link_evidence")
+
+    blockers: list[str] = []
+    if not validation:
+        blockers.append("real-runtime-evidence validation payload missing")
+    if validation.get("ok") is not True:
+        blockers.append("real-runtime-evidence gate did not pass")
+        blockers.extend(str(item) for item in (validation.get("blockers") or []) if item)
+    if contract_name != "real_s100p":
+        blockers.append("real-runtime-evidence contract is not real_s100p")
+    if report.get("simulation_only") is not False:
+        blockers.append("real-runtime-evidence simulation_only is not false")
+    if report.get("real_robot_motion") is not True:
+        blockers.append("real-runtime-evidence real_robot_motion is not true")
+    if report.get("cmd_vel_sent_to_hardware") is not True:
+        blockers.append("real-runtime-evidence cmd_vel_sent_to_hardware is not true")
+    if age_s > max_age_s:
+        blockers.append("real-runtime-evidence is stale")
+    if real_motion.get("ok") is not True:
+        blockers.append("real-runtime-evidence real motion section missing or failed")
+    if hardware.get("ok") is not True:
+        blockers.append("real-runtime-evidence hardware boundary section missing or failed")
+    if not _all_required_section_entries_ok(freshness):
+        blockers.append("real-runtime-evidence live topic freshness missing or failed")
+    if not _all_required_section_entries_ok(data_flow):
+        blockers.append("real-runtime-evidence data-flow section missing or failed")
+    if not _all_required_section_entries_ok(frame_links):
+        blockers.append("real-runtime-evidence frame-link section missing or failed")
+
+    return {
+        "schema_version": 1,
+        "ok": not blockers,
+        "artifacts_root": str(report_path.parent.parent),
+        "artifact_dir": str(report_path.parent),
+        "report_path": str(report_path),
+        "validation_path": str(validation_path) if validation_path.is_file() else None,
+        "report_mtime": report_mtime,
+        "report_age_s": age_s,
+        "max_age_s": max_age_s,
+        "runtime_contract": contract_name,
+        "runtime_evidence_ok": validation.get("ok") is True,
+        "simulation_only": report.get("simulation_only"),
+        "real_robot_motion": report.get("real_robot_motion"),
+        "cmd_vel_sent_to_hardware": report.get("cmd_vel_sent_to_hardware"),
+        "checked_real_motion_evidence": real_motion,
+        "checked_hardware_boundary_evidence": hardware,
+        "checked_live_topic_freshness": freshness if isinstance(freshness, dict) else {},
+        "checked_runtime_data_flow_evidence": data_flow if isinstance(data_flow, dict) else {},
+        "checked_frame_link_evidence": frame_links if isinstance(frame_links, dict) else {},
+        "blockers": list(dict.fromkeys(blockers)),
+        "reason": blockers[0] if blockers else None,
+        "ts": now,
+    }
+
+
+def build_real_runtime_evidence_latest_summary(
+    artifacts_root: str | os.PathLike[str] | None = None,
+    *,
+    max_age_s: float | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    root = _real_runtime_evidence_artifacts_root(artifacts_root)
+    age_limit = _real_runtime_evidence_max_age_s(max_age_s)
+    generated_at = time.time() if now is None else now
+    candidates: list[tuple[float, pathlib.Path, dict[str, Any]]] = []
+    for report_path in _real_runtime_report_candidates(root):
+        summary = _real_runtime_evidence_summary_from_report(
+            report_path,
+            now=generated_at,
+            max_age_s=age_limit,
+        )
+        if summary is None:
+            continue
+        try:
+            mtime = report_path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        candidates.append((mtime, report_path, summary))
+
+    if not candidates:
+        return {
+            "schema_version": 1,
+            "ok": False,
+            "artifacts_root": str(root),
+            "count": 0,
+            "artifact_dir": None,
+            "report_path": None,
+            "validation_path": None,
+            "report_mtime": None,
+            "report_age_s": None,
+            "max_age_s": age_limit,
+            "runtime_contract": None,
+            "runtime_evidence_ok": False,
+            "simulation_only": None,
+            "real_robot_motion": None,
+            "cmd_vel_sent_to_hardware": None,
+            "checked_real_motion_evidence": {},
+            "checked_hardware_boundary_evidence": {},
+            "checked_live_topic_freshness": {},
+            "checked_runtime_data_flow_evidence": {},
+            "checked_frame_link_evidence": {},
+            "blockers": ["real_runtime_evidence_report_not_found"],
+            "reason": "real_runtime_evidence_report_not_found",
+            "ts": generated_at,
+        }
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    summary = dict(candidates[0][2])
+    summary["count"] = len(candidates)
+    summary["artifacts_root"] = str(root)
+    return summary
+
+
+def _runtime_contract_snapshot() -> dict[str, Any]:
+    from core.runtime_interface import runtime_contract_manifest
+
+    return {
+        "schema_version": 1,
+        "source": "core.runtime_interface.runtime_contract_manifest",
+        "manifest": runtime_contract_manifest(),
+        "ts": time.time(),
     }
 
 
@@ -207,7 +817,16 @@ def _first_path_frame(path: Any) -> str | None:
 
 
 def _frame_contract_snapshot(gw: Any) -> dict[str, Any]:
+    from core.runtime_interface import runtime_contract_manifest
     from gateway.services.runtime_status import build_navigation_status
+
+    manifest = runtime_contract_manifest()
+    runtime_frames = manifest.get("frames", {})
+    if not isinstance(runtime_frames, dict):
+        runtime_frames = {}
+    runtime_links = manifest.get("frame_links", {})
+    if not isinstance(runtime_links, dict):
+        runtime_links = {}
 
     contract = _load_topic_contract()
     contract_data = contract["data"]
@@ -219,6 +838,9 @@ def _frame_contract_snapshot(gw: Any) -> dict[str, Any]:
     frames = nav_status.get("frames", {})
     if not isinstance(frames, dict):
         frames = {}
+    runtime_boundary = nav_status.get("runtime", {})
+    if not isinstance(runtime_boundary, dict):
+        runtime_boundary = {}
 
     with gw._state_lock:
         odom = dict(gw._odom) if isinstance(gw._odom, dict) else gw._odom
@@ -230,17 +852,17 @@ def _frame_contract_snapshot(gw: Any) -> dict[str, Any]:
         )
         path = list(gw._last_path or [])
 
-    links = tf_contract.get("links", {})
-    if not isinstance(links, dict):
-        links = {}
+    links = tf_contract.get("links")
+    if not isinstance(links, dict) or not links:
+        links = runtime_links
 
     return {
         "schema_version": 1,
         "contract": contract,
         "expected": {
-            "map_frame": tf_contract.get("map_frame", "map"),
-            "odom_frame": tf_contract.get("odom_frame", "odom"),
-            "body_frame": tf_contract.get("body_frame", "body"),
+            "map_frame": tf_contract.get("map_frame") or runtime_frames.get("map"),
+            "odom_frame": tf_contract.get("odom_frame") or runtime_frames.get("odom"),
+            "body_frame": tf_contract.get("body_frame") or runtime_frames.get("body"),
             "links": links,
         },
         "observed": {
@@ -276,6 +898,7 @@ def _frame_contract_snapshot(gw: Any) -> dict[str, Any]:
             ),
         },
         "navigation_frames": frames,
+        "runtime_boundary": _json_payload(runtime_boundary),
         "mismatches": frames.get("mismatches", []),
         "ok": bool(frames.get("ok", True)),
         "ts": time.time(),
@@ -359,18 +982,204 @@ def _build_app_web_snapshots(gw: Any) -> dict[str, dict[str, Any]]:
             "routecheck",
             lambda: build_routecheck_latest_summary(),
         ),
+        "real_runtime_evidence": _snapshot_or_error(
+            "real_runtime_evidence",
+            lambda: build_real_runtime_evidence_latest_summary(),
+        ),
+        "algorithm_benchmark": _snapshot_or_error(
+            "algorithm_benchmark",
+            lambda: build_algorithm_benchmark_latest_summary(),
+        ),
         "frame_contract": _snapshot_or_error(
             "frame_contract",
             lambda: _frame_contract_snapshot(gw),
         ),
+        "runtime_contract": _snapshot_or_error(
+            "runtime_contract",
+            _runtime_contract_snapshot,
+        ),
     }
 
 
+def _gateway_acceptance_snapshots(gw: Any) -> dict[str, dict[str, Any]]:
+    from gateway.services.app_bootstrap import build_app_capabilities
+    from gateway.services.readiness import build_readiness_snapshot
+    from gateway.services.runtime_dataflow import build_runtime_dataflow_snapshot
+    from gateway.services.runtime_status import (
+        build_localization_status,
+        build_navigation_status,
+    )
+
+    return {
+        "capabilities": build_app_capabilities(gw),
+        "readiness": build_readiness_snapshot(gw, include_details=True)[0],
+        "runtime_dataflow": build_runtime_dataflow_snapshot(gw),
+        "localization_status": build_localization_status(gw),
+        "navigation_status": build_navigation_status(gw),
+        "routecheck_latest": build_routecheck_latest_summary(),
+        "real_runtime_evidence": build_real_runtime_evidence_latest_summary(),
+        "algorithm_benchmark_latest": build_algorithm_benchmark_latest_summary(),
+    }
+
+
+def _inspection_map_gate(body: Any) -> dict[str, Any] | None:
+    map_dir = getattr(body, "map_dir", None)
+    if not map_dir:
+        from gateway.services.map_paths import (
+            active_map_link,
+            active_map_name,
+            map_dir_for,
+            nav_map_root,
+        )
+
+        root = nav_map_root()
+        active_name = active_map_name(root)
+        if active_name:
+            candidate = map_dir_for(active_name, root)
+            if candidate.is_dir():
+                map_dir = str(candidate)
+        if not map_dir:
+            active_dir = active_map_link(root)
+            if active_dir.is_dir():
+                map_dir = str(active_dir)
+    if not map_dir:
+        return None
+    from core.runtime_validation_gates import runtime_validation_gates
+    from nav.services.nav_services.same_source_map_artifacts import (
+        validate_saved_map_artifact_dir,
+    )
+
+    gate = validate_saved_map_artifact_dir(
+        pathlib.Path(str(map_dir)),
+        require_tomogram=bool(getattr(body, "require_tomogram", False)),
+        require_occupancy=bool(getattr(body, "require_occupancy", False)),
+        expected_data_source=getattr(body, "expected_data_source", None),
+        expected_source_profile=getattr(body, "expected_source_profile", None),
+        expected_frame_id=getattr(body, "expected_frame_id", None),
+    )
+    gate["validation_gate"] = runtime_validation_gates()["saved_map_artifact_gate"]
+    return gate
+
+
+def _inspection_candidate(gw: Any, target: dict[str, Any], client_id: str) -> dict[str, Any]:
+    from core.inspection_acceptance import goal_candidate_body_for_target
+    from gateway.schemas import GoalCandidateRequest
+    from gateway.services.control_commands import ControlCommandService
+    from gateway.services.goal_builder import construct_goal_from_request
+
+    if target.get("_invalid_payload"):
+        return {
+            "ok": False,
+            "status": "invalid",
+            "target": None,
+            "preview": None,
+            "reasons": ["inspection targets must be saved location names"],
+            "error": "invalid_inspection_target",
+            "ts": time.time(),
+        }
+
+    if target.get("_missing_from_locations"):
+        return {
+            "ok": False,
+            "status": "invalid",
+            "target": None,
+            "preview": None,
+            "reasons": ["location_not_found"],
+            "error": "location_not_found",
+            "ts": time.time(),
+        }
+
+    ts = time.time()
+    payload = goal_candidate_body_for_target(target)
+    if client_id and client_id != "unknown":
+        payload["client_id"] = client_id
+    try:
+        body = GoalCandidateRequest.model_validate(payload)
+        goal = construct_goal_from_request(
+            body,
+            gw=gw,
+            default_source=body.source,
+            default_target_type=body.target_type,
+        )
+        preview = (
+            ControlCommandService(gw)
+            .preview_navigation_plan(goal.preview_request(client_id=body.client_id))
+        )
+    except Exception as exc:
+        return {
+            "schema_version": 1,
+            "ok": False,
+            "status": "invalid",
+            "target": None,
+            "preview": None,
+            "reasons": [str(exc)],
+            "error": str(exc),
+            "ts": ts,
+        }
+
+    reasons = list(preview.get("reasons") or [])
+    return {
+        "schema_version": 1,
+        "ok": True,
+        "status": (
+            "preview_feasible"
+            if bool(preview.get("feasible", False))
+            else "preview_infeasible"
+        ),
+        "target": goal.target_payload(ts=ts),
+        "preview": preview,
+        "reasons": reasons,
+        "error": None,
+        "ts": ts,
+    }
+
+
+def build_product_field_check_gateway_summary(gw: Any, body: Any) -> dict[str, Any]:
+    from core.gateway_runtime_acceptance import evaluate_gateway_runtime_acceptance
+    from core.product_field_check import build_product_field_check
+
+    gateway_acceptance = evaluate_gateway_runtime_acceptance(
+        _gateway_acceptance_snapshots(gw),
+        mode=getattr(body, "mode", "field"),
+    )
+    return build_product_field_check(
+        gateway_acceptance,
+        map_gate=_inspection_map_gate(body),
+        algorithm_gate=build_algorithm_benchmark_latest_summary(),
+    )
+
+
+def build_inspection_acceptance_gateway_summary(gw: Any, body: Any) -> dict[str, Any]:
+    from core.inspection_acceptance import (
+        build_inspection_acceptance,
+        inspection_targets_from_payload,
+    )
+    from gateway.services.telemetry_normalizers import build_locations_response
+
+    field_check = build_product_field_check_gateway_summary(gw, body)
+    locations = build_locations_response(_location_entries(gw))
+    targets = inspection_targets_from_payload(
+        locations,
+        points=list(getattr(body, "points", None) or []),
+        tag=getattr(body, "tag", None),
+    )
+    candidates = [
+        _inspection_candidate(gw, target, str(getattr(body, "client_id", "unknown")))
+        for target in targets
+    ]
+    return build_inspection_acceptance(
+        field_check=field_check,
+        targets=targets,
+        candidates=candidates,
+        locations=locations,
+        gateway_url="gateway://local",
+    )
+
+
 def register_diagnostic_routes(app, gw) -> None:
+    from fastapi import Body
     from fastapi.responses import FileResponse
     from starlette.background import BackgroundTask
-
-    from gateway.schemas import RoutecheckLatestResponse
 
     @app.get(
         "/api/v1/diagnostics/routecheck/latest",
@@ -379,6 +1188,57 @@ def register_diagnostic_routes(app, gw) -> None:
     )
     async def routecheck_latest():
         return build_routecheck_latest_summary()
+
+    @app.get(
+        "/api/v1/diagnostics/real-runtime-evidence/latest",
+        response_model=RealRuntimeEvidenceLatestResponse,
+        summary="Read latest real S100P runtime evidence gate summary",
+    )
+    async def real_runtime_evidence_latest():
+        return build_real_runtime_evidence_latest_summary()
+
+    @app.get(
+        "/api/v1/diagnostics/algorithm-benchmark/latest",
+        response_model=AlgorithmBenchmarkLatestResponse,
+        summary="Read latest read-only algorithm benchmark summary",
+    )
+    async def algorithm_benchmark_latest():
+        return build_algorithm_benchmark_latest_summary()
+
+    @app.get(
+        "/api/v1/diagnostics/runtime-contract",
+        response_model=RuntimeContractResponse,
+        summary="Read canonical runtime interface contract",
+    )
+    async def runtime_contract():
+        return _runtime_contract_snapshot()
+
+    @app.post(
+        "/api/v1/diagnostics/field-check",
+        response_model=ProductFieldCheckResponse,
+        summary="Run read-only product field readiness check",
+    )
+    async def product_field_check(
+        body: ProductFieldCheckRequest = Body(
+            default_factory=ProductFieldCheckRequest
+        ),
+    ):
+        return build_product_field_check_gateway_summary(gw, body)
+
+    @app.post(
+        "/api/v1/inspection/acceptance",
+        response_model=InspectionAcceptanceResponse,
+        summary="Run read-only inspection acceptance without publishing motion commands",
+    )
+    async def inspection_acceptance(
+        body: InspectionAcceptanceRequest = Body(
+            default_factory=InspectionAcceptanceRequest
+        ),
+    ):
+        return build_inspection_acceptance_gateway_summary(
+            gw,
+            body,
+        )
 
     @app.get(
         "/api/v1/diagnostic_pack",
@@ -458,6 +1318,16 @@ def register_diagnostic_routes(app, gw) -> None:
             _add_text(tar, "diag/git_head.txt", f"{git_out}\nshort: {short}\n")
 
             app_web_snapshots = _build_app_web_snapshots(gw)
+            _add_text(
+                tar,
+                "diag/runtime_contract.json",
+                json.dumps(
+                    _runtime_contract_snapshot(),
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            )
             _add_text(
                 tar,
                 "diag/app_web_snapshots.json",

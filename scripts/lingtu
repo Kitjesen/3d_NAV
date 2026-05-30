@@ -44,13 +44,43 @@
 #   lingtu soak --duration 120 --json --strict # non-motion readiness soak
 #   lingtu slamcheck super_lio # switch, verify Super-LIO Gateway contract, rollback
 #   lingtu slamcompare --map <name> # localizer vs Super-LIO relocation non-motion gate
+#   lingtu runtime-spec nav --endpoint real_s100p # resolved profile data-flow/frame contract
+#   lingtu runtime-contract --json # canonical topics, frames, and runtime contracts
+#   lingtu runtime-audit --json # static runtime contract guard
+#   lingtu dataflow [topic] # Gateway + ModulePorts runtime flow, no ROS2 topic inspection
+#   lingtu gateway-runtime-acceptance --acceptance-mode field # Gateway-only product acceptance
+#   lingtu field-check [map-dir] # one-screen field readiness, optional saved-map provenance
+#   lingtu inspection-check [map-dir] --point lobby # non-motion inspection-point acceptance pack
+#   lingtu saved-map-artifact-gate <map-dir> # same-source saved-map/tomogram/occupancy gate
 #   lingtu plan-preview --internal-only --strict # offline tomogram planner preview, no motion
 #   lingtu routecheck --map <name> --goal X Y YAW # route A/B preflight, no motion
 #   lingtu routecompare --map <name> --goal X Y YAW --allow-motion # route A/B motion run
+#   lingtu evidence --duration 20 --json-out report.json # read-only runtime data-flow/frame evidence
 set -u
 GW="${GW:-http://localhost:5050}"
 MAP_DIR="${MAP_DIR:-${NAV_MAP_DIR:-$HOME/data/nova/maps}}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+lingtu_repo_root() {
+    cd "$SCRIPT_DIR/.." && pwd
+}
+
+lingtu_python() {
+    printf "%s\n" "${LINGTU_PYTHON:-python3}"
+}
+
+lingtu_has_option() {
+    local opt="$1"
+    shift || true
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            "$opt"|"$opt"=*)
+                return 0 ;;
+        esac
+    done
+    return 1
+}
 
 # Colors (stripped when piping / non-tty)
 if [ -t 1 ]; then
@@ -3711,7 +3741,278 @@ cmd_log() {
     esac
 }
 
-# ── Subcommand: health ──
+cmd_runtime_contract_usage() {
+    echo "Usage: lingtu runtime-contract [--json] [--json-out PATH]"
+    echo "Print the canonical topics, frames, frame links, and runtime data-flow manifest."
+}
+
+# -- Subcommand: runtime-contract --
+cmd_runtime_contract() {
+    local repo_root python_bin
+    repo_root="$(lingtu_repo_root)"
+    python_bin="$(lingtu_python)"
+    case "${1:-}" in
+        -h|--help)
+            cmd_runtime_contract_usage
+            return 0 ;;
+    esac
+    "$python_bin" "$repo_root/lingtu.py" runtime-contract "$@"
+}
+
+cmd_runtime_spec_usage() {
+    echo "Usage: lingtu runtime-spec PROFILE [--endpoint ENDPOINT]"
+    echo "Print the resolved runtime data-flow and frame contract for one profile."
+}
+
+# -- Subcommand: runtime-spec --
+cmd_runtime_spec() {
+    local repo_root python_bin
+    repo_root="$(lingtu_repo_root)"
+    python_bin="$(lingtu_python)"
+    case "${1:-}" in
+        ""|-h|--help)
+            cmd_runtime_spec_usage
+            [ -n "${1:-}" ] && return 0
+            return 1 ;;
+    esac
+    "$python_bin" "$repo_root/lingtu.py" runtime-spec "$@"
+}
+
+cmd_runtime_audit_usage() {
+    echo "Usage: lingtu runtime-audit [--json] [--json-out PATH]"
+    echo "Run the static runtime contract guard for interfaces, data flow, and frame usage."
+}
+
+# -- Subcommand: runtime-audit --
+cmd_runtime_audit() {
+    local repo_root python_bin
+    repo_root="$(lingtu_repo_root)"
+    python_bin="$(lingtu_python)"
+    case "${1:-}" in
+        -h|--help)
+            cmd_runtime_audit_usage
+            return 0 ;;
+    esac
+    "$python_bin" "$repo_root/lingtu.py" runtime-audit "$@"
+}
+
+cmd_dataflow_usage() {
+    echo "Usage: lingtu dataflow [topic] [--gateway-url URL] [--gateway-timeout-sec SEC] [--json] [--json-out PATH]"
+    echo "Inspect live Gateway + ModulePorts runtime flow; ROS2 topic inspection is not required."
+    echo "Shows live topics/stages plus whitelisted command interfaces. Read-only unless a Gateway command endpoint is explicitly used elsewhere."
+}
+
+# -- Subcommand: dataflow --
+cmd_dataflow() {
+    local repo_root python_bin
+    repo_root="$(lingtu_repo_root)"
+    python_bin="$(lingtu_python)"
+    case "${1:-}" in
+        -h|--help)
+            cmd_dataflow_usage
+            return 0 ;;
+    esac
+    local -a cmd=("$python_bin" "$repo_root/lingtu.py" dataflow)
+    if ! lingtu_has_option "--gateway-url" "$@"; then
+        cmd+=(--gateway-url "$GW")
+    fi
+    cmd+=("$@")
+    "${cmd[@]}"
+}
+
+cmd_gateway_runtime_acceptance_usage() {
+    echo "Usage: lingtu gateway-runtime-acceptance [--acceptance-mode non_motion|simulation|field] [--gateway-url URL] [--gateway-timeout-sec SEC] [--json] [--json-out PATH]"
+    echo "Check product runtime readiness through Gateway snapshots only; no ROS2 topic inspection."
+    echo "simulation/field modes require live ModulePorts dataflow and a passing non-motion routecheck."
+}
+
+# -- Subcommand: gateway-runtime-acceptance --
+cmd_gateway_runtime_acceptance() {
+    local repo_root python_bin
+    repo_root="$(lingtu_repo_root)"
+    python_bin="$(lingtu_python)"
+    case "${1:-}" in
+        -h|--help)
+            cmd_gateway_runtime_acceptance_usage
+            return 0 ;;
+    esac
+    local -a cmd=("$python_bin" "$repo_root/lingtu.py" gateway-runtime-acceptance)
+    if ! lingtu_has_option "--gateway-url" "$@"; then
+        cmd+=(--gateway-url "$GW")
+    fi
+    cmd+=("$@")
+    "${cmd[@]}"
+}
+
+cmd_field_check_usage() {
+    echo "Usage: lingtu field-check [map-dir] [--acceptance-mode non_motion|simulation|field] [--gateway-url URL] [--require-tomogram] [--require-occupancy] [--json] [--json-out PATH]"
+    echo "Run the one-screen product readiness gate: Gateway acceptance plus optional saved-map artifact provenance."
+    echo "field mode consumes fresh real-runtime-evidence and should be run during an operator-controlled active real S100P session."
+}
+
+# -- Subcommand: field-check --
+cmd_field_check() {
+    local repo_root python_bin
+    repo_root="$(lingtu_repo_root)"
+    python_bin="$(lingtu_python)"
+    case "${1:-}" in
+        -h|--help)
+            cmd_field_check_usage
+            return 0 ;;
+    esac
+    local -a cmd=("$python_bin" "$repo_root/lingtu.py" field-check)
+    if ! lingtu_has_option "--gateway-url" "$@"; then
+        cmd+=(--gateway-url "$GW")
+    fi
+    cmd+=("$@")
+    "${cmd[@]}"
+}
+
+cmd_inspection_check_usage() {
+    echo "Usage: lingtu inspection-check [map-dir] [--point NAME|X,Y[,Z[,YAW]]] [--tag TAG] [--acceptance-mode non_motion|simulation|field] [--gateway-url URL] [--require-tomogram] [--require-occupancy] [--json] [--json-out PATH]"
+    echo "Run a non-motion inspection-point acceptance pack: field-check plus Gateway goal_candidate previews. No goals or cmd_vel are published."
+}
+
+# -- Subcommand: inspection-check --
+cmd_inspection_check() {
+    local repo_root python_bin
+    repo_root="$(lingtu_repo_root)"
+    python_bin="$(lingtu_python)"
+    case "${1:-}" in
+        -h|--help)
+            cmd_inspection_check_usage
+            return 0 ;;
+    esac
+    local -a cmd=("$python_bin" "$repo_root/lingtu.py" inspection-check)
+    if ! lingtu_has_option "--gateway-url" "$@"; then
+        cmd+=(--gateway-url "$GW")
+    fi
+    cmd+=("$@")
+    "${cmd[@]}"
+}
+
+cmd_saved_map_artifact_gate_usage() {
+    echo "Usage: lingtu saved-map-artifact-gate <map-dir> [--require-tomogram] [--require-occupancy] [--expected-data-source NAME] [--expected-source-profile NAME] [--expected-frame-id FRAME] [--json] [--json-out PATH]"
+    echo "Validate same-source saved-map metadata, checksums, tomogram, occupancy, and frame/source provenance. Non-motion."
+}
+
+# -- Subcommand: saved-map-artifact-gate --
+cmd_saved_map_artifact_gate() {
+    local repo_root python_bin
+    repo_root="$(lingtu_repo_root)"
+    python_bin="$(lingtu_python)"
+    case "${1:-}" in
+        ""|-h|--help)
+            cmd_saved_map_artifact_gate_usage
+            [ -n "${1:-}" ] && return 0
+            return 1 ;;
+    esac
+    "$python_bin" "$repo_root/lingtu.py" saved-map-artifact-gate "$@"
+}
+
+# -- Subcommand: evidence --
+cmd_evidence_usage() {
+    echo "Usage: lingtu evidence [--duration SEC] [--min-motion-m M] [--min-cmd-vel-norm V] [--json] [--json-out PATH] [--expected-command-subscriber NAME] [--no-validate]"
+    echo "Collect read-only real S100P runtime evidence for topics, frames, data flow, and command boundary."
+    echo "Requires an active real run publishing /nav/odometry, /nav/map_cloud, /nav/localization_health, and /nav/localization_quality."
+}
+
+cmd_evidence() {
+    local duration="20"
+    local out_path=""
+    local json_flag=0
+    local no_validate=0
+    local repo_root
+    local python_bin
+    local min_motion_m=""
+    local min_cmd_vel_norm=""
+    local -a expected_subscribers=()
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --duration|--duration-sec)
+                [ -n "${2:-}" ] || { cmd_evidence_usage; return 1; }
+                duration="$2"
+                shift 2 ;;
+            --duration=*|--duration-sec=*)
+                duration="${1#*=}"
+                shift ;;
+            --json)
+                json_flag=1
+                shift ;;
+            --min-motion-m)
+                [ -n "${2:-}" ] || { cmd_evidence_usage; return 1; }
+                min_motion_m="$2"
+                shift 2 ;;
+            --min-motion-m=*)
+                min_motion_m="${1#*=}"
+                shift ;;
+            --min-cmd-vel-norm)
+                [ -n "${2:-}" ] || { cmd_evidence_usage; return 1; }
+                min_cmd_vel_norm="$2"
+                shift 2 ;;
+            --min-cmd-vel-norm=*)
+                min_cmd_vel_norm="${1#*=}"
+                shift ;;
+            --json-out)
+                [ -n "${2:-}" ] || { cmd_evidence_usage; return 1; }
+                out_path="$2"
+                shift 2 ;;
+            --json-out=*)
+                out_path="${1#*=}"
+                shift ;;
+            --expected-command-subscriber)
+                [ -n "${2:-}" ] || { cmd_evidence_usage; return 1; }
+                expected_subscribers+=("$2")
+                shift 2 ;;
+            --expected-command-subscriber=*)
+                expected_subscribers+=("${1#*=}")
+                shift ;;
+            --no-validate)
+                no_validate=1
+                shift ;;
+            -h|--help)
+                cmd_evidence_usage
+                return 0 ;;
+            *)
+                cmd_evidence_usage
+                return 1 ;;
+        esac
+    done
+
+    case "$duration" in
+        ''|*[!0-9.]*)
+            echo "duration must be a numeric number of seconds" >&2
+            return 1 ;;
+    esac
+
+    repo_root="$(lingtu_repo_root)"
+    python_bin="$(lingtu_python)"
+    if [ -z "$out_path" ]; then
+        out_path="$repo_root/artifacts/real_s100p_runtime/report.json"
+    fi
+    mkdir -p "$(dirname "$out_path")"
+
+    local -a cmd=(
+        "$python_bin" "$repo_root/lingtu.py" real-runtime-evidence
+        --duration-sec "$duration"
+        --json-out "$out_path"
+    )
+    local subscriber
+    for subscriber in "${expected_subscribers[@]}"; do
+        cmd+=(--expected-command-subscriber "$subscriber")
+    done
+    [ -n "$min_motion_m" ] && cmd+=(--min-motion-m "$min_motion_m")
+    [ -n "$min_cmd_vel_norm" ] && cmd+=(--min-cmd-vel-norm "$min_cmd_vel_norm")
+    [ "$json_flag" = "1" ] && cmd+=(--json)
+    [ "$no_validate" = "1" ] && cmd+=(--no-validate)
+
+    echo "Collecting read-only real runtime evidence..." >&2
+    echo "Report: $out_path" >&2
+    "${cmd[@]}"
+}
+
+# -- Subcommand: health --
 cmd_health() {
     curl -s "$GW/api/v1/health" 2>/dev/null | python3 -m json.tool
 }
@@ -3733,6 +4034,15 @@ case "${1:-status}" in
     super-lio-smoke|super_lio_smoke|superlio-smoke) shift; cmd_slamcheck super_lio "$@" ;;
     super-lio-relocation-smoke|super_lio_relocation_smoke|super-lio-reloc-smoke|super_lio_reloc_smoke) shift; cmd_slamcheck super_lio_relocation "$@" ;;
     log|l)          shift; cmd_log   "$@" ;;
+    contract|runtime-contract) shift; cmd_runtime_contract "$@" ;;
+    spec|runtime-spec) shift; cmd_runtime_spec "$@" ;;
+    audit|runtime-audit) shift; cmd_runtime_audit "$@" ;;
+    dataflow|flow) shift; cmd_dataflow "$@" ;;
+    gateway-runtime-acceptance|gateway-acceptance|gw-accept) shift; cmd_gateway_runtime_acceptance "$@" ;;
+    field-check|field-acceptance|accept) shift; cmd_field_check "$@" ;;
+    inspection-check|inspection-acceptance|inspect-accept) shift; cmd_inspection_check "$@" ;;
+    saved-map-artifact-gate|map-gate) shift; cmd_saved_map_artifact_gate "$@" ;;
+    evidence|runtime-evidence|real-runtime-evidence) shift; cmd_evidence "$@" ;;
     health|h)       cmd_health ;;
     help|-h|--help)
         sed -n '2,/^set -u/p' "$0" | sed 's/^# //;s/^#//' ;;

@@ -13,12 +13,14 @@ namespace holding only `_T_map_odom`.
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
+from core.runtime_interface import TOPICS, topic_default_frame_id
 from slam.slam_bridge_module import SlamBridgeModule
 
 # ── Harness: bind unbound methods to a minimal holder ─────────────────────
@@ -45,6 +47,10 @@ def _make_holder() -> _TFHolder:
         SlamBridgeModule._maybe_apply_map_odom_to_points, h)
     h._maybe_apply_map_odom_to_odometry = _t.MethodType(
         SlamBridgeModule._maybe_apply_map_odom_to_odometry, h)
+    h._frame_from_msg_header = _t.MethodType(
+        SlamBridgeModule._frame_from_msg_header, h)
+    h._cloud_frame_from_msg = _t.MethodType(
+        SlamBridgeModule._cloud_frame_from_msg, h)
     h._map_cloud_points_and_frame = _t.MethodType(
         SlamBridgeModule._map_cloud_points_and_frame, h)
     return h
@@ -163,7 +169,28 @@ def test_map_cloud_frame_preserves_odom_when_tf_not_applied():
     out, frame_id = h._map_cloud_points_and_frame(pts, "odom")
 
     assert out is pts
-    assert frame_id == "odom"
+    assert frame_id == topic_default_frame_id(TOPICS.odometry)
+
+
+def test_map_cloud_frame_normalizes_ros_style_source_frame():
+    h = _make_holder()
+    pts = np.array([[1, 1, 1]], dtype=np.float32)
+
+    out, frame_id = h._map_cloud_points_and_frame(pts, "/odom")
+
+    assert out is pts
+    assert frame_id == topic_default_frame_id(TOPICS.odometry)
+
+
+def test_cloud_frame_from_msg_uses_runtime_default_after_normalization():
+    h = _make_holder()
+    msg = SimpleNamespace(header=SimpleNamespace(frame_id="/odom"))
+    empty = SimpleNamespace(header=SimpleNamespace(frame_id="   "))
+
+    assert h._cloud_frame_from_msg(msg, default="/map") == topic_default_frame_id(
+        TOPICS.odometry)
+    assert h._cloud_frame_from_msg(empty, default="/odom") == topic_default_frame_id(
+        TOPICS.odometry)
 
 
 def test_map_cloud_frame_becomes_map_when_localizer_tf_applies():
@@ -173,8 +200,20 @@ def test_map_cloud_frame_becomes_map_when_localizer_tf_applies():
 
     out, frame_id = h._map_cloud_points_and_frame(pts, "odom")
 
-    assert frame_id == "map"
+    assert frame_id == topic_default_frame_id(TOPICS.map_cloud)
     np.testing.assert_allclose(out, [[11, -4, 3]], atol=1e-5)
+
+
+def test_map_cloud_does_not_double_transform_map_frame_source():
+    h = _make_holder()
+    h._cache_map_odom_tf(10.0, -5.0, 2.0, 0, 0, 0, 1)
+    pts = np.array([[1, 1, 1]], dtype=np.float32)
+
+    out, frame_id = h._map_cloud_points_and_frame(
+        pts, topic_default_frame_id(TOPICS.map_cloud))
+
+    assert out is pts
+    assert frame_id == topic_default_frame_id(TOPICS.map_cloud)
 
 
 # ── Odometry transform: position + quaternion ────────────────────────────
@@ -282,6 +321,21 @@ def test_maybe_odom_applies_tf_for_localizer_only():
     assert odom.pose.position.y == pytest.approx(2)
     assert odom.pose.position.z == pytest.approx(3)
     assert odom.frame_id == "odom"
+
+
+def test_maybe_odom_does_not_double_transform_map_frame_source():
+    h = _make_holder()
+    h._cache_map_odom_tf(100, 200, 300, 0, 0, 0, 1)
+    odom = _make_odom(1, 2, 3)
+    odom.frame_id = topic_default_frame_id(TOPICS.map_cloud)
+
+    out = h._maybe_apply_map_odom_to_odometry(odom)
+
+    assert out is odom
+    assert odom.pose.position.x == pytest.approx(1)
+    assert odom.pose.position.y == pytest.approx(2)
+    assert odom.pose.position.z == pytest.approx(3)
+    assert odom.frame_id == topic_default_frame_id(TOPICS.map_cloud)
 
 
 # ── Round-trip: transform and inverse-transform gives back original ──────

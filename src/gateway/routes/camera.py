@@ -98,7 +98,8 @@ def register_camera_routes(app, gw=None) -> None:
             return unavailable
 
         # Compatibility fallback for standalone route tests or legacy deployments
-        # where no Gateway instance was passed into this route module.
+        # where no Gateway instance was passed into this route module. This is
+        # not the product runtime communication boundary.
         out = os.path.join(tempfile.gettempdir(), "lingtu_cam_snap.jpg")
         script = os.path.join(tempfile.gettempdir(), "lingtu_cam_snap.py")
         # Write script to avoid shell escaping issues.

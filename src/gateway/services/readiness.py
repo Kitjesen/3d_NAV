@@ -31,6 +31,7 @@ _DATA_RELEVANT_REASON_PREFIXES = (
     "navigation_blocked:localization_relocalizing",
     "navigation_blocked:localization_initializing",
     "navigation_blocked:pose_stale",
+    "runtime_blocked:",
     "localization:status_error",
     "navigation:status_error",
 )
@@ -160,12 +161,44 @@ def _runtime_readiness_reasons(gw: Any) -> tuple[list[str], dict[str, Any]]:
     reasons: list[str] = []
     try:
         localization = build_localization_status(gw)
+        localization_runtime = localization.get("runtime")
+        localization_runtime = (
+            localization_runtime if isinstance(localization_runtime, Mapping) else {}
+        )
+        localization_frames = localization.get("frames")
+        localization_frames = (
+            localization_frames if isinstance(localization_frames, Mapping) else {}
+        )
         runtime["localization"] = {
             "state": localization.get("state"),
             "ready": localization.get("ready"),
             "pose_fresh": localization.get("pose_fresh"),
             "pose_freshness": localization.get("pose_freshness"),
             "algorithm_healthy": localization.get("algorithm_healthy"),
+            "runtime_contract": (
+                localization_frames.get("runtime_contract")
+                or localization_runtime.get("runtime_contract")
+                or localization_runtime.get("data_source")
+            ),
+            "frames": _json_safe(localization_frames),
+            "topic_allowed_frame_ids": _json_safe(
+                localization_runtime.get("topic_allowed_frame_ids") or {}
+            ),
+            "topic_default_frame_ids": _json_safe(
+                localization_runtime.get("topic_default_frame_ids") or {}
+            ),
+            "required_topic_frame_ids": _json_safe(
+                localization_runtime.get("required_topic_frame_ids") or []
+            ),
+            "runtime_data_flow_topics": _json_safe(
+                localization_runtime.get("runtime_data_flow_topics") or []
+            ),
+            "runtime_data_flow_stage_algorithm_interfaces": _json_safe(
+                localization_runtime.get(
+                    "runtime_data_flow_stage_algorithm_interfaces"
+                )
+                or {}
+            ),
             "reasons": localization.get("reasons", []),
         }
         state = str(localization.get("state") or "unknown").lower()
@@ -182,14 +215,61 @@ def _runtime_readiness_reasons(gw: Any) -> tuple[list[str], dict[str, Any]]:
         readiness = navigation.get("readiness", {})
         blockers = list(readiness.get("blockers") or [])
         control = navigation.get("control") or {}
+        boundary = navigation.get("runtime")
+        boundary = boundary if isinstance(boundary, Mapping) else {}
+        boundary_blockers = list(boundary.get("blockers") or [])
         runtime["navigation"] = {
             "state": navigation.get("state"),
             "can_accept_goal": navigation.get("can_accept_goal"),
             "blockers": blockers,
             "advisories": list(readiness.get("advisories") or []),
+            "tf_ok": readiness.get("tf_ok"),
+            "map_artifacts_ok": readiness.get("map_artifacts_ok"),
+            "real_runtime_evidence_ok": readiness.get("real_runtime_evidence_ok"),
+            "planning_frame_id": readiness.get("planning_frame_id"),
+            "odom_frame_id": readiness.get("odom_frame_id"),
+            "map_artifact_gate": _json_safe(
+                readiness.get("map_artifact_gate") or {}
+            ),
+            "observed_frame_links": _json_safe(
+                readiness.get("observed_frame_links") or {}
+            ),
             "active_cmd_source": _source_name(control),
         }
+        if boundary:
+            runtime["boundary"] = {
+                "ok": boundary.get("ok"),
+                "declared": boundary.get("declared"),
+                "profile": boundary.get("profile"),
+                "endpoint": boundary.get("endpoint"),
+                "data_source": boundary.get("data_source"),
+                "runtime_contract": boundary.get("runtime_contract"),
+                "command_sink": boundary.get("command_sink"),
+                "expected_command_sink": boundary.get("expected_command_sink"),
+                "frames": _json_safe(boundary.get("frames") or {}),
+                "frame_links": _json_safe(boundary.get("frame_links") or {}),
+                "topic_allowed_frame_ids": _json_safe(
+                    boundary.get("topic_allowed_frame_ids") or {}
+                ),
+                "topic_default_frame_ids": _json_safe(
+                    boundary.get("topic_default_frame_ids") or {}
+                ),
+                "required_topic_frame_ids": _json_safe(
+                    boundary.get("required_topic_frame_ids") or []
+                ),
+                "runtime_data_flow_topics": _json_safe(
+                    boundary.get("runtime_data_flow_topics") or []
+                ),
+                "resolved_runtime_data_flow": _json_safe(
+                    boundary.get("resolved_runtime_data_flow") or []
+                ),
+                "runtime_data_flow_stage_algorithm_interfaces": _json_safe(
+                    boundary.get("runtime_data_flow_stage_algorithm_interfaces") or {}
+                ),
+                "blockers": boundary_blockers,
+            }
         reasons.extend(f"navigation_blocked:{blocker}" for blocker in blockers)
+        reasons.extend(f"runtime_blocked:{blocker}" for blocker in boundary_blockers)
     except Exception as exc:
         runtime["navigation"] = {"error": str(exc)}
         reasons.append("navigation:status_error")

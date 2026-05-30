@@ -9,6 +9,11 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from core.runtime_interface import map_frame_id
+
+
+TELEMETRY_MAP_FRAME_ID = map_frame_id()
+
 
 def _mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
@@ -164,7 +169,11 @@ def build_scene_graph_response(scene_graph: Any) -> dict[str, Any]:
 
     return {
         "schema_version": 1,
-        "frame_id": str(parsed.get("frame_id") or parsed.get("frame") or "map"),
+        "frame_id": str(
+            parsed.get("frame_id")
+            or parsed.get("frame")
+            or TELEMETRY_MAP_FRAME_ID
+        ),
         "ts": _finite_float(parsed.get("ts"), time.time()),
         "objects": objects,
         "relations": relations,
@@ -247,7 +256,7 @@ def build_path_response(path: Any, robot: Any) -> dict[str, Any]:
             for point in points
             if point.get("frame_id") is not None
         ),
-        "map",
+        TELEMETRY_MAP_FRAME_ID,
     )
     return {
         "schema_version": 1,
@@ -301,7 +310,7 @@ def build_locations_response(entries: Any) -> dict[str, Any]:
         "schema_version": 1,
         "locations": locations,
         "count": len(locations),
-        "frame_id": "map",
+        "frame_id": TELEMETRY_MAP_FRAME_ID,
         "ts": time.time(),
         "source": "tagged_locations",
     }

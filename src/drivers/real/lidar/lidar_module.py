@@ -27,12 +27,13 @@ from typing import Any, Dict, Optional
 from core.module import Module
 from core.msgs.sensor import Imu, PointCloud2
 from core.registry import register
-from core.runtime_interface import FRAMES, TOPICS
+from core.runtime_interface import TOPICS, real_lidar_frame_id
 from core.stream import Out
 
 from .lidar import Lidar, LidarState
 
 logger = logging.getLogger(__name__)
+LIDAR_RAW_FRAME_ID = real_lidar_frame_id()
 
 
 @register("driver", "lidar_mid360", description="Livox MID-360 LiDAR driver")
@@ -89,7 +90,7 @@ class LidarModule(Module, layer=1):
 
     def _on_cloud(self, pts) -> None:
         """Forward numpy (N,4) → PointCloud2 on the scan port."""
-        cloud = PointCloud2.from_numpy(pts, frame_id=FRAMES.real_lidar)
+        cloud = PointCloud2.from_numpy(pts, frame_id=LIDAR_RAW_FRAME_ID)
         self.scan.publish(cloud)
 
     def _on_imu(self, imu_msg: Imu) -> None:

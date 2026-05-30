@@ -2,6 +2,7 @@
 // All fetch() calls in one place.
 
 import type {
+  AlgorithmBenchmarkLatestResponse,
   AppBootstrapResponse,
   AppCapabilitiesResponse,
   AppTrafficResponse,
@@ -20,6 +21,8 @@ import type {
   GoalSource,
   GoalTargetType,
   HealthResponse,
+  InspectionAcceptanceRequest,
+  InspectionAcceptanceResponse,
   LeaseAction,
   LeaseResponse,
   LocationOperationResponse,
@@ -33,8 +36,17 @@ import type {
   PathResponse,
   PlanPreviewRequest,
   PlanPreviewResponse,
+  ProductFieldCheckRequest,
+  ProductFieldCheckResponse,
   ReadinessResponse,
+  RealRuntimeEvidenceLatestResponse,
   RoutecheckLatestResponse,
+  RuntimeDataflowResponse,
+  RuntimeDataflowSubscribeRequest,
+  RuntimeDataflowSubscribeResponse,
+  RuntimeDataflowTopicDetailResponse,
+  RuntimeSwitchPlanRequest,
+  RuntimeSwitchPlanResponse,
   SceneGraphResponse,
   SessionEvent,
   SessionTransitionResponse,
@@ -285,6 +297,70 @@ export async function fetchRoutecheckLatest(): Promise<RoutecheckLatestResponse>
   )
 }
 
+export async function fetchRealRuntimeEvidenceLatest(): Promise<RealRuntimeEvidenceLatestResponse> {
+  return fetchJson<RealRuntimeEvidenceLatestResponse>(
+    apiPath('real_runtime_evidence_latest', '/api/v1/diagnostics/real-runtime-evidence/latest'),
+  )
+}
+
+export async function fetchAlgorithmBenchmarkLatest(): Promise<AlgorithmBenchmarkLatestResponse> {
+  return fetchJson<AlgorithmBenchmarkLatestResponse>(
+    apiPath('algorithm_benchmark_latest', '/api/v1/diagnostics/algorithm-benchmark/latest'),
+  )
+}
+
+export async function fetchRuntimeDataflow(): Promise<RuntimeDataflowResponse> {
+  return fetchJson<RuntimeDataflowResponse>(
+    apiPath('runtime_dataflow', '/api/v1/runtime/dataflow'),
+  )
+}
+
+export async function fetchRuntimeDataflowTopic(
+  topic: string,
+): Promise<RuntimeDataflowTopicDetailResponse> {
+  const path = apiPath('runtime_dataflow_topic', '/api/v1/runtime/dataflow/topic')
+  const sep = path.includes('?') ? '&' : '?'
+  return fetchJson<RuntimeDataflowTopicDetailResponse>(
+    `${path}${sep}${new URLSearchParams({ topic }).toString()}`,
+  )
+}
+
+export async function subscribeRuntimeDataflow(
+  request: RuntimeDataflowSubscribeRequest,
+): Promise<RuntimeDataflowSubscribeResponse> {
+  return postJson<RuntimeDataflowSubscribeResponse>(
+    apiPath('runtime_dataflow_subscribe', '/api/v1/runtime/dataflow/subscribe'),
+    {
+      transport: 'gateway_sse',
+      ...request,
+    },
+  )
+}
+
+export async function runRuntimeSwitchPlan(
+  request: RuntimeSwitchPlanRequest = {},
+): Promise<RuntimeSwitchPlanResponse> {
+  return postJson<RuntimeSwitchPlanResponse>(
+    apiPath('runtime_switch_plan', '/api/v1/runtime/switch-plan'),
+    {
+      target_profile: 'explore',
+      ...request,
+    },
+  )
+}
+
+export async function runProductFieldCheck(
+  request: ProductFieldCheckRequest = {},
+): Promise<ProductFieldCheckResponse> {
+  return postJson<ProductFieldCheckResponse>(
+    apiPath('field_check', '/api/v1/diagnostics/field-check'),
+    {
+      mode: 'simulation',
+      ...request,
+    },
+  )
+}
+
 export async function fetchDevices(): Promise<DevicesResponse> {
   return fetchJson<DevicesResponse>(apiPath('devices', '/api/v1/devices'))
 }
@@ -303,6 +379,19 @@ export async function fetchNavigationStatus(): Promise<NavigationStatusResponse>
 
 export async function fetchLocations(): Promise<LocationsResponse> {
   return fetchJson<LocationsResponse>(apiPath('locations', '/api/v1/locations'))
+}
+
+export async function runInspectionAcceptance(
+  request: InspectionAcceptanceRequest = {},
+): Promise<InspectionAcceptanceResponse> {
+  return postJson<InspectionAcceptanceResponse>(
+    apiPath('inspection_acceptance', '/api/v1/inspection/acceptance'),
+    {
+      mode: 'simulation',
+      client_id: WEB_CLIENT_ID,
+      ...request,
+    },
+  )
 }
 
 export async function saveLocation(body: LocationUpsertRequest): Promise<LocationOperationResponse> {

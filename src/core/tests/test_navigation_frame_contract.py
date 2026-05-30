@@ -37,6 +37,16 @@ class _RecordingPlanner:
         })
 
 
+class _FlatZPlanner(_RecordingPlanner):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
+        self.plan_calls += 1
+        self.safe_goal_tolerances.append(kwargs.get("safe_goal_tolerance"))
+        return [
+            np.array([float(start[0]), float(start[1]), 0.0], dtype=float),
+            np.array([float(goal[0]), float(goal[1]), 0.0], dtype=float),
+        ], 0.0
+
+
 class _PartialThenFullPlanner:
     is_ready = True
     has_map = True
@@ -232,9 +242,14 @@ def test_pct_navigation_does_not_global_replan_from_costmap_by_default():
     nav = NavigationModule(planner="pct", enable_ros2_bridge=False)
     planner = _RecordingPlanner()
     nav._planner_svc = planner
-    nav._state = "EXECUTING"
+    mission_statuses: list[dict] = []
+    global_paths: list[list[np.ndarray]] = []
+    nav.mission_status._add_callback(mission_statuses.append)
+    nav.global_path._add_callback(global_paths.append)
+    nav._set_state("EXECUTING")
     nav._goal = np.array([2.0, 0.0, 0.0], dtype=float)
     nav._last_costmap_replan_time = 0.0
+    status_count_before_costmap = len(mission_statuses)
 
     nav._on_costmap({
         "grid": np.zeros((10, 10), dtype=np.int8),
@@ -244,6 +259,9 @@ def test_pct_navigation_does_not_global_replan_from_costmap_by_default():
     })
 
     assert nav._replan_on_costmap_update is False
+    assert mission_statuses[-1]["replan_on_costmap_update"] is False
+    assert len(mission_statuses) == status_count_before_costmap
+    assert global_paths == []
     assert planner.maps == []
     assert planner.plan_calls == 0
 
@@ -266,6 +284,35 @@ def test_astar_navigation_can_still_replan_from_costmap_update():
     assert nav._replan_on_costmap_update is True
     assert len(planner.maps) == 1
     assert planner.plan_calls == 1
+
+
+def test_navigation_anchors_planner_start_height_to_current_odom():
+    nav = NavigationModule(
+        enable_ros2_bridge=False,
+        waypoint_threshold=0.35,
+        final_waypoint_threshold=0.15,
+    )
+    nav._planner_svc = _FlatZPlanner()
+    waypoints: list[PoseStamped] = []
+    paths: list[list[np.ndarray]] = []
+    nav.waypoint._add_callback(waypoints.append)
+    nav.global_path._add_callback(paths.append)
+
+    nav._on_odom(Odometry(
+        pose=Pose(position=Vector3(0.0, 0.0, 0.55), orientation=Quaternion()),
+        frame_id="map",
+    ))
+    nav._on_goal(PoseStamped(
+        pose=Pose(position=Vector3(1.0, 0.0, 0.0), orientation=Quaternion()),
+        frame_id="map",
+    ))
+
+    assert nav._state == "EXECUTING"
+    assert paths[-1][0][2] == 0.55
+    assert paths[-1][1][2] == 0.55
+    assert nav._tracker.wp_index == 1
+    assert waypoints[-1].pose.position.x == 1.0
+    assert waypoints[-1].pose.position.z == 0.55
 
 
 def test_navigation_accepts_map_frame_odometry_without_frame_mismatch_report():

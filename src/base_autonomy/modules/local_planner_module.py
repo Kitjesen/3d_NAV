@@ -43,6 +43,7 @@ from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 from core.msgs.nav import Odometry, Path
 from core.msgs.sensor import PointCloud2
 from core.registry import register
+from core.runtime_interface import TOPICS, topic_default_frame_id
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
@@ -356,7 +357,7 @@ class LocalPlannerModule(Module, layer=2):
         self._robot_yaw = 0.0
         self._latest_waypoint: PoseStamped | None = None
         self._global_path_points: np.ndarray | None = None
-        self._path_frame_id = "map"
+        self._path_frame_id = topic_default_frame_id(TOPICS.local_path)
         self._corridor_lookahead_m = float(kw.get("corridor_lookahead_m", 3.0))
         self._allow_direct_track_fallback = bool(
             kw.get("allow_direct_track_fallback", False)
@@ -680,7 +681,15 @@ class LocalPlannerModule(Module, layer=2):
         if points is None or len(points) < 2:
             return fallback_goal
         robot_xy = self._robot_pos[:2]
-        dists = np.linalg.norm(points[:, :2] - robot_xy, axis=1)
+        if (
+            points.shape[1] >= 3
+            and len(self._robot_pos) >= 3
+            and np.isfinite(float(self._robot_pos[2]))
+            and np.all(np.isfinite(points[:, :3]))
+        ):
+            dists = np.linalg.norm(points[:, :3] - self._robot_pos[:3], axis=1)
+        else:
+            dists = np.linalg.norm(points[:, :2] - robot_xy, axis=1)
         if not np.all(np.isfinite(dists)):
             return fallback_goal
         idx = int(np.argmin(dists))

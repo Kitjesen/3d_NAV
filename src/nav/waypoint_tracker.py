@@ -31,7 +31,7 @@ class WaypointTracker:
     """Tracks progress along a waypoint path.
 
     Handles:
-      - Waypoint arrival detection (2D distance threshold)
+      - Waypoint arrival detection (2D distance threshold, optional Z gate)
       - Stuck detection with progressive warn (50%) → stuck (100%) thresholds
       - Each event fires exactly once per stuck/arrival occurrence
 
@@ -58,12 +58,14 @@ class WaypointTracker:
         self,
         threshold: float = 1.5,
         final_threshold: float | None = None,
+        z_threshold: float | None = None,
         stuck_timeout: float = 10.0,
         stuck_dist: float = 0.15,
         stuck_yaw_rad: float = 0.35,  # ~20° — yaw drift below this counts as "stuck"
     ) -> None:
         self._threshold = threshold
         self._final_threshold = threshold if final_threshold is None else final_threshold
+        self._z_threshold = self._normalise_z_threshold(z_threshold)
         self._stuck_timeout = stuck_timeout
         self._stuck_dist = stuck_dist
         self._stuck_yaw = stuck_yaw_rad
@@ -130,7 +132,7 @@ class WaypointTracker:
         wp = self._path[self._wp_index]
         is_final_wp = self._wp_index >= len(self._path) - 1
         threshold = self._final_threshold if is_final_wp else self._threshold
-        if np.linalg.norm(robot_pos[:2] - wp[:2]) < threshold:
+        if self._is_waypoint_reached(robot_pos, wp, threshold):
             self._wp_index += 1
             self._last_progress_time = time.time()
             self._last_progress_pos = robot_pos.copy()
@@ -146,7 +148,7 @@ class WaypointTracker:
 
         # -- Stuck detection -------------------------------------------------
         now = time.time()
-        moved = np.linalg.norm(robot_pos[:2] - self._last_progress_pos[:2])
+        moved = self._progress_distance(robot_pos, self._last_progress_pos)
         elapsed = now - self._last_progress_time
 
         # Yaw progress — only when caller supplies yaw on both reset/update
@@ -183,6 +185,46 @@ class WaypointTracker:
                                  event=EV_STUCK)
 
         return TrackerStatus(self._wp_index, len(self._path))
+
+    @staticmethod
+    def _normalise_z_threshold(value: float | None) -> float | None:
+        if value is None:
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(parsed) or parsed < 0.0:
+            return None
+        return parsed
+
+    def _is_waypoint_reached(
+        self,
+        robot_pos: np.ndarray,
+        waypoint: np.ndarray,
+        threshold: float,
+    ) -> bool:
+        if np.linalg.norm(robot_pos[:2] - waypoint[:2]) >= threshold:
+            return False
+        if self._z_threshold is None:
+            return True
+        if len(robot_pos) < 3 or len(waypoint) < 3:
+            return True
+        robot_z = float(robot_pos[2])
+        waypoint_z = float(waypoint[2])
+        if not (math.isfinite(robot_z) and math.isfinite(waypoint_z)):
+            return False
+        return abs(robot_z - waypoint_z) <= self._z_threshold
+
+    def _progress_distance(self, robot_pos: np.ndarray, last_pos: np.ndarray) -> float:
+        xy_dist = float(np.linalg.norm(robot_pos[:2] - last_pos[:2]))
+        if self._z_threshold is None or len(robot_pos) < 3 or len(last_pos) < 3:
+            return xy_dist
+        robot_z = float(robot_pos[2])
+        last_z = float(last_pos[2])
+        if not (math.isfinite(robot_z) and math.isfinite(last_z)):
+            return xy_dist
+        return float(math.hypot(xy_dist, robot_z - last_z))
 
     # ------------------------------------------------------------------ #
     # Read-only properties                                                 #

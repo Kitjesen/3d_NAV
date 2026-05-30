@@ -9,7 +9,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
+from core.runtime_interface import map_frame_id
 from gateway.schemas import PlanPreviewRequest
+
+
+GOAL_MAP_FRAME_ID = map_frame_id()
 
 
 @dataclass(frozen=True)
@@ -18,7 +22,7 @@ class ConstructedGoal:
     y: float
     z: float = 0.0
     yaw: float = 0.0
-    frame_id: str = "map"
+    frame_id: str = GOAL_MAP_FRAME_ID
     source: str = "coordinate"
     target_type: str = "coordinate"
     label: str | None = None
@@ -91,9 +95,11 @@ def construct_goal_from_request(
     default_target_type: str = "coordinate",
 ) -> ConstructedGoal:
     """Normalize an API request or saved-location lookup into one goal shape."""
-    frame_id = str(getattr(body, "frame_id", "map") or "map").strip()
-    if frame_id != "map":
-        raise ValueError("goal frame_id must be map")
+    frame_id = str(
+        getattr(body, "frame_id", GOAL_MAP_FRAME_ID) or GOAL_MAP_FRAME_ID
+    ).strip()
+    if frame_id != GOAL_MAP_FRAME_ID:
+        raise ValueError(f"goal frame_id must be {GOAL_MAP_FRAME_ID}")
 
     fields_set = set(getattr(body, "model_fields_set", set()) or set())
     location_name = _optional_text(getattr(body, "location_name", None))

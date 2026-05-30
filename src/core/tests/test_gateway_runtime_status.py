@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 
 import pytest
@@ -18,6 +19,73 @@ def _payload(response_or_payload):
     if hasattr(response_or_payload, "body"):
         return json.loads(response_or_payload.body)
     return response_or_payload
+
+
+def _write_active_same_source_tomogram(map_root):
+    active_dir = map_root / "active"
+    active_dir.mkdir(parents=True)
+    map_path = active_dir / "map.pcd"
+    tomogram_path = active_dir / "tomogram.pickle"
+    map_path.write_text(
+        "\n".join(
+            [
+                "# .PCD v0.7 - Point Cloud Data file format",
+                "VERSION 0.7",
+                "FIELDS x y z",
+                "SIZE 4 4 4",
+                "TYPE F F F",
+                "COUNT 1 1 1",
+                "WIDTH 1",
+                "HEIGHT 1",
+                "VIEWPOINT 0 0 0 1 0 0 0",
+                "POINTS 1",
+                "DATA ascii",
+                "0.0 0.0 0.0",
+            ]
+        )
+        + "\n",
+        encoding="ascii",
+    )
+    tomogram_path.write_bytes(b"lingtu-test-tomogram")
+    map_sha = hashlib.sha256(map_path.read_bytes()).hexdigest()
+    tomogram_sha = hashlib.sha256(tomogram_path.read_bytes()).hexdigest()
+    (active_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "lingtu.saved_map_artifacts.v1",
+                "source_profile": "real_s100p",
+                "data_source": "real_s100p",
+                "slam_source": "fastlio2",
+                "localization_source": "fastlio2",
+                "mapping_source": "fastlio2",
+                "frame_id": "map",
+                "created_at": "2026-05-25T00:00:00Z",
+                "artifacts": {
+                    "map_pcd": {
+                        "path": "map.pcd",
+                        "sha256": map_sha,
+                        "source_profile": "real_s100p",
+                        "data_source": "real_s100p",
+                        "slam_source": "fastlio2",
+                        "frame_id": "map",
+                        "point_count": 1,
+                    },
+                    "tomogram": {
+                        "path": "tomogram.pickle",
+                        "sha256": tomogram_sha,
+                        "source_map_sha256": map_sha,
+                        "source_profile": "real_s100p",
+                        "data_source": "real_s100p",
+                        "frame_id": "map",
+                        "shape": [1, 1, 1],
+                    },
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return active_dir
 
 
 def test_localization_status_covers_product_states():
@@ -178,6 +246,74 @@ def test_localization_status_route_returns_stable_schema():
     assert payload["state"] == "tracking"
     assert payload["has_odometry"] is True
     assert payload["reported_state"] == "TRACKING"
+
+
+def test_localization_status_reports_runtime_boundary_and_topic_frames(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import LocalizationStatusResponse
+    from gateway.services.runtime_status import build_localization_status
+
+    monkeypatch.setenv("LINGTU_PROFILE", "nav")
+    monkeypatch.setenv("LINGTU_ENDPOINT", "real_s100p")
+    monkeypatch.setenv("LINGTU_DATA_SOURCE", "real_s100p")
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+    monkeypatch.setenv("LINGTU_COMMAND_SINK", "hardware_driver_after_cmd_vel_mux")
+    monkeypatch.setenv("LINGTU_SIMULATION_ONLY", "0")
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0, "y": 0.0, "frame_id": "odom"}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "registered_cloud_frame_id": "body",
+            "map_cloud_frame_id": "map",
+            "localizer_health": "RECOVERED",
+            "odom_age_ms": 80.0,
+            "cloud_age_ms": 60.0,
+            "map_cloud_fresh": True,
+        }
+
+    payload = build_localization_status(gateway)
+    model = LocalizationStatusResponse.model_validate(payload)
+
+    runtime = payload["runtime"]
+    assert runtime["ok"] is True
+    assert runtime["data_source"] == "real_s100p"
+    assert runtime["runtime_contract"] == "real_s100p"
+    assert runtime["frames"]["map"] == "map"
+    assert runtime["frames"]["odom"] == "odom"
+    assert runtime["frames"]["body"] == "body"
+    assert runtime["topic_default_frame_ids"]["/nav/odometry"] == "odom"
+    assert runtime["topic_default_frame_ids"]["/nav/registered_cloud"] == "body"
+    assert runtime["topic_default_frame_ids"]["/nav/map_cloud"] == "map"
+    assert runtime["required_topic_frame_ids"][:5] == [
+        "/nav/lidar_scan",
+        "/nav/imu",
+        "/nav/odometry",
+        "/nav/registered_cloud",
+        "/nav/map_cloud",
+    ]
+    assert runtime["runtime_data_flow_topics"][:3] == [
+        "/nav/lidar_scan",
+        "/nav/imu",
+        "/nav/odometry",
+    ]
+
+    frames = payload["frames"]
+    assert frames["runtime_contract"] == "real_s100p"
+    assert frames["odometry_frame_id"] == "odom"
+    assert frames["registered_cloud_frame_id"] == "body"
+    assert frames["map_cloud_frame_id"] == "map"
+    assert frames["odometry_expected_frame_ids"] == ["odom", "map"]
+    assert frames["registered_cloud_expected_frame_ids"] == ["body"]
+    assert frames["map_cloud_expected_frame_ids"] == ["map"]
+    assert frames["missing_required_topic_frame_ids"] == []
+    assert frames["mismatches"] == []
+    assert frames["ok"] is True
+    assert model.runtime.data_source == "real_s100p"
+    assert model.frames.ok is True
 
 
 def test_localization_status_exposes_gateway_diagnostic_age():
@@ -623,6 +759,236 @@ def test_navigation_status_reports_mission_path_and_control_source():
     assert payload["localization"]["degraded"] is False
 
 
+def test_navigation_status_reports_current_runtime_boundary(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import NavigationStatusResponse
+    from gateway.services.runtime_status import build_navigation_status
+
+    monkeypatch.setenv("LINGTU_PROFILE", "nav")
+    monkeypatch.setenv("LINGTU_ENDPOINT", "real_s100p")
+    monkeypatch.setenv("LINGTU_DATA_SOURCE", "real_s100p")
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+    monkeypatch.setenv("LINGTU_COMMAND_SINK", "hardware_driver_after_cmd_vel_mux")
+    monkeypatch.setenv("LINGTU_SIMULATION_ONLY", "0")
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "y": 2.0, "frame_id": "map"}
+        gateway._mode = "autonomous"
+        gateway._mission = {
+            "state": "EXECUTING",
+            "planning_frame_id": "map",
+            "costmap_frame_id": "map",
+            "goal_frame_id": "map",
+        }
+        gateway._localization_status = {"state": "TRACKING", "confidence": 0.9}
+
+    payload = build_navigation_status(gateway)
+    NavigationStatusResponse.model_validate(payload)
+
+    runtime = payload["runtime"]
+    assert runtime["ok"] is True
+    assert runtime["declared"] is True
+    assert runtime["profile"] == "nav"
+    assert runtime["endpoint"] == "real_s100p"
+    assert runtime["data_source"] == "real_s100p"
+    assert runtime["runtime_contract"] == "real_s100p"
+    assert runtime["simulation_only"] is False
+    assert runtime["command_sink"] == "hardware_driver_after_cmd_vel_mux"
+    assert runtime["expected_command_sink"] == "hardware_driver_after_cmd_vel_mux"
+    assert runtime["slam_source"] == "lingtu_fastlio_or_external_robot_slam"
+    assert runtime["localization_source"] == "slam_localizer"
+    assert runtime["mapping_source"] == "slam_map_cloud"
+    assert runtime["frames"]["map"] == "map"
+    assert runtime["frames"]["odom"] == "odom"
+    assert runtime["frames"]["body"] == "body"
+    assert runtime["frames"]["axis_convention"] == "x_forward_y_left_z_up"
+    assert runtime["frame_links"]["body_to_lidar"] == {
+        "parent": "body",
+        "child": "lidar_link",
+        "required": True,
+    }
+    assert runtime["topic_allowed_frame_ids"]["/nav/map_cloud"] == ["map"]
+    assert runtime["topic_allowed_frame_ids"]["/nav/global_path"] == ["map"]
+    assert runtime["topic_default_frame_ids"]["/nav/map_cloud"] == "map"
+    assert runtime["topic_default_frame_ids"]["/nav/cmd_vel"] == "body"
+    assert runtime["required_topic_frame_ids"] == [
+        "/nav/lidar_scan",
+        "/nav/imu",
+        "/nav/odometry",
+        "/nav/registered_cloud",
+        "/nav/map_cloud",
+        "/nav/global_path",
+        "/nav/local_path",
+        "/nav/cmd_vel",
+    ]
+    assert runtime["runtime_data_flow_topics"] == [
+        "/nav/lidar_scan",
+        "/nav/imu",
+        "/nav/odometry",
+        "/nav/registered_cloud",
+        "/nav/map_cloud",
+        "/nav/localization_health",
+        "/nav/localization_quality",
+        "/nav/exploration_grid",
+        "/nav/terrain_map_ext",
+        "/exploration/way_point",
+        "/nav/goal_pose",
+        "/nav/traversable_frontiers",
+        "/nav/frontier_candidate",
+        "/nav/global_path",
+        "/nav/local_path",
+        "/nav/cmd_vel",
+        "/nav/added_obstacles",
+        "/nav/check_obstacle",
+        "/nav/planner_status",
+    ]
+    flow = {stage["name"]: stage for stage in runtime["resolved_runtime_data_flow"]}
+    assert list(flow["endpoint_adapter"]["inputs"]) == [
+        "/nav/lidar_scan",
+        "/nav/imu",
+    ]
+    assert list(flow["command_boundary"]["outputs"]) == [
+        "hardware_driver_after_cmd_vel_mux"
+    ]
+    assert runtime["runtime_data_flow_stage_algorithm_interfaces"]["global_planning"] == [
+        "global_planning",
+        "astar_global_planning",
+        "pct_global_planning",
+    ]
+    assert runtime["runtime_data_flow_stage_algorithm_interfaces"][
+        "local_planning_and_following"
+    ] == ["local_planning_and_following"]
+
+
+def test_navigation_frame_summary_defaults_planning_frame_from_runtime_contract(
+    monkeypatch,
+):
+    import core.runtime_interface as runtime_interface
+    from gateway.services import runtime_status
+
+    calls: list[tuple[str | None, str]] = []
+
+    def fake_runtime_topic_default_frame_id(
+        runtime_contract: str | None,
+        topic: str,
+    ) -> str:
+        calls.append((runtime_contract, topic))
+        return "contract_map"
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+    monkeypatch.setattr(
+        runtime_interface,
+        "runtime_topic_default_frame_id",
+        fake_runtime_topic_default_frame_id,
+    )
+
+    summary = runtime_status._navigation_frame_summary({}, None)
+
+    assert summary["planning_frame_id"] == "contract_map"
+    assert summary["ok"] is True
+    assert calls == [("real_s100p", runtime_interface.TOPICS.global_path)]
+
+
+def test_navigation_status_flags_runtime_boundary_mismatch(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_navigation_status
+
+    monkeypatch.setenv("LINGTU_PROFILE", "explore")
+    monkeypatch.setenv("LINGTU_ENDPOINT", "mujoco_live")
+    monkeypatch.setenv("LINGTU_DATA_SOURCE", "mujoco_fastlio2_live")
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+    monkeypatch.setenv("LINGTU_COMMAND_SINK", "hardware_driver_after_cmd_vel_mux")
+    monkeypatch.setenv("LINGTU_SIMULATION_ONLY", "1")
+
+    gateway = GatewayModule()
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "frame_id": "map"}
+        gateway._mission = {"state": "EXECUTING", "planning_frame_id": "map"}
+        gateway._localization_status = {"state": "TRACKING", "confidence": 0.9}
+
+    runtime = build_navigation_status(gateway)["runtime"]
+
+    assert runtime["ok"] is False
+    assert "runtime_contract_data_source_mismatch" in runtime["blockers"]
+    assert "command_sink_mismatch" in runtime["blockers"]
+    assert runtime["expected_command_sink"] == "mujoco_velocity_adapter"
+    assert runtime["topic_allowed_frame_ids"]["/nav/map_cloud"] == ["map"]
+    assert runtime["required_topic_frame_ids"] == [
+        "/nav/lidar_scan",
+        "/nav/imu",
+        "/nav/odometry",
+        "/nav/registered_cloud",
+        "/nav/map_cloud",
+        "/nav/global_path",
+        "/nav/local_path",
+        "/nav/cmd_vel",
+    ]
+    assert runtime["runtime_data_flow_topics"][:2] == ["/points_raw", "/imu_raw"]
+
+
+def test_navigation_status_reports_sim_runtime_topic_frames(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import NavigationStatusResponse
+    from gateway.services.runtime_status import build_navigation_status
+
+    monkeypatch.setenv("LINGTU_PROFILE", "explore")
+    monkeypatch.setenv("LINGTU_ENDPOINT", "mujoco_live")
+    monkeypatch.setenv("LINGTU_DATA_SOURCE", "mujoco_fastlio2_live")
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "mujoco_fastlio2_live")
+    monkeypatch.setenv("LINGTU_COMMAND_SINK", "mujoco_velocity_adapter")
+    monkeypatch.setenv("LINGTU_SIMULATION_ONLY", "1")
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "frame_id": "odom"}
+        gateway._mode = "autonomous"
+        gateway._mission = {
+            "state": "EXECUTING",
+            "planning_frame_id": "map",
+            "costmap_frame_id": "map",
+            "goal_frame_id": "map",
+        }
+        gateway._localization_status = {"state": "TRACKING", "confidence": 0.9}
+
+    payload = build_navigation_status(gateway)
+    NavigationStatusResponse.model_validate(payload)
+
+    runtime = payload["runtime"]
+    assert runtime["ok"] is True
+    assert runtime["topic_allowed_frame_ids"]["/nav/map_cloud"] == ["map", "odom"]
+    assert runtime["topic_allowed_frame_ids"]["/nav/global_path"] == ["map", "odom"]
+    assert runtime["required_topic_frame_ids"] == []
+    assert runtime["runtime_data_flow_topics"][:2] == ["/points_raw", "/imu_raw"]
+
+
+def test_navigation_status_flags_unknown_topic_frame_contract(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_navigation_status
+
+    monkeypatch.setenv("LINGTU_PROFILE", "nav")
+    monkeypatch.setenv("LINGTU_ENDPOINT", "real_s100p")
+    monkeypatch.setenv("LINGTU_DATA_SOURCE", "real_s100p")
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "typo_contract")
+    monkeypatch.setenv("LINGTU_COMMAND_SINK", "hardware_driver_after_cmd_vel_mux")
+    monkeypatch.setenv("LINGTU_SIMULATION_ONLY", "0")
+
+    gateway = GatewayModule()
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "frame_id": "map"}
+        gateway._mission = {"state": "EXECUTING", "planning_frame_id": "map"}
+        gateway._localization_status = {"state": "TRACKING", "confidence": 0.9}
+
+    runtime = build_navigation_status(gateway)["runtime"]
+
+    assert runtime["ok"] is False
+    assert "runtime_contract_data_source_mismatch" in runtime["blockers"]
+    assert "topic_frame_contract_unavailable" in runtime["blockers"]
+    assert runtime["topic_allowed_frame_ids"] == {}
+
+
 def test_navigation_status_uses_mission_plan_report_when_module_status_unavailable():
     from gateway.gateway_module import GatewayModule
     from gateway.services.runtime_status import build_navigation_status
@@ -677,7 +1043,7 @@ def test_navigation_status_blocks_goal_on_odometry_frame_mismatch():
     gateway._session_mode = "navigating"
     gateway._icp_quality = 0.03
     with gateway._state_lock:
-        gateway._odom = {"x": 1.0, "y": 2.0, "frame_id": "odom"}
+        gateway._odom = {"x": 1.0, "y": 2.0, "frame_id": "camera_link"}
         gateway._mode = "autonomous"
         gateway._mission = {
             "state": "IDLE",
@@ -692,12 +1058,12 @@ def test_navigation_status_blocks_goal_on_odometry_frame_mismatch():
 
     assert payload["frames"]["ok"] is False
     assert payload["frames"]["mismatches"] == [
-        {
-            "source": "odometry",
-            "expected_frame": "map",
-            "received_frame": "odom",
-        }
-    ]
+            {
+                "source": "odometry",
+                "expected_frame": "map",
+                "received_frame": "camera_link",
+            }
+        ]
     assert "frame_mismatch_odometry" in payload["reason_codes"]
     assert "frame_mismatch_odometry" in payload["readiness"]["blockers"]
     assert payload["diagnostics"]["frame_mismatches"] == payload["frames"]["mismatches"]
@@ -730,6 +1096,13 @@ def test_gateway_odometry_preserves_frame_for_navigation_status():
     assert gateway._odom["child_frame_id"] == "base_link"
     assert payload["frames"]["odom_frame_id"] == "odom"
     assert "frame_mismatch_odometry" in payload["reason_codes"]
+    assert payload["frames"]["mismatches"] == [
+        {
+            "source": "odometry",
+            "expected_frame": "map",
+            "received_frame": "odom",
+        }
+    ]
 
 
 def test_gateway_mission_event_pushes_navigation_status_update():
@@ -1040,6 +1413,58 @@ def test_navigation_status_allows_fresh_pose_with_low_confidence_snapshot():
     assert session["localizer_ready"] is True
     assert session["pose_fresh"] is True
     assert session["pose_freshness"] == "fresh"
+
+
+def test_navigation_status_blocks_goal_when_map_artifact_gate_fails():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_navigation_status
+
+    class FakeMux:
+        def health(self):
+            return {"active_source": "none", "sources": {}}
+
+    class FakeNavigation:
+        def get_navigation_status(self):
+            return json.dumps(
+                {
+                    "state": "IDLE",
+                    "planning_frame_id": "map",
+                    "odom_frame_id": "map",
+                    "costmap_frame_id": "map",
+                    "map_artifact_gate": {
+                        "required": True,
+                        "ok": False,
+                        "blockers": ["metadata.json missing"],
+                    },
+                }
+            )
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0, "frame_id": "map"}
+        gateway._mission = {"state": "IDLE"}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.028,
+            "localizer_health": "RECOVERED",
+        }
+    gateway._all_modules = {
+        "NavigationModule": FakeNavigation(),
+        "CmdVelMux": FakeMux(),
+    }
+
+    payload = build_navigation_status(gateway)
+
+    assert payload["can_accept_goal"] is False
+    assert payload["readiness"]["map_artifacts_ok"] is False
+    assert "map_artifact_gate_failed" in payload["readiness"]["blockers"]
+    assert payload["readiness"]["map_artifact_gate"]["blockers"] == [
+        "metadata.json missing"
+    ]
 
 
 def test_navigation_status_treats_mild_degeneracy_as_advisory():
@@ -1597,3 +2022,796 @@ def test_drift_watchdog_restores_idle_running_super_lio_relocation_services(
     ) in fake.calls
     assert ("ensure", ("lidar", "super_lio_relocation")) in fake.calls
     assert ("wait_ready", ("lidar", "super_lio_relocation")) in fake.calls
+
+
+def test_runtime_dataflow_route_exposes_module_first_observability(monkeypatch):
+    from core.runtime_interface import TOPICS
+    from core.msgs.nav import Odometry
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import RuntimeDataflowResponse
+
+    monkeypatch.setenv("LINGTU_PROFILE", "nav")
+    monkeypatch.setenv("LINGTU_ENDPOINT", "real_s100p")
+    monkeypatch.setenv("LINGTU_DATA_SOURCE", "real_s100p")
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+    monkeypatch.setenv("LINGTU_COMMAND_SINK", "hardware_driver_after_cmd_vel_mux")
+    monkeypatch.setenv("LINGTU_SIMULATION_ONLY", "0")
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow")
+    payload = asyncio.run(endpoint())
+    RuntimeDataflowResponse.model_validate(payload)
+    initial_payload = payload
+
+    assert payload["schema_version"] == 1
+    assert payload["runtime_contract"] == "real_s100p"
+    assert payload["runtime_boundary"]["runtime_contract"] == "real_s100p"
+    assert payload["ros2_topic_required"] is False
+    assert payload["transport_layers"]["module_port_bus"]["primary"] is True
+    assert payload["transport_layers"]["ros2_adapter"]["primary"] is False
+    assert payload["control_boundary"]["arbitrary_publish_supported"] is False
+    assert payload["control_boundary"]["policy"] == "whitelisted_gateway_commands_only"
+
+    gateway_ports = payload["module_ports"]["GatewayModule"]
+    assert "odometry" in gateway_ports["ports_in"]
+    assert "cmd_vel" in gateway_ports["ports_out"]
+
+    topics = {item["topic"]: item for item in payload["topics"]}
+    assert TOPICS.odometry in topics
+    assert TOPICS.lidar_scan in topics
+    assert TOPICS.cmd_vel in topics
+
+    odometry_observability = topics[TOPICS.odometry]["observability"]
+    assert odometry_observability["ros2_topic_required"] is False
+    assert "module_port_bus" in odometry_observability["observable_via"]
+    assert "gateway_sse" in odometry_observability["observable_via"]
+    assert "gateway_rest" in odometry_observability["observable_via"]
+    assert odometry_observability["live_module_samples"] is False
+
+    gateway.odometry._deliver(Odometry())
+    payload = asyncio.run(endpoint())
+    topics = {item["topic"]: item for item in payload["topics"]}
+    odometry_observability = topics[TOPICS.odometry]["observability"]
+    assert odometry_observability["live_module_samples"] is True
+    assert odometry_observability["has_fresh_module_sample"] is True
+    assert odometry_observability["module_port_candidates"][0]["msg_count"] > 0
+    assert odometry_observability["module_port_candidates"][0]["stale_ms"] >= 0
+
+    lidar_flow = {
+        stage["name"]: stage
+        for stage in topics[TOPICS.lidar_scan]["data_flow_stages"]
+    }
+    assert "endpoint_adapter" in lidar_flow
+    assert "input" in lidar_flow["endpoint_adapter"]["roles"]
+
+    stages = {stage["name"]: stage for stage in initial_payload["stage_evidence"]}
+    assert "global_planning" in stages
+    assert stages["global_planning"]["owner"] == "lingtu_navigation_or_pct"
+    assert TOPICS.odometry in stages["global_planning"]["inputs"]
+    assert TOPICS.global_path in stages["global_planning"]["outputs"]
+    assert TOPICS.odometry in stages["global_planning"]["not_live_inputs"]
+    odom_stage_input = next(
+        item
+        for item in stages["global_planning"]["input_evidence"]
+        if item["token"] == TOPICS.odometry
+    )
+    assert odom_stage_input["observable"] is True
+    assert odom_stage_input["live"] is False
+    assert odom_stage_input["reason"] == "metadata_only"
+    assert stages["command_boundary"]["output_evidence"][0]["kind"] == "runtime_boundary"
+    assert stages["command_boundary"]["output_evidence"][0]["reason"] == "runtime_boundary_declared"
+
+    cmd_vel_communication = topics[TOPICS.cmd_vel]["communication"]
+    assert cmd_vel_communication["allowed"] is True
+    assert cmd_vel_communication["arbitrary_publish_supported"] is False
+    assert {
+        interface["path"] for interface in cmd_vel_communication["interfaces"]
+    } == {"/api/v1/cmd_vel", "/api/v1/stop"}
+
+
+def test_runtime_dataflow_route_validates_active_saved_tomogram_artifact(
+    monkeypatch,
+    tmp_path,
+):
+    from core.runtime_interface import TOPICS
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import RuntimeDataflowResponse
+
+    map_root = tmp_path / "maps"
+    _write_active_same_source_tomogram(map_root)
+    monkeypatch.setenv("NAV_MAP_DIR", str(map_root))
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow")
+    payload = asyncio.run(endpoint())
+    RuntimeDataflowResponse.model_validate(payload)
+
+    stages = {stage["name"]: stage for stage in payload["stage_evidence"]}
+    global_stage = stages["global_planning"]
+    tomogram_input = next(
+        item
+        for item in global_stage["input_evidence"]
+        if item["token"] == "artifact:tomogram"
+    )
+
+    assert "artifact:tomogram" in global_stage["inputs"]
+    assert "artifact:tomogram" not in global_stage["missing_inputs"]
+    assert tomogram_input["kind"] == "artifact"
+    assert tomogram_input["observable"] is True
+    assert tomogram_input["live"] is False
+    assert tomogram_input["reason"] == "saved_map_artifact_ok"
+    assert tomogram_input["artifact_gate"]["ok"] is True
+    assert tomogram_input["artifact_gate"]["artifacts"]["tomogram"]["sha256_ok"] is True
+    assert (
+        tomogram_input["artifact_gate"]["artifacts"]["tomogram"][
+            "source_map_sha256_matches_map"
+        ]
+        is True
+    )
+    assert tomogram_input["artifact_gate"]["ros2_topic_required"] is False
+    assert TOPICS.global_path in global_stage["outputs"]
+
+
+def test_runtime_dataflow_route_marks_missing_active_tomogram_artifact(
+    monkeypatch,
+    tmp_path,
+):
+    from gateway.gateway_module import GatewayModule
+
+    map_root = tmp_path / "maps"
+    map_root.mkdir()
+    monkeypatch.setenv("NAV_MAP_DIR", str(map_root))
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow")
+    payload = asyncio.run(endpoint())
+
+    stages = {stage["name"]: stage for stage in payload["stage_evidence"]}
+    global_stage = stages["global_planning"]
+    tomogram_input = next(
+        item
+        for item in global_stage["input_evidence"]
+        if item["token"] == "artifact:tomogram"
+    )
+
+    assert "artifact:tomogram" in global_stage["missing_inputs"]
+    assert tomogram_input["kind"] == "artifact"
+    assert tomogram_input["observable"] is False
+    assert tomogram_input["live"] is False
+    assert tomogram_input["reason"] == "saved_map_artifact_missing_or_invalid"
+    assert tomogram_input["artifact_gate"]["ok"] is False
+    assert tomogram_input["artifact_gate"]["ros2_topic_required"] is False
+    assert "active map artifact directory missing" in tomogram_input["artifact_gate"][
+        "blockers"
+    ]
+
+
+def test_runtime_dataflow_route_is_read_only_for_module_ports(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow")
+    before = {name: port.msg_count for name, port in gateway.ports_out.items()}
+
+    payload = asyncio.run(endpoint())
+
+    after = {name: port.msg_count for name, port in gateway.ports_out.items()}
+    assert payload["ros2_topic_required"] is False
+    assert after == before
+
+
+def test_runtime_dataflow_route_does_not_mark_stale_port_as_live(
+    monkeypatch,
+):
+    import gateway.services.runtime_dataflow as dataflow_mod
+    from core.msgs.nav import Odometry
+    from core.runtime_interface import TOPICS
+    from gateway.gateway_module import GatewayModule
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+    monkeypatch.setattr(dataflow_mod, "LIVE_MODULE_SAMPLE_STALE_MS", -1.0)
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow")
+    gateway.odometry._deliver(Odometry())
+
+    payload = asyncio.run(endpoint())
+    topics = {item["topic"]: item for item in payload["topics"]}
+    odometry_observability = topics[TOPICS.odometry]["observability"]
+
+    assert odometry_observability["module_port_candidates"][0]["msg_count"] > 0
+    assert odometry_observability["has_fresh_module_sample"] is False
+    assert odometry_observability["live_module_samples"] is False
+
+
+def test_runtime_dataflow_topic_route_answers_one_stream_without_ros2(monkeypatch):
+    from core.msgs.nav import Odometry
+    from core.runtime_interface import TOPICS
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import RuntimeDataflowTopicDetailResponse
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow/topic")
+    gateway.odometry._deliver(Odometry())
+
+    payload = asyncio.run(endpoint(topic="odometry"))
+    RuntimeDataflowTopicDetailResponse.model_validate(payload)
+
+    assert payload["ok"] is True
+    assert payload["selector"] == "odometry"
+    assert payload["topic"]["topic"] == TOPICS.odometry
+    assert payload["inspection"]["live"] is True
+    assert payload["inspection"]["observation_level"] == "fresh_module_sample"
+    assert payload["inspection"]["ros2_topic_required"] is False
+    assert payload["inspection"]["arbitrary_publish_supported"] is False
+    assert payload["inspection"]["payload_available"] is True
+    assert {
+        channel["transport"]
+        for channel in payload["inspection"]["payload_interfaces"]
+    } >= {"gateway_rest", "gateway_sse"}
+    assert payload["inspection"]["stream_interfaces"] == [
+        {
+            "transport": "gateway_sse",
+            "path": "/api/v1/events",
+            "query": {"topic": TOPICS.odometry},
+            "event_type": "odometry",
+        }
+    ]
+    assert payload["inspection"]["communicate"] is False
+
+
+def test_runtime_dataflow_subscribe_route_returns_read_only_sse_plan(monkeypatch):
+    from core.msgs.nav import Odometry
+    from core.runtime_interface import TOPICS
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import (
+        RuntimeDataflowSubscribeRequest,
+        RuntimeDataflowSubscribeResponse,
+    )
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow/subscribe")
+    gateway.odometry._deliver(Odometry())
+
+    payload = asyncio.run(
+        endpoint(RuntimeDataflowSubscribeRequest(selector="odometry"))
+    )
+    RuntimeDataflowSubscribeResponse.model_validate(payload)
+
+    assert payload["ok"] is True
+    assert payload["read_only"] is True
+    assert payload["ros2_topic_required"] is False
+    assert payload["arbitrary_publish_supported"] is False
+    assert payload["publishes"] == []
+    assert payload["selector"] == "odometry"
+    assert payload["topic"] == TOPICS.odometry
+    assert payload["event_types"] == ["odometry"]
+    assert payload["stream_url"] == "/api/v1/events?topic=%2Fnav%2Fodometry"
+    assert payload["stream_interfaces"] == [
+        {
+            "transport": "gateway_sse",
+            "path": "/api/v1/events",
+            "query": {"topic": TOPICS.odometry},
+            "event_type": "odometry",
+        }
+    ]
+    assert payload["blockers"] == []
+
+
+def test_runtime_dataflow_exposes_traversable_frontier_candidates_read_only(
+    monkeypatch,
+):
+    import numpy as np
+
+    from core.msgs.geometry import Pose
+    from core.msgs.nav import Odometry
+    from core.runtime_interface import TOPICS
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import (
+        RuntimeDataflowResponse,
+        RuntimeDataflowSubscribeRequest,
+        RuntimeDataflowSubscribeResponse,
+        RuntimeDataflowTopicDetailResponse,
+    )
+    from nav.traversable_frontier_module import TraversableFrontierModule
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    gateway.setup()
+    routes = {
+        route.path: route.endpoint
+        for route in gateway._app.routes
+        if hasattr(route, "endpoint")
+    }
+    module = TraversableFrontierModule(
+        min_frontier_size=1,
+        safe_distance=1.0,
+        max_slope_deg=30.0,
+        max_frontier_cost=80.0,
+    )
+    module.setup()
+    gateway._all_modules = {
+        "GatewayModule": gateway,
+        "TraversableFrontierModule": module,
+    }
+    module.traversable_frontiers._add_callback(gateway.traversable_frontiers._deliver)
+    module.frontier_candidate._add_callback(gateway.frontier_candidate._deliver)
+
+    grid = np.full((9, 9), -1, dtype=np.int16)
+    grid[2:7, 2:7] = 0
+    cost = np.zeros_like(grid, dtype=np.float32)
+    slope = np.full_like(grid, 5.0, dtype=np.float32)
+    clearance = np.full_like(grid, 2.0, dtype=np.float32)
+    elevation = np.full_like(grid, 0.25, dtype=np.float32)
+    payload = {
+        "grid": grid,
+        "resolution": 1.0,
+        "origin": [-4.0, -4.0],
+        "origin_x": -4.0,
+        "origin_y": -4.0,
+        "width": 9,
+        "height": 9,
+        "frame_id": "map",
+    }
+
+    module.odometry._deliver(Odometry(pose=Pose(0.0, 0.0, 0.0), frame_id="map"))
+    module.exploration_grid._deliver(payload)
+    module.costmap._deliver(payload)
+    module.fused_cost._deliver({**payload, "grid": cost})
+    module.slope_grid._deliver({**payload, "grid": slope})
+    module.esdf_field._deliver({**payload, "distance_field": clearance})
+    module.elevation_map._deliver({**payload, "max_z": elevation})
+    result = module.refresh_candidates()
+
+    assert result["command_published"] is False
+    assert module.exploration_goal.msg_count == 0
+    assert gateway.goal_pose.msg_count == 0
+    assert gateway.cmd_vel.msg_count == 0
+
+    snapshot = asyncio.run(routes["/api/v1/runtime/dataflow"]())
+    RuntimeDataflowResponse.model_validate(snapshot)
+    topics = {item["topic"]: item for item in snapshot["topics"]}
+    stages = {item["name"]: item for item in snapshot["stage_evidence"]}
+    assert TOPICS.traversable_frontiers in topics
+    assert TOPICS.frontier_candidate in topics
+    assert "traversable_frontier_preview" in stages
+    preview_stage = stages["traversable_frontier_preview"]
+    assert preview_stage["outputs"] == [
+        TOPICS.traversable_frontiers,
+        TOPICS.frontier_candidate,
+    ]
+    assert "module:TraversableFrontierModule.fused_cost" in preview_stage["inputs"]
+    assert "module:TraversableFrontierModule.slope_grid" in preview_stage["inputs"]
+    assert "module:TraversableFrontierModule.esdf_field" in preview_stage["inputs"]
+    assert "module:TraversableFrontierModule.elevation_map" in preview_stage["inputs"]
+    evidence_by_token = {
+        item["token"]: item
+        for item in preview_stage["input_evidence"]
+    }
+    fused_evidence = evidence_by_token["module:TraversableFrontierModule.fused_cost"]
+    assert fused_evidence["kind"] == "module_port"
+    assert fused_evidence["live"] is True
+    assert fused_evidence["module_ports"][0]["module"] == "TraversableFrontierModule"
+    assert preview_stage["observable"] is True
+    assert preview_stage["live"] is True
+    assert preview_stage["missing_inputs"] == []
+    assert topics[TOPICS.frontier_candidate]["communication"]["allowed"] is False
+    assert (
+        topics[TOPICS.frontier_candidate]["communication"][
+            "arbitrary_publish_supported"
+        ]
+        is False
+    )
+    assert (
+        snapshot["control_boundary"]["arbitrary_publish_supported"]
+        is False
+    )
+
+    detail = asyncio.run(
+        routes["/api/v1/runtime/dataflow/topic"](topic="frontier_candidate")
+    )
+    RuntimeDataflowTopicDetailResponse.model_validate(detail)
+    assert detail["ok"] is True
+    assert detail["topic"]["topic"] == TOPICS.frontier_candidate
+    assert detail["inspection"]["live"] is True
+    assert detail["inspection"]["communicate"] is False
+    assert detail["inspection"]["write_interfaces"] == []
+    assert detail["inspection"]["latest_payload"]["source"] == "traversable_frontier"
+    assert detail["inspection"]["latest_payload"]["preview"] is True
+    assert detail["inspection"]["latest_payload"]["command_published"] is False
+    assert detail["inspection"]["latest_payload"]["reachable_score"] > 0.0
+    assert detail["inspection"]["stream_interfaces"] == [
+        {
+            "transport": "gateway_sse",
+            "path": "/api/v1/events",
+            "query": {"topic": TOPICS.frontier_candidate},
+            "event_type": "frontier_candidate",
+        }
+    ]
+
+    list_detail = asyncio.run(
+        routes["/api/v1/runtime/dataflow/topic"](topic="traversable_frontiers")
+    )
+    RuntimeDataflowTopicDetailResponse.model_validate(list_detail)
+    assert list_detail["ok"] is True
+    assert list_detail["topic"]["topic"] == TOPICS.traversable_frontiers
+    assert list_detail["inspection"]["live"] is True
+    assert list_detail["inspection"]["communicate"] is False
+    assert list_detail["inspection"]["write_interfaces"] == []
+    assert isinstance(list_detail["inspection"]["latest_payload"], list)
+    assert list_detail["inspection"]["latest_payload"]
+    assert (
+        list_detail["inspection"]["latest_payload"][0]["source"]
+        == "traversable_frontier"
+    )
+    assert list_detail["inspection"]["latest_payload"][0]["command_published"] is False
+    assert list_detail["inspection"]["stream_interfaces"] == [
+        {
+            "transport": "gateway_sse",
+            "path": "/api/v1/events",
+            "query": {"topic": TOPICS.traversable_frontiers},
+            "event_type": "traversable_frontiers",
+        }
+    ]
+
+    subscription = asyncio.run(
+        routes["/api/v1/runtime/dataflow/subscribe"](
+            RuntimeDataflowSubscribeRequest(selector="frontier_candidate")
+        )
+    )
+    RuntimeDataflowSubscribeResponse.model_validate(subscription)
+    assert subscription["ok"] is True
+    assert subscription["read_only"] is True
+    assert subscription["publishes"] == []
+    assert subscription["arbitrary_publish_supported"] is False
+    assert subscription["event_types"] == ["frontier_candidate"]
+    assert (
+        subscription["stream_url"]
+        == "/api/v1/events?topic=%2Fnav%2Ffrontier_candidate"
+    )
+
+
+def test_runtime_dataflow_subscribe_route_rejects_unknown_selector_without_publish(
+    monkeypatch,
+):
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import RuntimeDataflowSubscribeRequest
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow/subscribe")
+
+    payload = asyncio.run(
+        endpoint(RuntimeDataflowSubscribeRequest(selector="not_a_stream"))
+    )
+
+    assert payload["ok"] is False
+    assert payload["read_only"] is True
+    assert payload["ros2_topic_required"] is False
+    assert payload["arbitrary_publish_supported"] is False
+    assert payload["publishes"] == []
+    assert payload["stream_url"] == ""
+    assert "runtime_topic_not_found" in payload["blockers"]
+
+
+def test_runtime_dataflow_topic_route_accepts_canonical_stream_token(
+    monkeypatch,
+):
+    from core.msgs.nav import Odometry
+    from core.runtime_interface import TOPICS
+    from gateway.gateway_module import GatewayModule
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow/topic")
+    gateway.odometry._deliver(Odometry())
+
+    payload = asyncio.run(endpoint(topic=TOPICS.odometry))
+
+    assert payload["ok"] is True
+    assert payload["selector"] == TOPICS.odometry
+    assert payload["topic"]["topic"] == TOPICS.odometry
+    assert payload["inspection"]["live"] is True
+    assert payload["inspection"]["ros2_topic_required"] is False
+
+
+def test_runtime_dataflow_topic_route_exposes_whitelisted_command_interfaces(
+    monkeypatch,
+):
+    from core.runtime_interface import TOPICS
+    from gateway.gateway_module import GatewayModule
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow/topic")
+
+    payload = asyncio.run(endpoint(topic="/cmd_vel"))
+
+    assert payload["ok"] is True
+    assert payload["topic"]["topic"] == TOPICS.cmd_vel
+    assert payload["inspection"]["communicate"] is True
+    assert payload["inspection"]["arbitrary_publish_supported"] is False
+    assert {item["path"] for item in payload["inspection"]["write_interfaces"]} == {
+        "/api/v1/cmd_vel",
+        "/api/v1/stop",
+    }
+
+
+@pytest.mark.parametrize(
+    (
+        "contract",
+        "data_source",
+        "endpoint",
+        "command_sink",
+        "simulation_only",
+    ),
+    [
+        (
+            "real_s100p",
+            "real_s100p",
+            "real_s100p",
+            "hardware_driver_after_cmd_vel_mux",
+            "0",
+        ),
+        (
+            "mujoco_fastlio2_live",
+            "mujoco_fastlio2_live",
+            "mujoco_live",
+            "mujoco_velocity_adapter",
+            "1",
+        ),
+    ],
+)
+def test_runtime_dataflow_exposes_all_contract_streams_for_real_and_sim(
+    monkeypatch,
+    contract: str,
+    data_source: str,
+    endpoint: str,
+    command_sink: str,
+    simulation_only: str,
+):
+    from core.runtime_interface import runtime_data_flow_topics
+    from gateway.gateway_module import GatewayModule
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", contract)
+    monkeypatch.setenv("LINGTU_DATA_SOURCE", data_source)
+    monkeypatch.setenv("LINGTU_ENDPOINT", endpoint)
+    monkeypatch.setenv("LINGTU_COMMAND_SINK", command_sink)
+    monkeypatch.setenv("LINGTU_SIMULATION_ONLY", simulation_only)
+
+    gateway = GatewayModule()
+    endpoint_fn = _endpoint(gateway, "/api/v1/runtime/dataflow")
+
+    payload = asyncio.run(endpoint_fn())
+    topics = {item["topic"]: item for item in payload["topics"]}
+
+    assert set(runtime_data_flow_topics(contract)) <= set(topics)
+    assert payload["runtime_contract"] == contract
+    assert payload["ros2_topic_required"] is False
+    for topic in topics.values():
+        assert topic["inspection"]["ros2_topic_required"] is False
+        assert topic["inspection"]["arbitrary_publish_supported"] is False
+        assert topic["communication"]["arbitrary_publish_supported"] is False
+
+
+def test_runtime_dataflow_topic_route_exposes_all_whitelisted_write_interfaces(
+    monkeypatch,
+):
+    from core.runtime_interface import TOPICS
+    from gateway.gateway_module import GatewayModule
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow/topic")
+    expected = {
+        TOPICS.goal_pose: {"/api/v1/goal", "/api/v1/navigate/click"},
+        TOPICS.cmd_vel: {"/api/v1/cmd_vel", "/api/v1/stop"},
+        TOPICS.stop: {"/api/v1/stop"},
+        TOPICS.cancel: {"/api/v1/navigation/cancel"},
+        TOPICS.semantic_instruction: {"/api/v1/instruction"},
+    }
+
+    for topic, paths in expected.items():
+        payload = asyncio.run(endpoint(topic=topic))
+        assert payload["ok"] is True, topic
+        assert payload["topic"]["topic"] == topic
+        assert payload["inspection"]["communicate"] is True
+        assert payload["inspection"]["arbitrary_publish_supported"] is False
+        assert {item["path"] for item in payload["inspection"]["write_interfaces"]} == paths
+
+
+def test_runtime_dataflow_reflects_sim_to_real_runtime_switch_without_cache(
+    monkeypatch,
+):
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow")
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "mujoco_fastlio2_live")
+    monkeypatch.setenv("LINGTU_DATA_SOURCE", "mujoco_fastlio2_live")
+    monkeypatch.setenv("LINGTU_ENDPOINT", "mujoco_live")
+    monkeypatch.setenv("LINGTU_COMMAND_SINK", "mujoco_velocity_adapter")
+    monkeypatch.setenv("LINGTU_SIMULATION_ONLY", "1")
+    sim_payload = asyncio.run(endpoint())
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+    monkeypatch.setenv("LINGTU_DATA_SOURCE", "real_s100p")
+    monkeypatch.setenv("LINGTU_ENDPOINT", "real_s100p")
+    monkeypatch.setenv("LINGTU_COMMAND_SINK", "hardware_driver_after_cmd_vel_mux")
+    monkeypatch.setenv("LINGTU_SIMULATION_ONLY", "0")
+    real_payload = asyncio.run(endpoint())
+
+    assert sim_payload["runtime_contract"] == "mujoco_fastlio2_live"
+    assert sim_payload["runtime_boundary"]["simulation_only"] is True
+    assert sim_payload["runtime_boundary"]["command_sink"] == "mujoco_velocity_adapter"
+    assert real_payload["runtime_contract"] == "real_s100p"
+    assert real_payload["runtime_boundary"]["simulation_only"] is False
+    assert (
+        real_payload["runtime_boundary"]["command_sink"]
+        == "hardware_driver_after_cmd_vel_mux"
+    )
+    sim_topics = {item["topic"] for item in sim_payload["topics"]}
+    real_topics = {item["topic"] for item in real_payload["topics"]}
+    assert "/points_raw" in sim_topics
+    assert "/nav/lidar_scan" in real_topics
+    assert sim_topics != real_topics
+
+
+def test_runtime_dataflow_topic_route_reports_unknown_selector(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow/topic")
+
+    payload = asyncio.run(endpoint(topic="not_a_lingtu_stream"))
+
+    assert payload["ok"] is False
+    assert payload["error"] == "runtime_topic_not_found"
+    assert payload["inspection"]["observable"] is False
+    assert payload["inspection"]["communicate"] is False
+    assert payload["inspection"]["ros2_topic_required"] is False
+    assert "/nav/odometry" in payload["available_topics"]
+
+
+def test_runtime_dataflow_reports_live_samples_for_field_topics(monkeypatch):
+    import numpy as np
+
+    from core.gateway_runtime_acceptance import (
+        FIELD_LIVE_TOPICS,
+        FIELD_REQUIRED_LIVE_STAGE_NAMES,
+    )
+    from core.msgs.nav import Odometry, Path
+    from core.msgs.geometry import Twist
+    from core.msgs.sensor import PointCloud2
+    from core.runtime_interface import TOPICS
+    from gateway.gateway_module import GatewayModule
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow")
+
+    gateway.odometry._deliver(Odometry())
+    gateway.map_cloud._deliver(PointCloud2(points=np.zeros((1, 3), dtype=np.float32)))
+    gateway.global_path._deliver([np.array([0.0, 0.0, 0.0])])
+    gateway.local_path._deliver(Path())
+    frontier = {
+        "id": "traversable_frontier_0",
+        "source": "traversable_frontier",
+        "centroid_3d": [1.0, 0.0, 0.2],
+        "reachable_score": 0.7,
+        "semantic_value": 0.2,
+        "nearby_labels": ["inspection_pump"],
+        "preview": True,
+        "command_published": False,
+        "reasons": [],
+    }
+    gateway.traversable_frontiers._deliver([frontier])
+    gateway.frontier_candidate._deliver(frontier)
+    gateway.cmd_vel.publish(Twist())
+
+    payload = asyncio.run(endpoint())
+    topics = {item["topic"]: item for item in payload["topics"]}
+
+    for topic in FIELD_LIVE_TOPICS:
+        observability = topics[topic]["observability"]
+        assert observability["has_fresh_module_sample"] is True, topic
+        assert observability["live_module_samples"] is True, topic
+        assert observability["ros2_topic_required"] is False, topic
+        assert any(
+            port["msg_count"] > 0
+            for port in observability["module_port_candidates"]
+        ), topic
+
+    stages = {stage["name"]: stage for stage in payload["stage_evidence"]}
+    for stage_name in FIELD_REQUIRED_LIVE_STAGE_NAMES:
+        assert stages[stage_name]["live"] is True, stage_name
+        assert stages[stage_name]["status"] == "live", stage_name
+
+    assert topics[TOPICS.cmd_vel]["communication"]["arbitrary_publish_supported"] is False
+
+
+def test_runtime_dataflow_topic_route_answers_every_product_observable_stream_without_ros2(
+    monkeypatch,
+):
+    from core.gateway_runtime_acceptance import PRODUCT_OBSERVABLE_TOPICS
+    from gateway.gateway_module import GatewayModule
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    endpoint = _endpoint(gateway, "/api/v1/runtime/dataflow/topic")
+
+    for topic in PRODUCT_OBSERVABLE_TOPICS:
+        payload = asyncio.run(endpoint(topic=topic))
+
+        assert payload["ok"] is True, topic
+        assert payload["topic"]["topic"] == topic
+        assert payload["inspection"]["ros2_topic_required"] is False, topic
+        assert payload["inspection"]["arbitrary_publish_supported"] is False, topic
+        assert payload["inspection"]["payload_available"] is True, topic
+        assert (
+            payload["inspection"]["payload_interfaces"]
+            or payload["inspection"]["stream_interfaces"]
+        ), topic
+
+
+def test_runtime_dataflow_subscribe_route_covers_every_gateway_realtime_stream(
+    monkeypatch,
+):
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import RuntimeDataflowSubscribeRequest
+
+    monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
+
+    gateway = GatewayModule()
+    gateway.setup()
+    routes = {
+        route.path: route.endpoint
+        for route in gateway._app.routes
+        if hasattr(route, "endpoint")
+    }
+    dataflow_endpoint = routes["/api/v1/runtime/dataflow"]
+    subscribe_endpoint = routes["/api/v1/runtime/dataflow/subscribe"]
+
+    snapshot = asyncio.run(dataflow_endpoint())
+    stream_topics = [
+        topic["topic"]
+        for topic in snapshot["topics"]
+        if any(
+            stream.get("transport") == "gateway_sse"
+            for stream in topic["inspection"].get("stream_interfaces", [])
+        )
+    ]
+
+    assert stream_topics
+    for topic in stream_topics:
+        payload = asyncio.run(
+            subscribe_endpoint(RuntimeDataflowSubscribeRequest(selector=topic))
+        )
+
+        assert payload["ok"] is True, topic
+        assert payload["read_only"] is True, topic
+        assert payload["ros2_topic_required"] is False, topic
+        assert payload["arbitrary_publish_supported"] is False, topic
+        assert payload["publishes"] == [], topic
+        assert payload["topic"] == topic
+        assert payload["transport"] == "gateway_sse", topic
+        assert payload["stream_url"] == f"/api/v1/events?topic={topic.replace('/', '%2F')}", topic
+        assert payload["event_types"], topic

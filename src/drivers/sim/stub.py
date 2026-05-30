@@ -23,7 +23,11 @@ if TYPE_CHECKING:
     from core.blueprint import Blueprint
 from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
+from core.runtime_interface import TOPICS, topic_default_frame_id
 from core.stream import In, Out
+
+STUB_LEGACY_ODOM_FRAME_ID = topic_default_frame_id(TOPICS.map_cloud)
+STUB_BODY_FRAME_ID = topic_default_frame_id(TOPICS.cmd_vel)
 
 
 class StubConnection(Module, layer=1):
@@ -80,7 +84,9 @@ class StubConnection(Module, layer=1):
         self.odometry.publish(Odometry(
             pose=Pose(Vector3(self._x, self._y, 0.0), q),
             twist=Twist(Vector3(self._vx, self._vy, 0.0), Vector3(0.0, 0.0, self._wz)),
-            ts=time.time(), frame_id="map", child_frame_id="body",
+            ts=time.time(),
+            frame_id=STUB_LEGACY_ODOM_FRAME_ID,
+            child_frame_id=STUB_BODY_FRAME_ID,
         ))
 
 

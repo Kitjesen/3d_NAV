@@ -22,12 +22,24 @@ from gateway.schemas import (
     NavigationStatusResponse,
     PathResponse,
     ReadinessResponse,
+    RuntimeDataflowResponse,
+    RuntimeDataflowSubscribeRequest,
+    RuntimeDataflowSubscribeResponse,
+    RuntimeDataflowTopicDetailResponse,
+    RuntimeSwitchPlanRequest,
+    RuntimeSwitchPlanResponse,
     SSEEventEnvelope,
     SceneGraphResponse,
     StateResponse,
 )
 from gateway.services.media_status import build_camera_status
 from gateway.services.readiness import build_readiness_snapshot
+from gateway.services.runtime_dataflow import (
+    build_runtime_dataflow_snapshot,
+    build_runtime_dataflow_subscription,
+    build_runtime_dataflow_topic_detail,
+)
+from gateway.services.runtime_switch_plan import build_runtime_switch_plan
 from gateway.services.runtime_status import (
     build_localization_status,
     build_navigation_status,
@@ -410,19 +422,74 @@ def register_status_routes(app, gw) -> None:
             }
         },
     )
-    async def sse_events():
+    async def sse_events(
+        topic: Annotated[
+            str | None,
+            Query(
+                description=(
+                    "Optional runtime dataflow topic or alias. When set, the "
+                    "SSE stream emits only Gateway events backing that stream."
+                )
+            ),
+        ] = None,
+    ):
         q, snapshot_event_id = gw._sse_subscribe_with_event_id()
+        topic_filter = topic.strip() if isinstance(topic, str) else ""
+        selected_event_types: set[str] | None = None
+        subscription_payload: dict[str, Any] | None = None
+        if topic_filter:
+            detail = build_runtime_dataflow_topic_detail(gw, topic_filter)
+            inspection = (
+                detail.get("inspection")
+                if isinstance(detail.get("inspection"), Mapping)
+                else {}
+            )
+            stream_interfaces = [
+                dict(item)
+                for item in (inspection.get("stream_interfaces") or [])
+                if isinstance(item, Mapping)
+            ]
+            selected_event_types = {
+                str(item.get("event_type"))
+                for item in stream_interfaces
+                if item.get("event_type")
+            }
+            subscription_payload = {
+                "ok": bool(detail.get("ok")) and bool(selected_event_types),
+                "selector": topic_filter,
+                "topic": (
+                    (detail.get("topic") or {}).get("topic")
+                    if isinstance(detail.get("topic"), Mapping)
+                    else None
+                ),
+                "event_types": sorted(selected_event_types),
+                "stream_interfaces": stream_interfaces,
+                "ros2_topic_required": False,
+                "blockers": [] if selected_event_types else ["no_gateway_sse_stream"],
+            }
 
         async def _stream():
             try:
-                snapshot = {
-                    "type": "snapshot",
-                    "data": build_state_snapshot(gw),
-                }
-                yield format_sse_message(
-                    normalize_sse_event(snapshot, event_id=snapshot_event_id),
-                    retry_ms=SSE_RETRY_MS,
-                )
+                if subscription_payload is not None:
+                    yield format_sse_message(
+                        normalize_sse_event(
+                            {
+                                "type": "runtime_dataflow_subscription",
+                                "data": subscription_payload,
+                            },
+                            event_id=snapshot_event_id,
+                        ),
+                        retry_ms=SSE_RETRY_MS,
+                    )
+                else:
+                    snapshot = {
+                        "type": "snapshot",
+                        "data": build_state_snapshot(gw),
+                    }
+                    yield format_sse_message(
+                        normalize_sse_event(snapshot, event_id=snapshot_event_id),
+                        retry_ms=SSE_RETRY_MS,
+                    )
 
                 while True:
                     try:
@@ -434,6 +501,11 @@ def register_status_routes(app, gw) -> None:
                                 now=time.time(),
                             )
                         )
+                        continue
+                    if (
+                        selected_event_types is not None
+                        and event.get("type") not in selected_event_types
+                    ):
                         continue
                     yield format_sse_message(event)
                     await asyncio.sleep(0)
@@ -552,6 +624,44 @@ def register_status_routes(app, gw) -> None:
     )
     async def get_navigation_status():
         return build_navigation_status(gw)
+
+    @app.get(
+        "/api/v1/runtime/dataflow",
+        summary="Runtime dataflow and Module port observability",
+        response_model=RuntimeDataflowResponse,
+    )
+    async def get_runtime_dataflow():
+        return build_runtime_dataflow_snapshot(gw)
+
+    @app.get(
+        "/api/v1/runtime/dataflow/topic",
+        summary="Inspect one runtime dataflow topic",
+        response_model=RuntimeDataflowTopicDetailResponse,
+    )
+    async def get_runtime_dataflow_topic(
+        topic: Annotated[str, Query(description="Canonical topic or short alias")],
+    ):
+        return build_runtime_dataflow_topic_detail(gw, topic)
+
+    @app.post(
+        "/api/v1/runtime/dataflow/subscribe",
+        summary="Create a read-only runtime dataflow SSE subscription plan",
+        response_model=RuntimeDataflowSubscribeResponse,
+    )
+    async def post_runtime_dataflow_subscribe(
+        request: RuntimeDataflowSubscribeRequest,
+    ):
+        return build_runtime_dataflow_subscription(gw, request)
+
+    @app.post(
+        "/api/v1/runtime/switch-plan",
+        summary="Dry-run runtime endpoint switch plan",
+        response_model=RuntimeSwitchPlanResponse,
+    )
+    async def post_runtime_switch_plan(
+        request: RuntimeSwitchPlanRequest,
+    ):
+        return build_runtime_switch_plan(request)
 
     @app.get(
         "/api/v1/navigation",

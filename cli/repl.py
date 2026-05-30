@@ -713,15 +713,20 @@ class LingTuREPL(cmd.Cmd):
             return ctx
 
         # Build tool handlers that publish to module ports
-        def _navigate_to(x, y, **_):
+        def _navigate_to(x, y, z=None, **_):
             if nav and hasattr(nav, "goal_pose"):
                 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
+                if z is None:
+                    try:
+                        z = float(nav._robot_pos[2])
+                    except Exception:
+                        z = 0.0
                 goal = PoseStamped(pose=Pose(
-                    position=Vector3(x=float(x), y=float(y), z=0.0),
+                    position=Vector3(x=float(x), y=float(y), z=float(z)),
                     orientation=Quaternion(x=0, y=0, z=0, w=1),
                 ))
                 nav.goal_pose._deliver(goal)
-                return f"Navigating to ({x:.1f}, {y:.1f})"
+                return f"Navigating to ({float(x):.1f}, {float(y):.1f}, {float(z):.1f})"
             return "NavigationModule not available"
 
         def _navigate_to_object(label, **_):

@@ -29,6 +29,10 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
 
+from core.runtime_interface import map_frame_id
+
+GNSS_MAP_FRAME_ID = map_frame_id()
+
 # ---------------------------------------------------------------------------
 # GnssFixType
 # ---------------------------------------------------------------------------
@@ -312,7 +316,7 @@ class GnssOdom:
     cov_u: float = 99.0
     fix_type: GnssFixType = GnssFixType.NO_FIX
     ts: float = field(default_factory=time.time)
-    frame_id: str = field(default="map")
+    frame_id: str = field(default=GNSS_MAP_FRAME_ID)
 
     def __post_init__(self) -> None:
         if isinstance(self.fix_type, int) and not isinstance(self.fix_type, GnssFixType):

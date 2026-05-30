@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.responses import HTMLResponse
 
+from core.runtime_interface import TOPICS, topic_default_frame_id
 from gateway.schemas import (
     MapLifecycleResponse,
     MapListResponse,
@@ -30,6 +31,9 @@ from gateway.services.map_safety import (
     safe_map_name,
 )
 from gateway.services.runtime_status import backend_capability_defaults
+from nav.services.nav_services.same_source_map_artifacts import (
+    validate_saved_map_artifact_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +396,25 @@ def register_map_routes(app, gw) -> None:
                 False,
                 message=f"Map does not exist: {name}",
                 status_code=404,
+            )
+        artifact_gate = validate_saved_map_artifact_dir(
+            target,
+            require_tomogram=True,
+            expected_frame_id=topic_default_frame_id(TOPICS.saved_map_cloud),
+        )
+        artifact_gate["required"] = True
+        if artifact_gate.get("ok") is not True:
+            blockers = [
+                str(item)
+                for item in (artifact_gate.get("blockers") or [])
+                if str(item)
+            ]
+            detail = "; ".join(blockers) if blockers else "unknown blocker"
+            return _map_lifecycle_response(
+                False,
+                message=f"saved map artifact gate failed: {detail}",
+                artifact_gate=artifact_gate,
+                status_code=409,
             )
         active_link = pathlib.Path(map_dir) / "active"
         try:

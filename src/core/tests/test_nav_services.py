@@ -1,13 +1,13 @@
 """Tests for nav service modules, driver modules, and frontier explorer.
 
 Covers:
-  1. MapManagerModule      — map CRUD, POI operations, persistence
-  2. WavefrontFrontierExplorer — frontier detection, scoring, health
-  3. PatrolManagerModule   — route CRUD, patrol start/stop
-  4. TaskSchedulerModule   — schedule CRUD, firing logic, deduplication
-  5. GeofenceManagerModule — fence CRUD, point-in-polygon, intrusion
-  6. CameraBridgeModule    — instantiation, setup without rclpy, health
-  7. TeleopModule          — joystick scaling, idle release, health, JPEG path
+  1. MapManagerModule      -- map CRUD, POI operations, persistence
+  2. WavefrontFrontierExplorer -- frontier detection, scoring, health
+  3. PatrolManagerModule   -- route CRUD, patrol start/stop
+  4. TaskSchedulerModule   -- schedule CRUD, firing logic, deduplication
+  5. GeofenceManagerModule -- fence CRUD, point-in-polygon, intrusion
+  6. CameraBridgeModule    -- instantiation, setup without rclpy, health
+  7. TeleopModule          -- joystick scaling, idle release, health, JPEG path
 
 All tests are pure-Python, no ROS2 / hardware required.
 """
@@ -62,6 +62,91 @@ class TestMapManagerModule(unittest.TestCase):
         self.assertTrue(len(self._responses) > 0, "no response published")
         return self._responses[-1]
 
+    def _write_valid_saved_map_artifacts(
+        self,
+        name: str,
+        *,
+        occupancy: bool = False,
+    ) -> Path:
+        map_dir = Path(self._map_dir) / name
+        map_dir.mkdir(exist_ok=True)
+        pcd = map_dir / "map.pcd"
+        tomogram = map_dir / "tomogram.pickle"
+        pcd.write_text(
+            "VERSION 0.7\n"
+            "FIELDS x y z\n"
+            "SIZE 4 4 4\n"
+            "TYPE F F F\n"
+            "COUNT 1 1 1\n"
+            "WIDTH 1\n"
+            "HEIGHT 1\n"
+            "POINTS 1\n"
+            "DATA ascii\n"
+            "0.0 0.0 0.0\n",
+            encoding="utf-8",
+        )
+        tomogram.write_bytes(b"unit-test-tomogram")
+        from core.runtime_interface import TOPICS, topic_default_frame_id
+        from nav.services.nav_services.same_source_map_artifacts import (
+            build_saved_map_metadata,
+            sha256_file,
+        )
+
+        frame_id = topic_default_frame_id(TOPICS.saved_map_cloud)
+        source_profile = "unit_test"
+        data_source = "unit_test"
+        map_sha = sha256_file(pcd)
+        artifacts: dict[str, dict[str, Any]] = {
+            "map_pcd": {
+                "path": "map.pcd",
+                "source_profile": source_profile,
+                "data_source": data_source,
+                "slam_source": "unit_test_slam",
+                "frame_id": frame_id,
+                "point_count": 1,
+                "sha256": map_sha,
+            },
+            "tomogram": {
+                "path": "tomogram.pickle",
+                "source_map_sha256": map_sha,
+                "source_profile": source_profile,
+                "data_source": data_source,
+                "frame_id": frame_id,
+                "shape": [1, 1, 1],
+                "sha256": sha256_file(tomogram),
+            },
+        }
+        if occupancy:
+            occupancy_path = map_dir / "occupancy.npz"
+            np.savez(
+                str(occupancy_path),
+                grid=np.zeros((1, 1), dtype=np.int8),
+                resolution=np.array(0.2),
+                origin=np.array([0.0, 0.0]),
+            )
+            artifacts["occupancy_grid"] = {
+                "path": "occupancy.npz",
+                "source_map_sha256": map_sha,
+                "source_profile": source_profile,
+                "data_source": data_source,
+                "frame_id": frame_id,
+                "sha256": sha256_file(occupancy_path),
+            }
+        metadata = build_saved_map_metadata(
+            source_profile=source_profile,
+            data_source=data_source,
+            slam_source="unit_test_slam",
+            localization_source="unit_test_localizer",
+            mapping_source="unit_test_mapping",
+            frame_id=frame_id,
+            artifacts=artifacts,
+        )
+        (map_dir / "metadata.json").write_text(
+            json.dumps(metadata),
+            encoding="utf-8",
+        )
+        return map_dir
+
     def test_instantiation(self):
         """Module creates map_dir and data_dir on init."""
         self.assertTrue(os.path.isdir(self._map_dir))
@@ -92,7 +177,7 @@ class TestMapManagerModule(unittest.TestCase):
         self.assertFalse(resp["success"])
 
     def test_set_active_and_list(self):
-        (Path(self._map_dir) / "mymap").mkdir()
+        self._write_valid_saved_map_artifacts("mymap")
         resp = self._cmd({"action": "set_active", "name": "mymap"})
         self.assertTrue(resp["success"])
         self.assertEqual(resp["active"], "mymap")
@@ -105,8 +190,7 @@ class TestMapManagerModule(unittest.TestCase):
         self.assertFalse(resp["success"])
 
     def test_delete_active_clears_symlink(self):
-        d = Path(self._map_dir) / "todel"
-        d.mkdir()
+        d = self._write_valid_saved_map_artifacts("todel")
         self._cmd({"action": "set_active", "name": "todel"})
         resp = self._cmd({"action": "delete", "name": "todel"})
         self.assertTrue(resp["success"])
@@ -383,8 +467,21 @@ class TestMapManagerModule(unittest.TestCase):
             return MagicMock(returncode=0, stderr="")
 
         def _fake_build_tomogram(name):
+            import pickle
+
             tomogram_path = Path(self._map_dir) / name / "tomogram.pickle"
-            tomogram_path.write_bytes(b"sim-tomogram")
+            tomogram_path.write_bytes(
+                pickle.dumps(
+                    {
+                        "data": np.zeros((5, 1, 2, 2), dtype=np.float16),
+                        "resolution": 0.2,
+                        "center": [0.0, 0.0],
+                        "slice_h0": 0.0,
+                        "slice_dh": 0.25,
+                    },
+                    protocol=pickle.HIGHEST_PROTOCOL,
+                )
+            )
             return {
                 "action": "build_tomogram",
                 "success": True,
@@ -485,6 +582,29 @@ class TestMapManagerModule(unittest.TestCase):
         # At least one occupied cell
         self.assertTrue(np.any(grid == 100))
 
+        metadata_path = map_dir / "metadata.json"
+        self.assertTrue(metadata_path.exists())
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        artifacts = metadata["artifacts"]
+        from core.runtime_interface import TOPICS, topic_default_frame_id
+
+        self.assertEqual(
+            metadata["frame_id"],
+            topic_default_frame_id(TOPICS.saved_map_cloud),
+        )
+        self.assertIn("map_pcd", artifacts)
+        self.assertIn("occupancy_grid", artifacts)
+        self.assertEqual(
+            artifacts["occupancy_grid"]["source_map_sha256"],
+            artifacts["map_pcd"]["sha256"],
+        )
+        from nav.services.nav_services.same_source_map_artifacts import (
+            validate_same_source_map_metadata,
+        )
+
+        validation = validate_same_source_map_metadata(metadata)
+        self.assertTrue(validation["ok"], validation)
+
     def test_load_pcd_points_ascii(self):
         """_load_pcd_points parses a simple ASCII PCD correctly."""
         import tempfile
@@ -532,13 +652,24 @@ class TestMapManagerModule(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_get_active_occupancy_returns_path(self):
-        d = Path(self._map_dir) / "fullmap"
-        d.mkdir()
-        (d / "occupancy.npz").touch()
+        self._write_valid_saved_map_artifacts("fullmap", occupancy=True)
         self._cmd({"action": "set_active", "name": "fullmap"})
         result = self.mod.get_active_occupancy()
         self.assertIsNotNone(result)
         self.assertTrue(result.endswith("occupancy.npz"))
+
+    def test_set_active_rejects_map_without_same_source_tomogram_metadata(self):
+        d = Path(self._map_dir) / "bad_active"
+        d.mkdir()
+        (d / "map.pcd").write_text("VERSION 0.7\nPOINTS 0\nDATA ascii\n")
+        (d / "tomogram.pickle").write_bytes(b"bad")
+
+        resp = self._cmd({"action": "set_active", "name": "bad_active"})
+
+        self.assertFalse(resp["success"])
+        self.assertIn("saved map artifact gate failed", resp["message"])
+        self.assertIn("metadata.json missing", resp["artifact_gate"]["blockers"])
+        self.assertEqual(self.mod._active_map, "")
 
 
 # ---------------------------------------------------------------------------

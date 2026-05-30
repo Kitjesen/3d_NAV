@@ -18,11 +18,13 @@ import numpy as np
 from core import In, Module, Out
 from core.msgs import Odometry, PoseStamped, SceneGraph
 from core.msgs.geometry import Pose, Quaternion, Vector3
+from core.runtime_interface import map_frame_id
 
 from .exploration_strategy import extract_frontier_scene_data
 from .frontier_scorer import FrontierScorer
 
 logger = logging.getLogger(__name__)
+FRONTIER_MODULE_MAP_FRAME_ID = map_frame_id()
 
 
 class FrontierModule(Module, layer=4):
@@ -134,7 +136,7 @@ class FrontierModule(Module, layer=4):
                 ),
                 orientation=Quaternion(),
             ),
-            frame_id="map",
+            frame_id=FRONTIER_MODULE_MAP_FRAME_ID,
         )
         self.frontier_goal.publish(goal)
 

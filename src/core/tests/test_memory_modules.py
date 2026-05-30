@@ -263,9 +263,11 @@ class TestVectorMemoryOperations(unittest.TestCase):
     def test_store_snapshot_uses_numpy_fallback(self):
         m = self._make()
         m._robot_xy = (1.0, 2.0)
+        m._robot_z = 1.5
         m._store_snapshot(["chair", "table"])
         self.assertEqual(len(m._np_embeddings), 1)
         self.assertEqual(m._np_metadata[0]["x"], 1.0)
+        self.assertEqual(m._np_metadata[0]["z"], 1.5)
         self.assertEqual(m._np_metadata[0]["encoder_type"], "none")
         self.assertFalse(m._np_metadata[0]["navigable"])
         self.assertEqual(m._store_count, 1)
@@ -378,8 +380,9 @@ class TestVectorMemoryOperations(unittest.TestCase):
 
     def test_on_odom_updates_position(self):
         m = self._make()
-        m._on_odom(_odom(7.0, 8.0))
+        m._on_odom(_odom(7.0, 8.0, 1.25))
         self.assertEqual(m._robot_xy, (7.0, 8.0))
+        self.assertEqual(m._robot_z, 1.25)
 
     def test_query_location_skill_not_found(self):
         m = self._make()
@@ -389,10 +392,12 @@ class TestVectorMemoryOperations(unittest.TestCase):
     def test_query_location_skill_found(self):
         m = self._make()
         m._robot_xy = (3.0, 4.0)
+        m._robot_z = 1.25
         m._store_snapshot(["backpack", "tree"])
         result = m.query_location("backpack")
         self.assertTrue(result["found"])
         self.assertIn("best", result)
+        self.assertEqual(result["best"]["z"], 1.25)
 
     def test_get_memory_stats_numpy(self):
         m = self._make()

@@ -27,6 +27,11 @@ from core.module import Module
 from core.msgs.geometry import Twist, Vector3
 from core.msgs.nav import Odometry, Path
 from core.registry import register
+from core.runtime_interface import (
+    map_frame_id,
+    normalize_frame_id,
+    runtime_fixed_path_frame_ids,
+)
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
@@ -96,7 +101,7 @@ class PathFollowerModule(Module, layer=2):
         self._yaw_rec = 0.0
         self._cos_yaw_rec = 1.0
         self._sin_yaw_rec = 0.0
-        self._odom_frame_id = "map"
+        self._odom_frame_id = map_frame_id()
         self._last_odom_ts = 0.0
         self._control_hint_timeout = float(kw.get("control_hint_timeout", 0.75))
         self._control_hint_ts = 0.0
@@ -369,8 +374,10 @@ class PathFollowerModule(Module, layer=2):
     def _on_path(self, path: Path):
         if self._backend == "nav_core":
             # Record robot pose at path receipt - defines the reference frame
-            frame_id = str(getattr(path, "frame_id", "") or "").strip()
-            fixed_frame_path = frame_id in {self._odom_frame_id, "map", "odom", "world"}
+            frame_id = normalize_frame_id(getattr(path, "frame_id", None))
+            fixed_frame_path = frame_id in runtime_fixed_path_frame_ids(
+                self._odom_frame_id,
+            )
             if fixed_frame_path:
                 self._x_rec = 0.0
                 self._y_rec = 0.0

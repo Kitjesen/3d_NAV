@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from core.runtime_interface import TOPICS, topic_default_frame_id
+
 
 def _pointcloud_msg():
     points = np.array([[1.0, 2.0, 3.0, 0.0]], dtype=np.float32)
@@ -181,12 +183,45 @@ def _assert_odom_callback_does_not_block_receiver(callback_name: str):
         bridge._odom_worker_thread.join(timeout=1.0)
 
 
+def _assert_odom_callback_normalizes_frame_ids(callback_name: str):
+    from slam.slam_bridge_module import SlamBridgeModule
+
+    bridge = SlamBridgeModule()
+    callback = getattr(bridge, callback_name)
+    received = []
+    received_event = threading.Event()
+    msg = _odom_msg()
+    msg.header.frame_id = "/map"
+    msg.child_frame_id = "/body"
+
+    def capture(odom):
+        received.append(odom)
+        received_event.set()
+
+    bridge.odometry._add_callback(capture)
+    callback(msg)
+
+    assert received_event.wait(timeout=1.0)
+    if bridge._odom_worker_thread is not None:
+        bridge._odom_worker_thread.join(timeout=1.0)
+    assert received[0].frame_id == topic_default_frame_id(TOPICS.map_cloud)
+    assert received[0].child_frame_id == topic_default_frame_id(TOPICS.cmd_vel)
+
+
 def test_dds_odom_callback_does_not_block_reader_loop():
     _assert_odom_callback_does_not_block_receiver("_on_dds_odom")
 
 
 def test_rclpy_odom_callback_does_not_block_executor():
     _assert_odom_callback_does_not_block_receiver("_on_rclpy_odom")
+
+
+def test_dds_odom_normalizes_header_frame_ids():
+    _assert_odom_callback_normalizes_frame_ids("_on_dds_odom")
+
+
+def test_rclpy_odom_normalizes_header_frame_ids():
+    _assert_odom_callback_normalizes_frame_ids("_on_rclpy_odom")
 
 
 def test_slam_bridge_freshness_age_uses_monotonic_clock():

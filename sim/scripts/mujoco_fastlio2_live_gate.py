@@ -32,7 +32,16 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from core.runtime_interface import FRAMES, TOPICS, lidar_extrinsic
+from core.runtime_evidence import validate_runtime_evidence
+from core.runtime_interface import (
+    FRAME_LINKS,
+    TOPICS,
+    adapter_source_for_target,
+    lidar_extrinsic,
+    resolved_runtime_data_flow,
+    simulator_world_frame_id,
+    topic_default_frame_id,
+)
 from drivers.sim.mujoco_live_runtime import (
     DEFAULT_MID360_PATTERN,
     DEFAULT_MID360_SAMPLES_PER_FRAME,
@@ -72,6 +81,22 @@ from slam.fastlio2_live_bridge import (
 )
 from slam.fastlio2_nav_bridge import FastLio2NavBridgeRuntime
 
+SIM_WORLD_FRAME_ID = simulator_world_frame_id()
+SIM_MAP_FRAME_ID = FRAME_LINKS["map_to_odom"].parent
+SIM_ODOM_FRAME_ID = FRAME_LINKS["map_to_odom"].child
+SIM_BODY_FRAME_ID = FRAME_LINKS["odom_to_body"].child
+SIM_LIDAR_FRAME_ID = FRAME_LINKS["body_to_lidar"].child
+SIM_NAV_ODOMETRY_FRAME_ID = topic_default_frame_id(TOPICS.odometry)
+SIM_NAV_REGISTERED_CLOUD_FRAME_ID = topic_default_frame_id(TOPICS.registered_cloud)
+# Fast-LIO live map clouds remain in local odom until a localizer owns map->odom.
+SIM_FASTLIO_LIVE_MAP_FRAME_ID = SIM_NAV_ODOMETRY_FRAME_ID
+FASTLIO_REGISTERED_CLOUD_TOPIC = adapter_source_for_target(
+    "fastlio2",
+    TOPICS.registered_cloud,
+)
+FASTLIO_MAP_CLOUD_TOPIC = adapter_source_for_target("fastlio2", TOPICS.map_cloud)
+FASTLIO_ODOMETRY_TOPIC = adapter_source_for_target("fastlio2", TOPICS.odometry)
+
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -79,6 +104,277 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _mujoco_fastlio_contract_definition() -> tuple[dict[str, Any], list[str]]:
+    try:
+        from core.blueprints.simulation_contract import simulation_runtime_contract
+
+        return simulation_runtime_contract("mujoco_fastlio2_live").as_report(), []
+    except Exception as exc:
+        return {}, [f"{type(exc).__name__}: {exc}"]
+
+
+def _mujoco_frame_evidence(
+    *,
+    odom_body_samples: int,
+    odom_body_source: str,
+    static_tf_published: bool,
+) -> dict[str, dict[str, Any]]:
+    return {
+        "map_to_odom": {
+            "ok": bool(static_tf_published),
+            "parent": FRAME_LINKS["map_to_odom"].parent,
+            "child": FRAME_LINKS["map_to_odom"].child,
+            "static": bool(static_tf_published),
+            "source": "static_tf_broadcaster" if static_tf_published else "not_published",
+        },
+        "odom_to_body": {
+            "ok": int(odom_body_samples) > 0,
+            "parent": FRAME_LINKS["odom_to_body"].parent,
+            "child": FRAME_LINKS["odom_to_body"].child,
+            "samples": int(odom_body_samples),
+            "source": odom_body_source,
+        },
+        "body_to_lidar": {
+            "ok": bool(static_tf_published),
+            "parent": FRAME_LINKS["body_to_lidar"].parent,
+            "child": FRAME_LINKS["body_to_lidar"].child,
+            "static": bool(static_tf_published),
+            "source": "static_tf_broadcaster" if static_tf_published else "not_published",
+        },
+    }
+
+
+def _mujoco_hardware_safety() -> dict[str, Any]:
+    return {
+        "blocked_hardware_nodes": [],
+        "unexpected_command_publishers": [],
+        "topics": {TOPICS.cmd_vel: ["/mujoco_velocity_adapter"]},
+    }
+
+
+def _mujoco_data_flow_evidence(
+    *,
+    topic_evidence: dict[str, dict[str, Any]],
+    navigation_required: bool,
+    gate_exception: bool = False,
+) -> dict[str, dict[str, Any]]:
+    runtime_flow = resolved_runtime_data_flow("mujoco_fastlio2_live")
+    stages = {stage.name: stage for stage in runtime_flow}
+
+    def topic_ok(topic: str) -> bool:
+        return (topic_evidence.get(topic) or {}).get("ok") is True
+
+    def stage_report(
+        name: str,
+        *,
+        ok: bool,
+        required: bool,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        stage = stages[name]
+        return {
+            "ok": bool(ok),
+            "required": bool(required),
+            "inputs": list(stage.inputs),
+            "outputs": list(stage.outputs),
+            "owner": stage.owner,
+            "frame_role": stage.frame_role,
+            "map_dependency": stage.map_dependency,
+            "reason": reason,
+        }
+
+    if gate_exception:
+        return {
+            stage.name: stage_report(
+                stage.name,
+                ok=False,
+                required=True,
+                reason="gate_exception",
+            )
+            for stage in runtime_flow
+        }
+
+    raw_ok = topic_ok(TOPICS.raw_lidar_points) and topic_ok(TOPICS.raw_imu)
+    slam_ok = raw_ok and topic_ok(TOPICS.odometry) and topic_ok(TOPICS.map_cloud)
+    planning_ok = topic_ok(TOPICS.global_path) and topic_ok(TOPICS.local_path)
+    command_ok = topic_ok(TOPICS.cmd_vel)
+    optional_reason = "" if navigation_required else "not_required_for_basic_slam_gate"
+    return {
+        "endpoint_adapter": stage_report(
+            "endpoint_adapter",
+            ok=raw_ok,
+            required=True,
+        ),
+        "slam_or_relayed_localization_map": stage_report(
+            "slam_or_relayed_localization_map",
+            ok=slam_ok,
+            required=True,
+        ),
+        "map_layers_and_exploration": stage_report(
+            "map_layers_and_exploration",
+            ok=(topic_ok(TOPICS.map_cloud) if navigation_required else False),
+            required=navigation_required,
+            reason=optional_reason,
+        ),
+        "global_planning": stage_report(
+            "global_planning",
+            ok=(topic_ok(TOPICS.global_path) if navigation_required else False),
+            required=navigation_required,
+            reason=optional_reason,
+        ),
+        "local_planning_and_following": stage_report(
+            "local_planning_and_following",
+            ok=(planning_ok and command_ok if navigation_required else False),
+            required=navigation_required,
+            reason=optional_reason,
+        ),
+        "command_boundary": stage_report(
+            "command_boundary",
+            ok=(command_ok if navigation_required else False),
+            required=navigation_required,
+            reason=optional_reason,
+        ),
+    }
+
+
+def _mujoco_runtime_contract(
+    *,
+    definition: dict[str, Any],
+    definition_errors: list[str],
+    topic_evidence: dict[str, dict[str, Any]],
+    frame_evidence: dict[str, dict[str, Any]],
+    data_flow_evidence: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    required_topics = (
+        definition.get("required_runtime_topics")
+        if isinstance(definition, dict)
+        else ()
+    ) or ()
+    required_slam_topics = (
+        definition.get("required_slam_topics")
+        if isinstance(definition, dict)
+        else ()
+    ) or ()
+    return {
+        "name": "mujoco_fastlio2_live",
+        "ok": (
+            not definition_errors
+            and all((topic_evidence.get(topic) or {}).get("ok") is True for topic in required_topics)
+            and all((topic_evidence.get(topic) or {}).get("ok") is True for topic in required_slam_topics)
+            and all((item or {}).get("ok") is True for item in frame_evidence.values())
+            and all(
+                (item or {}).get("ok") is True
+                or (item or {}).get("required") is False
+                for item in data_flow_evidence.values()
+            )
+        ),
+        "definition": definition,
+        "topic_evidence": topic_evidence,
+        "frame_evidence": frame_evidence,
+        "data_flow_evidence": data_flow_evidence,
+        "publisher_identity": {
+            "blocked_hardware_nodes": [],
+            "unexpected_command_publishers": [],
+        },
+        "errors": definition_errors,
+    }
+
+
+def _runtime_evidence_report(result: Any) -> dict[str, Any]:
+    return {
+        "ok": bool(result.ok),
+        "blockers": list(result.blockers),
+        "frame_links_required": True,
+        "data_flow_required": True,
+    }
+
+
+def _exception_lidar_source(args: argparse.Namespace) -> dict[str, Any]:
+    pattern = Path(str(getattr(args, "mid360_pattern", "") or ""))
+    pattern_exists = pattern.is_file()
+    try:
+        pattern_sha256 = _sha256_file(pattern) if pattern_exists else ""
+    except Exception:
+        pattern_sha256 = ""
+    return {
+        "kind": (
+            "MuJoCo mj_multiRay with official Livox MID-360 scan pattern"
+            if pattern_exists
+            else "MuJoCo raw LiDAR source did not initialize"
+        ),
+        "fastlio_lidar_input": getattr(args, "fastlio_lidar_input", ""),
+        "scan_time_profile": getattr(args, "scan_time_profile", ""),
+        "forced_pattern": pattern_exists,
+        "pattern_path": str(pattern) if pattern else "",
+        "pattern_sha256": pattern_sha256,
+        "samples_per_frame": int(getattr(args, "mid360_samples_per_frame", 0) or 0),
+        "fallback_n_rays": int(getattr(args, "n_rays", 0) or 0),
+    }
+
+
+def _gate_exception_report(args: argparse.Namespace, exc: Exception) -> dict[str, Any]:
+    definition, definition_errors = _mujoco_fastlio_contract_definition()
+    required_topics = list((definition or {}).get("required_runtime_topics") or ())
+    required_slam_topics = list((definition or {}).get("required_slam_topics") or ())
+    topic_evidence = {
+        topic: {"ok": False, "samples": 0, "reason": "gate_exception"}
+        for topic in dict.fromkeys([*required_topics, *required_slam_topics])
+    }
+    frame_evidence = _mujoco_frame_evidence(
+        odom_body_samples=0,
+        odom_body_source="gate_exception",
+        static_tf_published=False,
+    )
+    data_flow_evidence = _mujoco_data_flow_evidence(
+        topic_evidence=topic_evidence,
+        navigation_required=True,
+        gate_exception=True,
+    )
+    runtime_contract = _mujoco_runtime_contract(
+        definition=definition,
+        definition_errors=definition_errors,
+        topic_evidence=topic_evidence,
+        frame_evidence=frame_evidence,
+        data_flow_evidence=data_flow_evidence,
+    )
+    hardware_safety = _mujoco_hardware_safety()
+    runtime_evidence = validate_runtime_evidence(
+        {
+            "runtime_contract": runtime_contract,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "outputs": {},
+            "hardware_safety": hardware_safety,
+        },
+        "mujoco_fastlio2_live",
+        require_paths=False,
+        require_command=False,
+        require_frame_links=True,
+        require_data_flow=True,
+    )
+    runtime_fault = f"{type(exc).__name__}: {exc}"
+    return {
+        "schema_version": "lingtu.mujoco_fastlio2_live_gate.v2",
+        "ok": False,
+        "remaining_gaps": [
+            f"gate_exception: {runtime_fault}",
+            *list(runtime_evidence.blockers),
+        ],
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "duration_clock": args.duration_clock,
+        "scan_time_profile": args.scan_time_profile,
+        "runtime_faults": [runtime_fault],
+        "runtime_contract": runtime_contract,
+        "runtime_evidence": _runtime_evidence_report(runtime_evidence),
+        "hardware_safety": hardware_safety,
+        "lidar_source": _exception_lidar_source(args),
+        "args": vars(args),
+    }
 
 
 _DEGENERACY_RE = re.compile(
@@ -452,6 +748,73 @@ def _navigation_diagnostic_sample(
         },
         "runtime_fault_count": len(runtime_faults),
         "latest_runtime_fault": runtime_faults[-1] if runtime_faults else "",
+    }
+
+
+def _control_quality_report(
+    *,
+    applied_cmd_stats: dict[str, float | int],
+    max_yaw_per_meter: float,
+    max_angular_saturation_ratio: float,
+) -> dict[str, object]:
+    linear_m = float(applied_cmd_stats.get("linear_distance_integral_m") or 0.0)
+    angular_rad = float(applied_cmd_stats.get("angular_abs_integral_rad") or 0.0)
+    cmd_samples = int(
+        applied_cmd_stats.get("cmd_samples")
+        or applied_cmd_stats.get("samples")
+        or 0
+    )
+    sat_samples = int(applied_cmd_stats.get("angular_saturation_samples") or 0)
+    yaw_per_meter = angular_rad / max(linear_m, 1e-6)
+    saturation_ratio = sat_samples / max(cmd_samples, 1)
+    blockers: list[str] = []
+    if yaw_per_meter > float(max_yaw_per_meter):
+        blockers.append("yaw_per_meter too high")
+    if saturation_ratio > float(max_angular_saturation_ratio):
+        blockers.append("angular saturation ratio too high")
+    return {
+        "ok": not blockers,
+        "blockers": blockers,
+        "linear_distance_integral_m": round(linear_m, 4),
+        "angular_abs_integral_rad": round(angular_rad, 4),
+        "yaw_per_meter": round(float(yaw_per_meter), 4),
+        "angular_saturation_ratio": round(float(saturation_ratio), 4),
+        "max_yaw_per_meter": float(max_yaw_per_meter),
+        "max_angular_saturation_ratio": float(max_angular_saturation_ratio),
+    }
+
+
+def _dynamic_obstacle_sweep_quality(
+    *,
+    cases: list[dict[str, object]],
+    required_densities: tuple[int, ...],
+    required_speeds: tuple[float, ...],
+) -> dict[str, object]:
+    blockers: list[str] = []
+    passed = [
+        case
+        for case in cases
+        if case.get("collision") is False and case.get("runtime_evidence_ok") is True
+    ]
+    covered_densities = {int(case["density"]) for case in passed if "density" in case}
+    covered_speeds = {
+        round(float(case["speed_mps"]), 3)
+        for case in passed
+        if "speed_mps" in case
+    }
+    for density in required_densities:
+        if int(density) not in covered_densities:
+            blockers.append(f"missing passed density {density}")
+    for speed in required_speeds:
+        normalized_speed = round(float(speed), 3)
+        if normalized_speed not in covered_speeds:
+            blockers.append(f"missing passed speed {speed}")
+    return {
+        "ok": not blockers,
+        "blockers": blockers,
+        "covered_density_count": len(covered_densities),
+        "covered_speed_count": len(covered_speeds),
+        "passed_case_count": len(passed),
     }
 
 
@@ -1400,7 +1763,11 @@ def _write_stage_video(
             1,
         )
 
-        draw_panel(frame, map_rect, "3D Fast-LIO map cloud (/nav/map_cloud, odom)")
+        draw_panel(
+            frame,
+            map_rect,
+            f"3D Fast-LIO map cloud ({TOPICS.map_cloud}, {SIM_FASTLIO_LIVE_MAP_FRAME_ID})",
+        )
         draw_axes_3d(frame, map_rect, map_bounds3d)
         draw_points_3d(
             frame,
@@ -1795,8 +2162,11 @@ def _parse_inspection_goals(value: str | list[Any] | tuple[Any, ...] | None) -> 
             coords = list(item)
         else:
             raise ValueError(f"unsupported inspection goal item: {item!r}")
-        if frame_id and frame_id != FRAMES.odom:
-            raise ValueError(f"inspection goal frame must be {FRAMES.odom}: {frame_id}")
+        if frame_id and frame_id != SIM_NAV_ODOMETRY_FRAME_ID:
+            raise ValueError(
+                "inspection goal frame must be "
+                f"{SIM_NAV_ODOMETRY_FRAME_ID}: {frame_id}"
+            )
         if len(coords) < 2:
             raise ValueError(f"inspection goal needs x,y: {item!r}")
         try:
@@ -2054,6 +2424,8 @@ def run_gate(
     moving_obstacle_point_spacing: float = 0.10,
     moving_obstacle_intensity: float = 220.0,
     moving_obstacle_robot_radius_m: float = 0.28,
+    max_yaw_per_meter: float = 1.2,
+    max_angular_saturation_ratio: float = 0.35,
     save_map_artifacts: bool = True,
     build_tomogram: bool = False,
     map_artifact_voxel_size: float = 0.10,
@@ -2434,14 +2806,14 @@ def run_gate(
             _make_transform_msg(
                 stamp=node.get_clock().now().to_msg(),
                 transform_cls=TransformStamped,
-                parent=FRAMES.map,
-                child=FRAMES.odom,
+                parent=SIM_MAP_FRAME_ID,
+                child=SIM_ODOM_FRAME_ID,
             ),
             _make_transform_msg(
                 stamp=node.get_clock().now().to_msg(),
                 transform_cls=TransformStamped,
-                parent=FRAMES.body,
-                child=FRAMES.lidar,
+                parent=SIM_BODY_FRAME_ID,
+                child=SIM_LIDAR_FRAME_ID,
                 translation_xyz=mujoco_lidar_extrinsic.translation,
                 rotation_xyzw=mujoco_lidar_extrinsic.rotation_xyzw,
             ),
@@ -2483,6 +2855,7 @@ def run_gate(
         "smoothed_samples": 0,
         "max_linear_delta_mps": 0.0,
         "max_angular_delta_radps": 0.0,
+        "angular_saturation_samples": 0,
     }
     first_sim_yaw: float | None = None
     last_sim_yaw: float | None = None
@@ -2953,6 +3326,11 @@ def run_gate(
             applied_cmd_stats["fresh_nav_cmd_samples"] += int(command_fresh)
             applied_cmd_stats["linear_nonzero_samples"] += int(linear_norm > 1e-4)
             applied_cmd_stats["angular_nonzero_samples"] += int(angular_abs > 1e-4)
+            applied_cmd_stats["angular_saturation_samples"] += int(
+                angular_abs >= float(nav_max_angular_z) * 0.98
+                if float(nav_max_angular_z) > 0.0
+                else False
+            )
             applied_cmd_stats["linear_norm_sum"] += linear_norm
             applied_cmd_stats["angular_abs_sum"] += angular_abs
             applied_cmd_stats["linear_distance_integral_m"] += (
@@ -3129,7 +3507,7 @@ def run_gate(
                             _make_livox_custom_msg(
                                 points_xyzi=cloud_sensor,
                                 stamp=scan_stamp,
-                                frame_id=FRAMES.lidar,
+                                frame_id=SIM_LIDAR_FRAME_ID,
                                 custom_msg_cls=CustomMsg,
                                 custom_point_cls=CustomPoint,
                                 relative_times_s=relative_times_s,
@@ -3140,7 +3518,7 @@ def run_gate(
                             _make_pointcloud2(
                                 points_xyzi=cloud_sensor,
                                 stamp=scan_stamp,
-                                frame_id=FRAMES.lidar,
+                                frame_id=SIM_LIDAR_FRAME_ID,
                                 pointcloud_cls=PointCloud2,
                                 pointfield_cls=PointField,
                                 relative_times_s=relative_times_s,
@@ -3154,7 +3532,7 @@ def run_gate(
                         registered_msg = _make_pointcloud2(
                             points_xyzi=cloud_body,
                             stamp=scan_stamp,
-                            frame_id=FRAMES.body,
+                            frame_id=SIM_NAV_REGISTERED_CLOUD_FRAME_ID,
                             pointcloud_cls=PointCloud2,
                             pointfield_cls=PointField,
                             relative_times_s=relative_times_s,
@@ -3163,7 +3541,7 @@ def run_gate(
                         map_msg = _make_pointcloud2(
                             points_xyzi=cloud_world_xyzi,
                             stamp=scan_stamp,
-                            frame_id=FRAMES.odom,
+                            frame_id=SIM_FASTLIO_LIVE_MAP_FRAME_ID,
                             pointcloud_cls=PointCloud2,
                             pointfield_cls=PointField,
                             relative_times_s=relative_times_s,
@@ -3391,12 +3769,12 @@ def run_gate(
                     "nav_odom_frame": str(
                         getattr(getattr(nav_bridge.nav_odom_out[-1], "header", None), "frame_id", "")
                         if nav_bridge.nav_odom_out
-                        else FRAMES.odom
+                        else SIM_NAV_ODOMETRY_FRAME_ID
                     ),
                     "nav_map_frame": str(
                         getattr(getattr(nav_bridge.nav_map_cloud_out[-1], "header", None), "frame_id", "")
                         if nav_bridge.nav_map_cloud_out
-                        else FRAMES.odom
+                        else SIM_FASTLIO_LIVE_MAP_FRAME_ID
                     ),
                     "sim_xy": np.asarray(last_sim_xyz[:2], dtype=np.float32)
                     if last_sim_xyz
@@ -3863,6 +4241,9 @@ def run_gate(
             float(applied_cmd_stats["max_angular_delta_radps"]),
             4,
         ),
+        "angular_saturation_samples": int(
+            applied_cmd_stats["angular_saturation_samples"]
+        ),
         "linear_distance_integral_m": round(
             float(applied_cmd_stats["linear_distance_integral_m"]),
             4,
@@ -3932,9 +4313,9 @@ def run_gate(
     expected_ros_topics = [
         TOPICS.raw_lidar_points,
         TOPICS.raw_imu,
-        "/cloud_registered",
-        "/cloud_map",
-        "/Odometry",
+        FASTLIO_REGISTERED_CLOUD_TOPIC,
+        FASTLIO_MAP_CLOUD_TOPIC,
+        FASTLIO_ODOMETRY_TOPIC,
         TOPICS.odometry,
         TOPICS.registered_cloud,
         TOPICS.map_cloud,
@@ -4004,6 +4385,93 @@ def run_gate(
             and not bool(moving_obstacle_clearance.get("collision"))
         )
     )
+    control_quality = _control_quality_report(
+        applied_cmd_stats=applied_cmd_stats,
+        max_yaw_per_meter=float(max_yaw_per_meter),
+        max_angular_saturation_ratio=float(max_angular_saturation_ratio),
+    )
+    runtime_contract_definition, runtime_contract_errors = _mujoco_fastlio_contract_definition()
+    topic_evidence = {
+        TOPICS.raw_lidar_points: {
+            "ok": counts["cloud_published"] > 0,
+            "samples": int(counts["cloud_published"]),
+        },
+        TOPICS.raw_imu: {
+            "ok": counts["imu_published"] > 0,
+            "samples": int(counts["imu_published"]),
+        },
+        TOPICS.odometry: {"ok": len(nav_odom_out) > 0, "samples": len(nav_odom_out)},
+        TOPICS.registered_cloud: {
+            "ok": len(nav_registered_cloud_out) > 0,
+            "samples": len(nav_registered_cloud_out),
+        },
+        TOPICS.map_cloud: {
+            "ok": len(nav_map_cloud_out) > 0,
+            "samples": len(nav_map_cloud_out),
+        },
+        TOPICS.global_path: {
+            "ok": len(global_path_counts) > 0 and max(global_path_counts or [0]) > 0,
+            "samples": len(global_path_counts),
+            "max_poses": max(global_path_counts) if global_path_counts else 0,
+        },
+        TOPICS.local_path: {
+            "ok": len(local_path_counts) > 0 and max(local_path_counts or [0]) > 0,
+            "samples": len(local_path_counts),
+            "max_poses": max(local_path_counts) if local_path_counts else 0,
+        },
+        TOPICS.cmd_vel: {
+            "ok": nav_cmd_nonzero > 0,
+            "samples": len(nav_cmd_vel_samples),
+            "nonzero_samples": int(nav_cmd_nonzero),
+        },
+        FASTLIO_ODOMETRY_TOPIC: {"ok": len(odom_out) > 0, "samples": len(odom_out)},
+        FASTLIO_REGISTERED_CLOUD_TOPIC: {
+            "ok": len(registered_cloud_out) > 0,
+            "samples": len(registered_cloud_out),
+        },
+        FASTLIO_MAP_CLOUD_TOPIC: {
+            "ok": len(map_cloud_out) > 0,
+            "samples": len(map_cloud_out),
+        },
+    }
+    odom_body_samples = max(len(nav_odom_out), len(odom_out))
+    frame_evidence = _mujoco_frame_evidence(
+        odom_body_samples=odom_body_samples,
+        odom_body_source="truth_nav_tf" if demo_truth_nav else "fastlio_odometry",
+        static_tf_published=True,
+    )
+    navigation_required = bool(run_lingtu_frontier or run_lingtu_tare or run_lingtu_inspection)
+    data_flow_evidence = _mujoco_data_flow_evidence(
+        topic_evidence=topic_evidence,
+        navigation_required=navigation_required,
+    )
+    runtime_contract = _mujoco_runtime_contract(
+        definition=runtime_contract_definition,
+        definition_errors=runtime_contract_errors,
+        topic_evidence=topic_evidence,
+        frame_evidence=frame_evidence,
+        data_flow_evidence=data_flow_evidence,
+    )
+    hardware_safety = _mujoco_hardware_safety()
+    runtime_evidence = validate_runtime_evidence(
+        {
+            "runtime_contract": runtime_contract,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "outputs": {
+                "global_path_count": len(global_path_counts),
+                "local_path_count": len(local_path_counts),
+                "nav_cmd_vel_nonzero": int(nav_cmd_nonzero),
+            },
+            "hardware_safety": hardware_safety,
+        },
+        "mujoco_fastlio2_live",
+        require_paths=navigation_required,
+        require_command=navigation_required,
+        require_frame_links=True,
+        require_data_flow=True,
+    )
     base_blockers: list[str] = []
     base_blockers.extend(runtime_faults)
     if not algorithm_verified:
@@ -4056,6 +4524,12 @@ def run_gate(
             base_blockers.append("moving obstacle trail clearance was not checked")
         if moving_obstacle_clearance.get("collision") is True:
             base_blockers.append("moving obstacle trail collision is true")
+    if (
+        run_lingtu_frontier or run_lingtu_tare or run_lingtu_inspection
+    ) and control_quality.get("ok") is not True:
+        base_blockers.extend(str(item) for item in control_quality.get("blockers") or [])
+    if not runtime_evidence.ok:
+        base_blockers.extend(runtime_evidence.blockers)
     frontier_blockers: list[str] = []
     frontier_warnings: list[str] = []
     if run_lingtu_frontier:
@@ -4112,7 +4586,7 @@ def run_gate(
                 frontier_blockers.append("exploration grid has no free cells")
         if nav_map_area["growth_m2"] < float(min_map_area_growth_m2):
             frontier_blockers.append(
-                f"/nav/map_cloud XY area growth {nav_map_area['growth_m2']:.3f}m2 "
+                f"{TOPICS.map_cloud} XY area growth {nav_map_area['growth_m2']:.3f}m2 "
                 f"< required {float(min_map_area_growth_m2):.3f}m2"
             )
         if exploration_grid_growth_is_acceptance_metric:
@@ -4135,14 +4609,14 @@ def run_gate(
         ):
             frontier_warnings.append(
                 "exploration_grid is a rolling local frontier input; "
-                "cumulative mapping growth is judged from /nav/map_cloud"
+                f"cumulative mapping growth is judged from {TOPICS.map_cloud}"
             )
         if len(global_path_counts) <= 0 or max(global_path_counts or [0]) < 2:
             frontier_blockers.append("no non-empty global path observed")
         if len(local_path_counts) <= 0 or max(local_path_counts or [0]) < 2:
             frontier_blockers.append("no non-empty local path observed")
         if nav_cmd_nonzero <= 0:
-            frontier_blockers.append("no non-zero /nav/cmd_vel observed")
+            frontier_blockers.append(f"no non-zero {TOPICS.cmd_vel} observed")
         if (sim_moved_m or 0.0) <= 0.2:
             frontier_blockers.append("simulated robot motion <= 0.2m")
         if (
@@ -4208,7 +4682,7 @@ def run_gate(
             tare_blockers.append("no exploration grid samples observed")
         if nav_map_area["growth_m2"] < float(min_map_area_growth_m2):
             tare_blockers.append(
-                f"/nav/map_cloud XY area growth {nav_map_area['growth_m2']:.3f}m2 "
+                f"{TOPICS.map_cloud} XY area growth {nav_map_area['growth_m2']:.3f}m2 "
                 f"< required {float(min_map_area_growth_m2):.3f}m2"
             )
         if len(global_path_counts) <= 0 or max(global_path_counts or [0]) < 2:
@@ -4216,7 +4690,7 @@ def run_gate(
         if len(local_path_counts) <= 0 or max(local_path_counts or [0]) < 2:
             tare_blockers.append("no non-empty local path observed")
         if nav_cmd_nonzero <= 0:
-            tare_blockers.append("no non-zero /nav/cmd_vel observed")
+            tare_blockers.append(f"no non-zero {TOPICS.cmd_vel} observed")
         if (sim_moved_m or 0.0) <= 0.2:
             tare_blockers.append("simulated robot motion <= 0.2m")
         if motion_consistency["checked"] and not motion_consistency["ok"]:
@@ -4282,7 +4756,7 @@ def run_gate(
             inspection_blockers.append("navigation plan_safety_policy is not reject")
         if nav_map_area["growth_m2"] < float(min_map_area_growth_m2):
             inspection_blockers.append(
-                f"/nav/map_cloud XY area growth {nav_map_area['growth_m2']:.3f}m2 "
+                f"{TOPICS.map_cloud} XY area growth {nav_map_area['growth_m2']:.3f}m2 "
                 f"< required {float(min_map_area_growth_m2):.3f}m2"
             )
         if len(global_path_counts) <= 0 or max(global_path_counts or [0]) < 2:
@@ -4290,7 +4764,7 @@ def run_gate(
         if len(local_path_counts) <= 0 or max(local_path_counts or [0]) < 2:
             inspection_blockers.append("no non-empty local path observed")
         if nav_cmd_nonzero <= 0:
-            inspection_blockers.append("no non-zero /nav/cmd_vel observed")
+            inspection_blockers.append(f"no non-zero {TOPICS.cmd_vel} observed")
         if (sim_moved_m or 0.0) <= 0.2:
             inspection_blockers.append("simulated robot motion <= 0.2m")
         if motion_consistency["checked"] and not motion_consistency["ok"]:
@@ -4308,12 +4782,14 @@ def run_gate(
             )
 
     mapping_input_path = (
-        "/points_raw + /imu_raw -> fastlio2 -> /Odometry + /cloud_map "
-        "-> /nav/odometry + /nav/map_cloud"
+        f"{TOPICS.raw_lidar_points} + {TOPICS.raw_imu} -> fastlio2 -> "
+        f"{FASTLIO_ODOMETRY_TOPIC} + {FASTLIO_MAP_CLOUD_TOPIC} -> "
+        f"{TOPICS.odometry} + {TOPICS.map_cloud}"
         if not demo_truth_nav
         else (
-            "/points_raw + /imu_raw still feed fastlio2 diagnostics; "
-            "/nav/odometry + /nav/registered_cloud + /nav/map_cloud are "
+            f"{TOPICS.raw_lidar_points} + {TOPICS.raw_imu} still feed "
+            "fastlio2 diagnostics; "
+            f"{TOPICS.odometry} + {TOPICS.registered_cloud} + {TOPICS.map_cloud} are "
             "published from MuJoCo ground truth for stable visible demo"
         )
     )
@@ -4337,7 +4813,7 @@ def run_gate(
         map_artifacts = _write_same_source_map_artifacts(
             artifact_dir=artifact_root / "same_source_map",
             points=map_artifact_points,
-            frame_id=FRAMES.odom,
+            frame_id=SIM_FASTLIO_LIVE_MAP_FRAME_ID,
             world=world,
             source_topics=(TOPICS.map_cloud,),
             mapping_input_path=mapping_input_path,
@@ -4386,7 +4862,7 @@ def run_gate(
     )
     deliverable_contract = {
         "target": (
-            "MuJoCo MID-360/IMU -> Fast-LIO2 -> LingTu /nav/* -> "
+            "MuJoCo MID-360/IMU -> Fast-LIO2 -> LingTu canonical runtime topics -> "
             "map artifacts/tomogram -> visible RViz/MuJoCo evidence"
         ),
         "simulation_only": True,
@@ -4499,6 +4975,9 @@ def run_gate(
         "simulation_only": True,
         "real_robot_motion": False,
         "cmd_vel_sent_to_hardware": False,
+        "runtime_contract": runtime_contract,
+        "runtime_evidence": _runtime_evidence_report(runtime_evidence),
+        "hardware_safety": hardware_safety,
         "simulation_motion": (
             (nav_cmd_nonzero > 0)
             if drive_source == "nav_cmd_vel"
@@ -4553,20 +5032,20 @@ def run_gate(
         "fastlio2_log_diagnostics": fastlio2_log_diagnostics,
         "fastlio2_degeneracy_detail": fastlio2_degeneracy_detail,
         "frames": {
-            "mujoco_world": FRAMES.world,
-            "published_lidar": FRAMES.lidar,
-            "published_imu": FRAMES.body,
-            "fastlio2_body_frame": FRAMES.body,
-            "fastlio2_lidar_frame": FRAMES.lidar,
-            "fastlio2_world_frame": FRAMES.odom,
-            "fastlio2_odometry": FRAMES.odom,
-            "fastlio2_cloud_map": FRAMES.odom,
-            "nav_odometry": FRAMES.odom,
-            "nav_registered_cloud": FRAMES.body,
-            "nav_map_cloud": FRAMES.odom,
-            "slam_bridge_output": FRAMES.odom,
+            "mujoco_world": SIM_WORLD_FRAME_ID,
+            "published_lidar": SIM_LIDAR_FRAME_ID,
+            "published_imu": SIM_BODY_FRAME_ID,
+            "fastlio2_body_frame": SIM_BODY_FRAME_ID,
+            "fastlio2_lidar_frame": SIM_LIDAR_FRAME_ID,
+            "fastlio2_world_frame": SIM_FASTLIO_LIVE_MAP_FRAME_ID,
+            "fastlio2_odometry": SIM_NAV_ODOMETRY_FRAME_ID,
+            "fastlio2_cloud_map": SIM_FASTLIO_LIVE_MAP_FRAME_ID,
+            "nav_odometry": SIM_NAV_ODOMETRY_FRAME_ID,
+            "nav_registered_cloud": SIM_NAV_REGISTERED_CLOUD_FRAME_ID,
+            "nav_map_cloud": SIM_FASTLIO_LIVE_MAP_FRAME_ID,
+            "slam_bridge_output": SIM_NAV_ODOMETRY_FRAME_ID,
             "cmd_vel": (
-                "/nav/cmd_vel"
+                TOPICS.cmd_vel
                 if (run_lingtu_frontier or run_lingtu_tare)
                 else "not_published"
             ),
@@ -4699,6 +5178,7 @@ def run_gate(
             "trail_clearance": moving_obstacle_clearance,
             "ok": bool(moving_obstacle_ok),
         },
+        "control_quality": control_quality,
         "applied_sim_command": applied_command_summary,
         "counts": counts,
         "point_count": {
@@ -4781,8 +5261,8 @@ def run_gate(
             "local_path_points_max": max(local_path_counts) if local_path_counts else 0,
             "waypoint_count": waypoint_count,
             "min_required_goals": int(frontier_min_goals),
-            "planning_frame": FRAMES.odom,
-            "occupancy_frame": FRAMES.odom,
+            "planning_frame": SIM_NAV_ODOMETRY_FRAME_ID,
+            "occupancy_frame": SIM_FASTLIO_LIVE_MAP_FRAME_ID,
         },
         "lingtu_tare": {
             "enabled": bool(run_lingtu_tare),
@@ -4813,8 +5293,8 @@ def run_gate(
             "waypoint_count": waypoint_count,
             "min_required_goals": int(tare_min_goals),
             "scenario": str(tare_scenario or "indoor"),
-            "planning_frame": FRAMES.odom,
-            "occupancy_frame": FRAMES.odom,
+            "planning_frame": SIM_NAV_ODOMETRY_FRAME_ID,
+            "occupancy_frame": SIM_FASTLIO_LIVE_MAP_FRAME_ID,
         },
         "lingtu_inspection": {
             "enabled": bool(run_lingtu_inspection),
@@ -4843,8 +5323,8 @@ def run_gate(
             "replan_on_costmap_update": final_navigation_health.get(
                 "replan_on_costmap_update"
             ),
-            "planning_frame": FRAMES.odom,
-            "occupancy_frame": FRAMES.odom,
+            "planning_frame": SIM_NAV_ODOMETRY_FRAME_ID,
+            "occupancy_frame": SIM_FASTLIO_LIVE_MAP_FRAME_ID,
         },
         "navigation_chain": {
             "health": final_navigation_health,
@@ -4926,7 +5406,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--drive-source",
         choices=["fixed", "nav_cmd_vel"],
         default="fixed",
-        help="Use a fixed simulation command or feed MuJoCo from LingTu /nav/cmd_vel.",
+        help=f"Use a fixed simulation command or feed MuJoCo from LingTu {TOPICS.cmd_vel}.",
     )
     parser.add_argument("--cmd-vel-timeout", type=float, default=0.75)
     parser.add_argument("--cmd-vel-linear-limit", type=float, default=0.25)
@@ -4938,8 +5418,8 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help=(
-            "Scale LingTu /nav/cmd_vel linear velocity only when applying it "
-            "to the kinematic MuJoCo demo model. The published /nav/cmd_vel "
+            f"Scale LingTu {TOPICS.cmd_vel} linear velocity only when applying it "
+            f"to the kinematic MuJoCo demo model. The published {TOPICS.cmd_vel} "
             "message remains unmodified."
         ),
     )
@@ -4948,7 +5428,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help=(
-            "Scale LingTu /nav/cmd_vel angular velocity only when applying it "
+            f"Scale LingTu {TOPICS.cmd_vel} angular velocity only when applying it "
             "to the kinematic MuJoCo demo model."
         ),
     )
@@ -5093,8 +5573,8 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["fastlio2", "mujoco_ground_truth"],
         default="fastlio2",
         help=(
-            "Source for canonical /nav/odometry, /nav/registered_cloud, "
-            "and /nav/map_cloud. Use fastlio2 for strict SLAM validation; "
+            f"Source for canonical {TOPICS.odometry}, {TOPICS.registered_cloud}, "
+            f"and {TOPICS.map_cloud}. Use fastlio2 for strict SLAM validation; "
             "use mujoco_ground_truth for stable visible demos while keeping "
             "Fast-LIO diagnostics on their raw topics."
         ),
@@ -5136,10 +5616,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--moving-obstacle-point-spacing", type=float, default=0.10)
     parser.add_argument("--moving-obstacle-intensity", type=float, default=220.0)
     parser.add_argument("--moving-obstacle-robot-radius-m", type=float, default=0.28)
+    parser.add_argument("--max-yaw-per-meter", type=float, default=1.2)
+    parser.add_argument("--max-angular-saturation-ratio", type=float, default=0.35)
     parser.add_argument(
         "--no-save-map-artifacts",
         action="store_true",
-        help="Do not persist same-source map.pcd/metadata artifacts from /nav/map_cloud.",
+        help=f"Do not persist same-source map.pcd/metadata artifacts from {TOPICS.map_cloud}.",
     )
     parser.add_argument(
         "--build-tomogram",
@@ -5249,6 +5731,8 @@ def main() -> int:
             moving_obstacle_point_spacing=args.moving_obstacle_point_spacing,
             moving_obstacle_intensity=args.moving_obstacle_intensity,
             moving_obstacle_robot_radius_m=args.moving_obstacle_robot_radius_m,
+            max_yaw_per_meter=args.max_yaw_per_meter,
+            max_angular_saturation_ratio=args.max_angular_saturation_ratio,
             save_map_artifacts=not args.no_save_map_artifacts,
             build_tomogram=args.build_tomogram,
             map_artifact_voxel_size=args.map_artifact_voxel_size,
@@ -5260,18 +5744,7 @@ def main() -> int:
             tomogram_max_cells=args.tomogram_max_cells,
         )
     except Exception as exc:
-        report = {
-            "schema_version": "lingtu.mujoco_fastlio2_live_gate.v2",
-            "ok": False,
-            "remaining_gaps": [f"gate_exception: {type(exc).__name__}: {exc}"],
-            "simulation_only": True,
-            "real_robot_motion": False,
-            "cmd_vel_sent_to_hardware": False,
-            "duration_clock": args.duration_clock,
-            "scan_time_profile": args.scan_time_profile,
-            "runtime_faults": [f"{type(exc).__name__}: {exc}"],
-            "args": vars(args),
-        }
+        report = _gate_exception_report(args, exc)
     text = json.dumps(report, indent=2, sort_keys=True, default=str)
     print(text)
     if args.json_out:

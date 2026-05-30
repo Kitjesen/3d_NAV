@@ -27,9 +27,12 @@ from core.module import Module
 from core.msgs.geometry import Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.registry import register
+from core.runtime_interface import body_frame_id, odom_frame_id
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
+THUNDER_ODOM_FRAME_ID = odom_frame_id()
+THUNDER_BODY_FRAME_ID = body_frame_id()
 
 
 @register("driver", "thunder", priority=10, platforms={"aarch64"}, description="Thunder quadruped via brainstem gRPC")
@@ -268,8 +271,8 @@ class ThunderDriver(Module, layer=1):
                 angular=Vector3(gx, gy, gz),
             ),
             ts=now,
-            frame_id="odom",
-            child_frame_id="body",
+            frame_id=THUNDER_ODOM_FRAME_ID,
+            child_frame_id=THUNDER_BODY_FRAME_ID,
         )
         self.odometry.publish(odom)
 

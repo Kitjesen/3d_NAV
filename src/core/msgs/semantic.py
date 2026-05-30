@@ -15,7 +15,11 @@ from typing import Any, List, Optional
 
 import numpy as np
 
+from core.runtime_interface import map_frame_id
+
 from .geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+
+SEMANTIC_MSG_MAP_FRAME_ID = map_frame_id()
 
 # ---------------------------------------------------------------------------
 # Detection3D
@@ -204,7 +208,7 @@ class SceneGraph:
     relations: list[Relation] = field(default_factory=list)
     regions: list[Region] = field(default_factory=list)
     ts: float = 0.0
-    frame_id: str = "map"
+    frame_id: str = SEMANTIC_MSG_MAP_FRAME_ID
 
     def __post_init__(self) -> None:
         if self.ts == 0.0:
@@ -241,7 +245,7 @@ class SceneGraph:
             relations=[Relation.from_dict(r) for r in d.get("relations", [])],
             regions=[Region.from_dict(r) for r in d.get("regions", [])],
             ts=float(d.get("ts", 0)),
-            frame_id=str(d.get("frame_id", "map")),
+            frame_id=str(d.get("frame_id", SEMANTIC_MSG_MAP_FRAME_ID)),
         )
 
     def to_json(self, **kwargs: Any) -> str:
@@ -293,7 +297,7 @@ class GoalResult:
 
     # -- conversion ------------------------------------------------------------
 
-    def as_pose_stamped(self, frame_id: str = "map") -> PoseStamped:
+    def as_pose_stamped(self, frame_id: str = SEMANTIC_MSG_MAP_FRAME_ID) -> PoseStamped:
         """Convert to PoseStamped (identity quaternion orientation)."""
         return PoseStamped(
             pose=Pose(

@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from core.blueprints.profile_graph import (
@@ -261,6 +263,7 @@ def test_sim_mujoco_live_profile_is_raw_fastlio_simulation_entry():
     assert PROFILES["sim_mujoco_live"]["_runtime_contract"] == "mujoco_fastlio2_live"
     assert config["planning_frame_id"] == "map"
     assert config["enable_frontier"] is True
+    assert config["enable_traversable_frontier"] is True
     assert config["exploration_backend"] == "none"
     assert config["enable_native"] is False
     assert config["enable_semantic"] is False
@@ -270,6 +273,7 @@ def test_sim_mujoco_live_profile_is_raw_fastlio_simulation_entry():
     assert config["cloud_topic"] == "/nav/map_cloud"
     assert "ROS2SimDriverModule" in graph.modules
     assert "WavefrontFrontierExplorer" in graph.modules
+    assert "TraversableFrontierModule" in graph.modules
     assert "MujocoDriverModule" not in graph.modules
     assert "ThunderDriver" not in graph.modules
     assert "ROS2SimDriverModule.odometry->NavigationModule.odometry" in wires
@@ -277,6 +281,9 @@ def test_sim_mujoco_live_profile_is_raw_fastlio_simulation_entry():
     assert "ROS2SimDriverModule.map_cloud->TerrainModule.map_cloud" in wires
     assert "WavefrontFrontierExplorer.exploration_goal->NavigationModule.goal_pose" in wires
     assert "NavigationModule.mission_status->WavefrontFrontierExplorer.navigation_status" in wires
+    assert "TraversableFrontierModule.traversable_frontiers->GatewayModule.traversable_frontiers" in wires
+    assert "TraversableFrontierModule.frontier_candidate->GatewayModule.frontier_candidate" in wires
+    assert "TraversableFrontierModule.frontier_candidate->NavigationModule.goal_pose" not in wires
     assert not graph.dangling_wires()
 
 
@@ -297,15 +304,102 @@ def test_product_explore_can_run_on_mujoco_live_endpoint():
     assert config["_external_record_args"] == ("video",)
     assert config["planning_frame_id"] == "map"
     assert config["enable_frontier"] is True
+    assert config["enable_traversable_frontier"] is True
     assert config["exploration_backend"] == "none"
     assert config["cloud_topic"] == "/nav/map_cloud"
     assert "ROS2SimDriverModule" in graph.modules
     assert "WavefrontFrontierExplorer" in graph.modules
+    assert "TraversableFrontierModule" in graph.modules
     assert "ThunderDriver" not in graph.modules
     assert "ROS2SimDriverModule.odometry->NavigationModule.odometry" in wires
     assert "ROS2SimDriverModule.map_cloud->OccupancyGridModule.map_cloud" in wires
     assert "WavefrontFrontierExplorer.exploration_goal->NavigationModule.goal_pose" in wires
+    assert "TraversableFrontierModule.traversable_frontiers->GatewayModule.traversable_frontiers" in wires
+    assert "TraversableFrontierModule.frontier_candidate->GatewayModule.frontier_candidate" in wires
+    assert "TraversableFrontierModule.frontier_candidate->NavigationModule.goal_pose" not in wires
     assert not graph.dangling_wires()
+
+
+def test_runtime_run_spec_carries_endpoint_command_and_safety_boundary():
+    from core.blueprints.runtime_endpoint import resolve_runtime_run_spec
+
+    config = resolve_profile_config("explore", runtime_endpoint="mujoco_live")
+    spec = resolve_runtime_run_spec(
+        "explore",
+        config,
+        record=True,
+        extra_args=(),
+    )
+
+    assert spec.profile == "explore"
+    assert spec.endpoint == "mujoco_live"
+    assert spec.data_source == "mujoco_fastlio2_live"
+    assert spec.runtime_contract == "mujoco_fastlio2_live"
+    assert spec.simulation_only is True
+    assert spec.command_sink == "mujoco_velocity_adapter"
+    assert spec.slam_source == "lingtu_fastlio2"
+    assert spec.localization_source == "fastlio2_odometry"
+    assert spec.mapping_source == "fastlio2_map_cloud"
+    assert spec.lidar_extrinsic_profile == "mujoco_thunder_v3"
+    assert spec.launcher == "sim/scripts/launch_mujoco_fastlio2_live.sh"
+    assert spec.launcher_args == ("video",)
+    assert spec.env["LINGTU_PROFILE"] == "explore"
+    assert spec.env["LINGTU_ENDPOINT"] == "mujoco_live"
+    assert spec.env["LINGTU_DATA_SOURCE"] == "mujoco_fastlio2_live"
+    assert spec.env["LINGTU_RUNTIME_CONTRACT"] == "mujoco_fastlio2_live"
+    assert spec.env["LINGTU_COMMAND_SINK"] == "mujoco_velocity_adapter"
+    assert spec.env["LINGTU_SIMULATION_ONLY"] == "1"
+    assert spec.as_command() == [
+        "bash",
+        "sim/scripts/launch_mujoco_fastlio2_live.sh",
+        "video",
+    ]
+
+
+def test_replay_endpoint_is_no_actuation_runtime():
+    from core.blueprints.runtime_endpoint import runtime_endpoint, resolve_runtime_run_spec
+
+    endpoint = runtime_endpoint("replay")
+    config = resolve_profile_config("nav", runtime_endpoint="replay")
+    spec = resolve_runtime_run_spec("nav", config, extra_args=("status",))
+
+    assert endpoint.simulation_only is True
+    assert endpoint.data_source == "rosbag_fastlio2_replay"
+    assert DATA_SOURCE_CONTRACTS["rosbag_fastlio2_replay"].command_sink == (
+        "no_actuation_replay_sink"
+    )
+    assert spec.command_sink == "no_actuation_replay_sink"
+    assert spec.simulation_only is True
+    assert spec.env["LINGTU_SIMULATION_ONLY"] == "1"
+    assert spec.as_command() == [
+        sys.executable,
+        "sim/scripts/fastlio2_rosbag_replay_gate.py",
+        "status",
+    ]
+
+
+def test_real_runtime_run_spec_carries_hardware_contract_boundary():
+    from core.blueprints.runtime_endpoint import resolve_runtime_run_spec
+
+    config = resolve_profile_config("nav")
+    spec = resolve_runtime_run_spec("nav", config)
+
+    assert spec.endpoint == "real_s100p"
+    assert spec.data_source == "real_s100p"
+    assert spec.runtime_contract == "real_s100p"
+    assert spec.simulation_only is False
+    assert spec.command_sink == "hardware_driver_after_cmd_vel_mux"
+    assert spec.slam_source == "lingtu_fastlio_or_external_robot_slam"
+    assert spec.localization_source == "slam_localizer"
+    assert spec.mapping_source == "slam_map_cloud"
+    assert spec.lidar_extrinsic_profile == "real_mid360"
+    assert spec.launcher is None
+    assert spec.launcher_args == ()
+    assert spec.env["LINGTU_ENDPOINT"] == "real_s100p"
+    assert spec.env["LINGTU_DATA_SOURCE"] == "real_s100p"
+    assert spec.env["LINGTU_RUNTIME_CONTRACT"] == "real_s100p"
+    assert spec.env["LINGTU_COMMAND_SINK"] == "hardware_driver_after_cmd_vel_mux"
+    assert spec.env["LINGTU_SIMULATION_ONLY"] == "0"
 
 
 def test_product_tare_can_run_on_mujoco_live_endpoint():
@@ -553,9 +647,9 @@ def test_simulation_runtime_contracts_lock_simulator_boundary():
     assert gazebo.runtime_stage == "no_saved_map_live_mapping_smoke"
     assert gazebo.map_dependency == "gazebo_live_lidar_occupancy"
     assert gazebo.world_sensor_owner == "gazebo"
-    assert gazebo.slam_source == "none"
-    assert gazebo.localization_source == "gazebo_sim_odometry"
-    assert gazebo.mapping_source == "gazebo_lidar_derived_occupancy_grid"
+    assert gazebo.slam_source == DATA_SOURCE_CONTRACTS["gazebo_industrial"].slam_source
+    assert gazebo.localization_source == DATA_SOURCE_CONTRACTS["gazebo_industrial"].localization_source
+    assert gazebo.mapping_source == DATA_SOURCE_CONTRACTS["gazebo_industrial"].mapping_source
     assert gazebo.slam_validated is False
     assert gazebo.requires_live_slam is False
     assert gazebo.requires_saved_map is False
@@ -607,9 +701,9 @@ def test_simulation_runtime_contracts_lock_simulator_boundary():
     assert cmu.runtime_stage == "external_live_map_execution"
     assert cmu.map_dependency == "cmu_unity_live_registered_scan_or_same_source_tomogram"
     assert cmu.world_sensor_owner == "cmu_unity"
-    assert cmu.slam_source == "none"
-    assert cmu.localization_source == "cmu_unity_state_estimation_relayed_to_nav_odometry"
-    assert cmu.mapping_source == "cmu_registered_scan_and_terrain_map_relayed_to_nav_map_cloud"
+    assert cmu.slam_source == DATA_SOURCE_CONTRACTS["cmu_unity_external"].slam_source
+    assert cmu.localization_source == DATA_SOURCE_CONTRACTS["cmu_unity_external"].localization_source
+    assert cmu.mapping_source == DATA_SOURCE_CONTRACTS["cmu_unity_external"].mapping_source
     assert cmu.slam_validated is False
     assert cmu.requires_live_slam is False
     assert cmu.requires_saved_map is False
@@ -643,9 +737,9 @@ def test_simulation_runtime_contracts_lock_simulator_boundary():
         "/Odometry",
         "/cloud_map",
     )
-    assert fastlio.slam_source == "fastlio2"
-    assert fastlio.localization_source == "fastlio2_odometry"
-    assert fastlio.mapping_source == "fastlio2_cloud_map"
+    assert fastlio.slam_source == DATA_SOURCE_CONTRACTS["mujoco_fastlio2_live"].slam_source
+    assert fastlio.localization_source == DATA_SOURCE_CONTRACTS["mujoco_fastlio2_live"].localization_source
+    assert fastlio.mapping_source == DATA_SOURCE_CONTRACTS["mujoco_fastlio2_live"].mapping_source
     assert fastlio.slam_validated is True
     assert fastlio.requires_live_slam is True
     assert fastlio.requires_saved_map is False
@@ -662,6 +756,7 @@ def test_simulation_runtime_contracts_lock_simulator_boundary():
     assert "gazebo_industrial" in SIMULATION_RUNTIME_CONTRACTS
     assert "cmu_unity_baseline" in SIMULATION_RUNTIME_CONTRACTS
     assert "mujoco_fastlio2_live" in SIMULATION_RUNTIME_CONTRACTS
+    assert "rosbag_fastlio2_replay" in SIMULATION_RUNTIME_CONTRACTS
 
     for profile in (*SIMULATION_PROFILES, *PRODUCT_PROFILES):
         binding = profile_data_source(profile)
@@ -674,6 +769,12 @@ def test_simulation_runtime_contracts_lock_simulator_boundary():
     assert profile_data_source("sim").data_source == "mujoco_module_graph"
     assert profile_data_source("map").data_source == "real_s100p"
 
+    replay = simulation_runtime_contract("rosbag_fastlio2_replay")
+    assert replay.command_topic == "no_actuation_replay_sink"
+    assert replay.data_source_contract == "rosbag_fastlio2_replay"
+    assert replay.simulation_only is True
+    assert replay.cmd_vel_owner == "lingtu_cmd_vel_mux_to_no_actuation_sink"
+
 
 def test_lingtu_simulation_runtime_contracts_mirror_data_source_boundaries():
     for contract in SIMULATION_RUNTIME_CONTRACTS.values():
@@ -685,6 +786,9 @@ def test_lingtu_simulation_runtime_contracts_mirror_data_source_boundaries():
         assert set(source.algorithm_entry_outputs) <= required_runtime, contract.name
         assert set(source.algorithm_context_outputs) <= required_runtime, contract.name
         assert set(source.source_outputs) <= set(contract.native_topics), contract.name
+        assert contract.slam_source == source.slam_source, contract.name
+        assert contract.localization_source == source.localization_source, contract.name
+        assert contract.mapping_source == source.mapping_source, contract.name
         if source.command_sink.startswith("/"):
             assert contract.command_topic == source.command_sink, contract.name
 

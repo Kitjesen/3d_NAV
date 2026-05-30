@@ -170,9 +170,12 @@ from core.module import Module
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
+from core.runtime_interface import runtime_fixed_path_frame_ids
 from core.stream import In, Out
 from drivers.sim.mujoco_driver_module import MujocoDriverModule
 from nav.navigation_module import NavigationModule
+
+FULL_PIPELINE_GOAL_FRAME_ID = runtime_fixed_path_frame_ids()[0]
 
 
 class LiveMapper(Module, layer=3):
@@ -252,7 +255,7 @@ nav = system.get_module("NavigationModule")
 GOAL = (7.0, 0.0)
 mapper.goal_cmd.publish(PoseStamped(
     pose=Pose(position=Vector3(GOAL[0], GOAL[1], 0.0), orientation=Quaternion(0, 0, 0, 1)),
-    frame_id="map", ts=time.time(),
+    frame_id=FULL_PIPELINE_GOAL_FRAME_ID, ts=time.time(),
 ))
 
 success = False

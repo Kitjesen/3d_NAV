@@ -37,7 +37,7 @@ from core.msgs.geometry import PoseStamped, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.semantic import Detection3D, Region, SceneGraph
 from core.stream import In, Out
-from semantic.planner.semantic_planner.agent_loop import AgentLoop
+from semantic.planner.semantic_planner.agent_loop import AGENT_TOOLS, AgentLoop
 from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
 
 # ---------------------------------------------------------------------------
@@ -262,6 +262,14 @@ class _RecordingLLM:
 
 
 class TestAgentLoopTools:
+    def test_builtin_navigate_to_tool_allows_optional_z(self):
+        tool = next(t for t in AGENT_TOOLS if t["function"]["name"] == "navigate_to")
+        schema = tool["function"]["parameters"]
+
+        assert "z" in schema["properties"]
+        assert schema["properties"]["z"]["type"] == "number"
+        assert "z" not in schema["required"]
+
     def test_llm_fallback_receives_runtime_tool_list(self):
         llm = _RecordingLLM(['{"tool":"hello","args":{"name":"codex"}}'])
         tool_list = [{

@@ -3,10 +3,10 @@
 
 This gate proves the saved-map stage with live simulated sensors:
 
-raw MuJoCo MID-360 + IMU -> Fast-LIO -> /cloud_registered + /Odometry
+raw MuJoCo MID-360 + IMU -> Fast-LIO native cloud + odometry
   -> localizer loads same-source map.pcd
-  -> /nav/relocalize service succeeds
-  -> /nav/localization_health locks and map->odom TF stays sane
+  -> canonical relocalize service succeeds
+  -> canonical localization health locks and map->odom TF stays sane
 
 It is simulation-only and never connects to robot hardware.
 """
@@ -33,6 +33,41 @@ if str(ROOT) not in sys.path:
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+
+from core.runtime_interface import (
+    FRAME_LINKS,
+    TOPICS,
+    adapter_source_for_target,
+)
+
+FASTLIO_REGISTERED_CLOUD_TOPIC = adapter_source_for_target(
+    "fastlio2",
+    TOPICS.registered_cloud,
+)
+FASTLIO_MAP_CLOUD_TOPIC = adapter_source_for_target("fastlio2", TOPICS.map_cloud)
+FASTLIO_ODOMETRY_TOPIC = adapter_source_for_target("fastlio2", TOPICS.odometry)
+LOCALIZER_MAP_CLOUD_INPUT = adapter_source_for_target(
+    "localizer",
+    TOPICS.saved_map_cloud,
+)
+LOCALIZER_QUALITY_INPUT = adapter_source_for_target(
+    "localizer",
+    TOPICS.localization_quality,
+)
+LOCALIZER_RELOCALIZE_INPUT = adapter_source_for_target(
+    "localizer",
+    TOPICS.relocalize_service,
+)
+LOCALIZER_RELOCALIZE_CHECK_INPUT = adapter_source_for_target(
+    "localizer",
+    TOPICS.relocalize_check_service,
+)
+LOCALIZER_GLOBAL_RELOCALIZE_INPUT = adapter_source_for_target(
+    "localizer",
+    TOPICS.global_relocalize_service,
+)
+MAP_TO_ODOM_LINK = FRAME_LINKS["map_to_odom"]
+TF_TOPIC = "/tf"
 
 
 def _resolve_latest_map() -> Path | None:
@@ -249,7 +284,10 @@ class _RuntimeSampler:
 
     def on_tf(self, msg: Any) -> None:
         for transform in getattr(msg, "transforms", []) or []:
-            if transform.header.frame_id != "map" or transform.child_frame_id != "odom":
+            if (
+                transform.header.frame_id != MAP_TO_ODOM_LINK.parent
+                or transform.child_frame_id != MAP_TO_ODOM_LINK.child
+            ):
                 continue
             self.counts["map_to_odom_tf"] += 1
             t = transform.transform.translation
@@ -294,7 +332,7 @@ def _call_relocalize(
     pcd_path: Path,
     timeout_s: float,
 ) -> tuple[bool, dict[str, Any]]:
-    client = node.create_client(Relocalize, "/nav/relocalize")
+    client = node.create_client(Relocalize, TOPICS.relocalize_service)
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         if client.wait_for_service(timeout_sec=0.2):
@@ -332,7 +370,7 @@ def _call_global_relocalize(
     Trigger: Any,
     timeout_s: float,
 ) -> tuple[bool, dict[str, Any]]:
-    client = node.create_client(Trigger, "/nav/global_relocalize")
+    client = node.create_client(Trigger, TOPICS.global_relocalize_service)
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         if client.wait_for_service(timeout_sec=0.2):
@@ -491,15 +529,15 @@ def _start_localizer(
         "-p",
         f"initial_yaw:={initial_yaw}",
         "-r",
-        "map_cloud:=/nav/saved_map_cloud",
+        f"{LOCALIZER_MAP_CLOUD_INPUT}:={TOPICS.saved_map_cloud}",
         "-r",
-        "/localization_quality:=/nav/localization_quality",
+        f"{LOCALIZER_QUALITY_INPUT}:={TOPICS.localization_quality}",
         "-r",
-        "relocalize:=/nav/relocalize",
+        f"{LOCALIZER_RELOCALIZE_INPUT}:={TOPICS.relocalize_service}",
         "-r",
-        "relocalize_check:=/nav/relocalize_check",
+        f"{LOCALIZER_RELOCALIZE_CHECK_INPUT}:={TOPICS.relocalize_check_service}",
         "-r",
-        "global_relocalize:=/nav/global_relocalize",
+        f"{LOCALIZER_GLOBAL_RELOCALIZE_INPUT}:={TOPICS.global_relocalize_service}",
     ]
     if disable_auto_global_relocalize:
         cmd.extend(
@@ -633,12 +671,32 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
     rclpy.init(args=None)
     node = rclpy.create_node("saved_map_relocalize_runtime_gate")
     qos = 10
-    node.create_subscription(PointCloud2, "/cloud_registered", lambda msg: sampler.on_cloud("cloud_registered", msg), qos)
-    node.create_subscription(PointCloud2, "/cloud_map", lambda msg: sampler.on_cloud("cloud_map", msg), qos)
-    node.create_subscription(PointCloud2, "/nav/saved_map_cloud", lambda msg: sampler.on_cloud("saved_map_cloud", msg), qos)
-    node.create_subscription(Odometry, "/Odometry", lambda msg: sampler.on_odom("raw_odometry", msg), qos)
-    node.create_subscription(String, "/nav/localization_health", sampler.on_health, qos)
-    node.create_subscription(TFMessage, "/tf", sampler.on_tf, qos)
+    node.create_subscription(
+        PointCloud2,
+        FASTLIO_REGISTERED_CLOUD_TOPIC,
+        lambda msg: sampler.on_cloud("cloud_registered", msg),
+        qos,
+    )
+    node.create_subscription(
+        PointCloud2,
+        FASTLIO_MAP_CLOUD_TOPIC,
+        lambda msg: sampler.on_cloud("cloud_map", msg),
+        qos,
+    )
+    node.create_subscription(
+        PointCloud2,
+        TOPICS.saved_map_cloud,
+        lambda msg: sampler.on_cloud("saved_map_cloud", msg),
+        qos,
+    )
+    node.create_subscription(
+        Odometry,
+        FASTLIO_ODOMETRY_TOPIC,
+        lambda msg: sampler.on_odom("raw_odometry", msg),
+        qos,
+    )
+    node.create_subscription(String, TOPICS.localization_health, sampler.on_health, qos)
+    node.create_subscription(TFMessage, TF_TOPIC, sampler.on_tf, qos)
 
     try:
         live_proc = _start_live_feed(args, run_dir)
@@ -673,7 +731,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             )
             if not service_ok:
                 blockers.append(
-                    f"/nav/global_relocalize failed: {service.get('message')}"
+                    f"{TOPICS.global_relocalize_service} failed: {service.get('message')}"
                 )
         else:
             service_ok, service = _call_relocalize(
@@ -684,7 +742,9 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
                 timeout_s=args.service_timeout_s,
             )
             if not service_ok:
-                blockers.append(f"/nav/relocalize failed: {service.get('message')}")
+                blockers.append(
+                    f"{TOPICS.relocalize_service} failed: {service.get('message')}"
+                )
 
         monitor_deadline = time.time() + args.monitor_after_service_s
         while time.time() < monitor_deadline:
@@ -734,9 +794,9 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
     if (live_report.get("fastlio2_z_consistency") or {}).get("ok") is not True:
         blockers.append("live feed Fast-LIO Z consistency is not ok")
     if sampler.counts.get("saved_map_cloud", 0) <= 0:
-        blockers.append("/nav/saved_map_cloud missing")
+        blockers.append(f"{TOPICS.saved_map_cloud} missing")
     if sampler.point_counts.get("saved_map_cloud", 0) < int(args.min_saved_map_points):
-        blockers.append("/nav/saved_map_cloud point count below threshold")
+        blockers.append(f"{TOPICS.saved_map_cloud} point count below threshold")
     if tracking_health_samples < int(args.min_tracking_health_samples):
         blockers.append("localizer tracking health samples below threshold")
     if latest_health_state not in tracking_states:
@@ -926,7 +986,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--check-global-relocalize",
         action="store_true",
-        help="Use /nav/global_relocalize instead of seeded /nav/relocalize.",
+        help="Use the canonical global relocalize service instead of seeded relocalize.",
     )
     parser.add_argument("--kidnap-initial-x", type=float, default=3.0)
     parser.add_argument("--kidnap-initial-y", type=float, default=2.0)

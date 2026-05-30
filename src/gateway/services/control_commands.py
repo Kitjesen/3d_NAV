@@ -9,8 +9,12 @@ from typing import Any
 
 from fastapi.responses import JSONResponse
 
+from core.runtime_interface import map_frame_id
 from gateway.schemas import PlanPreviewRequest
 from gateway.services.safety_status import safety_stop_active, safety_summary
+
+
+CONTROL_MAP_FRAME_ID = map_frame_id()
 
 
 class ControlCommandService:
@@ -218,7 +222,7 @@ class ControlCommandService:
                 x=body.x,
                 y=body.y,
                 z=body.z,
-                frame_id=getattr(body, "frame_id", "map"),
+                frame_id=getattr(body, "frame_id", CONTROL_MAP_FRAME_ID),
                 client_id=getattr(body, "client_id", "unknown"),
             )
         except Exception as exc:
@@ -316,7 +320,7 @@ class ControlCommandService:
                 frame_id = str(
                     header.get("frame_id") or header.get("frame") or ""
                 ).strip()
-        return _point_payload(x, y, z, ts=ts, frame_id=frame_id or "map")
+        return _point_payload(x, y, z, ts=ts, frame_id=frame_id or CONTROL_MAP_FRAME_ID)
 
 
 def _point_payload(
@@ -325,7 +329,7 @@ def _point_payload(
     z: float,
     *,
     ts: float,
-    frame_id: str = "map",
+    frame_id: str = CONTROL_MAP_FRAME_ID,
 ) -> dict[str, Any]:
     return {
         "x": float(x),

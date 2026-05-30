@@ -39,7 +39,7 @@ def _make_scene_cfg(resolution=0.2, slice_dh=0.5, ground_h=0.0, **trav_kw):
     # impassable. If you need to lock the robot to flat corridors, override
     # via robot_config.yaml tomogram.slope_max.
     t.slope_max = trav_kw.get('slope_max', 0.60)
-    t.step_max = trav_kw.get('step_max', 0.30)
+    t.step_max = trav_kw.get('step_max', 0.25)
     # standable_ratio: fraction of points in a 0.2×0.2 cell that must be
     # locally flat. Lowered 0.40 → 0.20 for older maps with lower scan
     # density — otherwise most cells fail and A* can't find a path at all.
@@ -58,7 +58,7 @@ def _load_tomogram_config():
     defaults = dict(
         resolution=0.2, slice_dh=0.5, ground_h=0.0,
         kernel_size=7, interval_min=0.50, interval_free=0.65,
-        slope_max=0.60, step_max=0.17, standable_ratio=0.10,
+        slope_max=0.60, step_max=0.25, standable_ratio=0.10,
         cost_barrier=50.0, safe_margin=0.4, inflation=0.2,
     )
     try:

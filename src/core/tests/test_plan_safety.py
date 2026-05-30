@@ -251,6 +251,107 @@ def test_astar_backend_snaps_polluted_start_to_nearby_3d_free_cell() -> None:
     assert safety["ok"] is True
 
 
+def test_pct_backend_rejects_goal_height_that_only_matches_other_floor() -> None:
+    from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+
+    class FakePlanner:
+        def __init__(self) -> None:
+            self.layers_t = np.zeros((2, 3, 3), dtype=np.float32)
+            self.layers_t[0, 1, 1] = 100.0
+            self.layers_g = np.zeros_like(self.layers_t)
+            self.layers_g[1, :, :] = 3.0
+            self.calls: list[tuple[float, float]] = []
+
+        def pos2idx(self, pos):
+            return np.asarray([round(float(pos[0])), round(float(pos[1]))], dtype=float)
+
+        def pos2slice(self, z):
+            return float(z) / 3.0
+
+        def get_surface_height(self, _pos):
+            return 3.0
+
+        def plan(self, _start_pos, _goal_pos, start_h, goal_h):
+            self.calls.append((float(start_h), float(goal_h)))
+            return np.asarray([[0.0, 0.0, start_h], [1.0, 1.0, goal_h]], dtype=float)
+
+    planner = FakePlanner()
+    backend = _PCTBackend.__new__(_PCTBackend)
+    backend._planner = planner
+    backend._load_error = None
+    backend._obstacle_thr = 49.9
+    backend._resolution = 1.0
+    backend._origin = np.asarray([0.0, 0.0], dtype=float)
+    backend._slice_h0 = 0.0
+    backend._slice_dh = 3.0
+    backend._trav_3d = planner.layers_t
+
+    path = backend.plan(
+        np.asarray([0.0, 0.0, 0.0], dtype=float),
+        np.asarray([1.0, 1.0, 0.0], dtype=float),
+    )
+
+    assert path == []
+    assert planner.calls == []
+
+
+def test_pct_backend_height_snap_limit_matches_25cm_step_limit() -> None:
+    from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+
+    class FakePlanner:
+        def __init__(self, height: float) -> None:
+            self.height = height
+            self.layers_t = np.zeros((2, 3, 3), dtype=np.float32)
+            self.layers_t[0, 1, 1] = 100.0
+            self.layers_g = np.zeros_like(self.layers_t)
+            self.layers_g[1, :, :] = height
+            self.calls: list[tuple[float, float]] = []
+
+        def pos2idx(self, pos):
+            return np.asarray([round(float(pos[0])), round(float(pos[1]))], dtype=float)
+
+        def pos2slice(self, z):
+            return float(z) / self.height
+
+        def get_surface_height(self, _pos):
+            return self.height
+
+        def plan(self, _start_pos, _goal_pos, start_h, goal_h):
+            self.calls.append((float(start_h), float(goal_h)))
+            return np.asarray([[0.0, 0.0, start_h], [1.0, 1.0, goal_h]], dtype=float)
+
+    def make_backend(height: float):
+        planner = FakePlanner(height)
+        backend = _PCTBackend.__new__(_PCTBackend)
+        backend._planner = planner
+        backend._load_error = None
+        backend._obstacle_thr = 49.9
+        backend._resolution = 1.0
+        backend._origin = np.asarray([0.0, 0.0], dtype=float)
+        backend._slice_h0 = 0.0
+        backend._slice_dh = height
+        backend._trav_3d = planner.layers_t
+        return backend, planner
+
+    near_backend, near_planner = make_backend(0.24)
+    near_path = near_backend.plan(
+        np.asarray([0.0, 0.0, 0.0], dtype=float),
+        np.asarray([1.0, 1.0, 0.0], dtype=float),
+    )
+
+    far_backend, far_planner = make_backend(0.30)
+    far_path = far_backend.plan(
+        np.asarray([0.0, 0.0, 0.0], dtype=float),
+        np.asarray([1.0, 1.0, 0.0], dtype=float),
+    )
+
+    assert near_path
+    assert near_planner.calls
+    assert abs(near_path[-1][2] - 0.24) < 1e-6
+    assert far_path == []
+    assert far_planner.calls == []
+
+
 def test_astar_backend_can_return_safe_partial_3d_path_when_goal_unreachable() -> None:
     from global_planning.pct_adapters.src.global_planner_module import _AStarBackend
 
@@ -769,6 +870,46 @@ def test_global_planner_service_reject_policy_does_not_repair_empty_path() -> No
     assert backend.calls == 1
     assert "primary_replan" not in svc.last_plan_report
     assert svc.last_plan_report["policy"] == "reject"
+
+
+def test_pct_global_planner_requires_same_source_tomogram_gate(tmp_path: Path) -> None:
+    map_dir = tmp_path / "bad_map"
+    map_dir.mkdir()
+    (map_dir / "map.pcd").write_text("VERSION 0.7\nPOINTS 0\nDATA ascii\n")
+    tomogram = map_dir / "tomogram.pickle"
+    tomogram.write_bytes(b"not-a-real-tomogram")
+
+    class Backend:
+        _grid = np.zeros((2, 2), dtype=np.uint8)
+        _resolution = 1.0
+        _origin = np.zeros(2)
+        _last_plan_reached_goal = True
+
+        def plan(self, start, goal):
+            return [np.asarray(start, dtype=float), np.asarray(goal, dtype=float)]
+
+    svc = GlobalPlannerService(
+        planner_name="pct",
+        tomogram=str(tomogram),
+        plan_safety_policy="reject",
+    )
+    svc._create_backend = lambda name=None: Backend()
+    svc.setup()
+
+    gate = svc.map_artifact_gate
+    assert gate["required"] is True
+    assert gate["ok"] is False
+    assert "metadata.json missing" in gate["blockers"]
+
+    with pytest.raises(RuntimeError, match="saved map artifact gate failed"):
+        svc.plan(
+            np.asarray([0.0, 0.0, 0.0], dtype=float),
+            np.asarray([1.0, 1.0, 0.0], dtype=float),
+        )
+
+    report = svc.last_plan_report
+    assert report["selected_planner"] == "pct"
+    assert "metadata.json missing" in report["fallback_reason"]
 
 
 def test_navigation_module_exposes_plan_safety_policy() -> None:

@@ -33,8 +33,10 @@ from core.msgs.semantic import (
     SceneGraph,
 )
 from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat
+from core.runtime_interface import map_frame_id
 
 logger = logging.getLogger(__name__)
+PERCEPTION_MAP_FRAME_ID = map_frame_id()
 
 
 class PerceptionModule(Module, layer=3):
@@ -717,14 +719,17 @@ class PerceptionModule(Module, layer=3):
             ))
 
         return SceneGraph(
-            objects=objects, relations=relations, regions=regions, frame_id="map",
+            objects=objects,
+            relations=relations,
+            regions=regions,
+            frame_id=PERCEPTION_MAP_FRAME_ID,
         )
 
     def _build_detection_scene_graph(self) -> SceneGraph:
         """Fallback scene graph when tracker state is unavailable."""
         return SceneGraph(
             objects=[self._clone_core_detection(det) for det in self._latest_core_detections],
-            frame_id="map",
+            frame_id=PERCEPTION_MAP_FRAME_ID,
         )
 
     def _match_detection_metadata(
