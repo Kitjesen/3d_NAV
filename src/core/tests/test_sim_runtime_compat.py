@@ -1622,6 +1622,62 @@ def test_mujoco_driver_policy_candidates_prioritize_brainstem_default():
     assert driver_mod._POLICY_CANDIDATES[-1].name == "thunder_policy.onnx"
 
 
+def test_legacy_nova_nav_bridge_uses_current_robot_paths():
+    bridge = Path(__file__).resolve().parents[3] / "sim" / "bridge" / "nova_nav_bridge.py"
+    source = bridge.read_text(encoding="utf-8")
+
+    assert 'SIM_DIR / "robot"' not in source
+    assert 'SIM_DIR / "robots" / "nova_dog" / "robot_with_camera.xml"' in source
+    assert 'SIM_DIR / "robots" / "nova_dog" / "policy.onnx"' in source
+    assert '<include file="robot_with_camera.xml"/>' in source
+
+
+def test_sim_boundary_indexes_document_stable_contracts():
+    repo_root = Path(__file__).resolve().parents[3]
+    readme_text = (repo_root / "sim" / "README.md").read_text(encoding="utf-8")
+    repo_layout = (repo_root / "docs" / "REPO_LAYOUT.md").read_text(encoding="utf-8")
+    scripts_index = (repo_root / "sim" / "scripts" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    sim_root = Path(__file__).resolve().parents[3] / "sim"
+    expected = {
+        "bridge": [
+            "thin entrypoints",
+            "do not re-add",
+            "sim/robot/",
+        ],
+        "datasets": [
+            "offline replay inputs",
+            "artifacts/",
+            "not `sim/datasets/`",
+        ],
+        "sensors": [
+            "hardware-free",
+            "sim/assets/livox/",
+            "Do not add ROS 2 or robot service startup side effects",
+        ],
+    }
+
+    for folder, markers in expected.items():
+        readme = sim_root / folder / "README.md"
+        assert readme.exists()
+        text = readme.read_text(encoding="utf-8")
+        for marker in markers:
+            assert marker in text
+
+    for directory in (
+        "validation/",
+        "evaluation/",
+        "external_scenes/",
+        "meshes/",
+    ):
+        assert f"`{directory}`" in readme_text
+    assert "assets, scenes, scripts" not in repo_layout
+    assert "worlds, assets, robots, scripts, validation/evaluation" in repo_layout
+    assert "legacy Go1 demos" in scripts_index
+    assert "sim/robots/go1_playground/" in scripts_index
+
+
 def test_mujoco_driver_prefers_brainstem_policy_and_resolves_repo_relative_paths(monkeypatch, tmp_path):
     import drivers.sim.mujoco_driver_module as driver_mod
 

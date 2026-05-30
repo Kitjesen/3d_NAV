@@ -85,10 +85,13 @@ def test_profile_graph_snapshot_locks_safety_gateway_and_mux_edges():
         assert "SafetyRingModule.stop_cmd->NavigationModule.stop_signal" in wires
         assert f"GatewayModule.stop_cmd->{driver}.stop_signal" in wires
         assert "GatewayModule.stop_cmd->NavigationModule.stop_signal" in wires
+        assert f"MCPServerModule.stop_cmd->{driver}.stop_signal" in wires
+        assert "MCPServerModule.stop_cmd->NavigationModule.stop_signal" in wires
         if "GeofenceManagerModule" in modules:
             assert f"GeofenceManagerModule.stop_cmd->{driver}.stop_signal" in wires
             assert "GeofenceManagerModule.stop_cmd->NavigationModule.stop_signal" in wires
         assert "GatewayModule.cmd_vel->CmdVelMux.teleop_cmd_vel" in wires
+        assert "MCPServerModule.cmd_vel->CmdVelMux.teleop_cmd_vel" in wires
         assert "NavigationModule.mission_status->GatewayModule.mission_status" in wires
         assert "NavigationModule.mission_status->MCPServerModule.mission_status" in wires
         assert "NavigationModule.clear_path->LocalPlannerModule.clear_path" in wires

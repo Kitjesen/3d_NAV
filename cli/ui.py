@@ -177,7 +177,7 @@ def print_banner(profile_name, cfg, system, log_dir: str) -> None:
             _row("teleop",   T.cyan(f"ws://{lan_ip}:{gw}/ws/teleop"))
         except (KeyError, Exception):
             pass
-    _row("health",   T.green(f"✓ {n} modules") + T.dim(f"  {nc} connections"))
+    _row("health",   T.green(f"OK {n} modules") + T.dim(f"  {nc} connections"))
     _row("logs",     T.dim(log_dir))
 
     print(T.navy(f"  ├{'─' * W}┤"))

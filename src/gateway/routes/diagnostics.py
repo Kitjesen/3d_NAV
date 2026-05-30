@@ -183,12 +183,17 @@ def _is_backend_status_payload(value: Mapping[str, Any]) -> bool:
 
 
 def _backend_status_payload(value: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+    payload = {
+        str(key): _json_ready(raw_value)
+        for key, raw_value in value.items()
+    }
+    payload.update({
         "configured_backend": _json_ready(value.get("configured_backend")),
         "backend": _json_ready(value.get("backend")),
         "degraded": bool(value.get("degraded")),
         "degraded_reason": str(value.get("degraded_reason") or ""),
-    }
+    })
+    return payload
 
 
 def _collect_backend_statuses(

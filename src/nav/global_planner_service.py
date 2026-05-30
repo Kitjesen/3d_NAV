@@ -1051,13 +1051,10 @@ class GlobalPlannerService:
         return f"saved map artifact gate failed: {detail}"
 
     def _create_backend(self, name: str | None = None):
+        from core.plugin_seed import seed_builtin_plugins
         from core.registry import get
         name = (name or self._planner_name).lower()
-        # Trigger @register decorators for astar / pct backends
-        try:
-            import global_planning.pct_adapters.src.global_planner_module
-        except ImportError:
-            pass
+        seed_builtin_plugins(groups=("planner_backend",))
         try:
             BackendCls = get("planner_backend", name)
         except KeyError as err:

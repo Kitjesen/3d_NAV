@@ -29,3 +29,17 @@ DIMOS_BENCHMARK_REQUIRED_GATES: tuple[str, ...] = (
     "pct_saved_map_navigation",
 )
 
+G4_SERVER_FULL_SIM_REQUIRED_GATES: tuple[str, ...] = (
+    "gateway_runtime_acceptance",
+    "routecheck_preflight",
+    "multifloor_exploration",
+    "large_terrain",
+    "native_pct_mujoco",
+    "dynamic_obstacle_local_planner",
+    "fastlio2_dynamic_inspection",
+    "moving_obstacle_sweep",
+    "large_loop_closure",
+    "gazebo_runtime",
+    "saved_map_relocalize",
+    "pct_saved_map_navigation",
+)

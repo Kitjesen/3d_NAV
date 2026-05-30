@@ -704,6 +704,8 @@ def _resolve_profile_name(explicit_profile: str | None, args: argparse.Namespace
 def _validate_backend_overrides(args: argparse.Namespace) -> None:
     from core.backend_status import require_backend
     from core.blueprints.stacks.slam import normalize_slam_profile
+    from core.plugin_seed import seed_builtin_plugins
+    from core.registry import list_plugins
 
     slam_profile = getattr(args, "slam_profile", None)
     if slam_profile is not None:
@@ -729,9 +731,7 @@ def _validate_backend_overrides(args: argparse.Namespace) -> None:
         )
 
     if getattr(args, "local_planner_backend", None) is not None:
-        from base_autonomy.modules.local_planner_module import LocalPlannerModule  # noqa: F401
-        from core.registry import list_plugins
-
+        seed_builtin_plugins(groups=("autonomy",), reload_loaded=True)
         require_backend(
             "local_planner",
             args.local_planner_backend,
@@ -739,9 +739,7 @@ def _validate_backend_overrides(args: argparse.Namespace) -> None:
         )
 
     if getattr(args, "path_follower_backend", None) is not None:
-        from base_autonomy.modules.path_follower_module import PathFollowerModule  # noqa: F401
-        from core.registry import list_plugins
-
+        seed_builtin_plugins(groups=("autonomy",), reload_loaded=True)
         require_backend(
             "path_follower",
             args.path_follower_backend,
@@ -749,9 +747,7 @@ def _validate_backend_overrides(args: argparse.Namespace) -> None:
         )
 
     if getattr(args, "terrain_backend", None) is not None:
-        from base_autonomy.modules.terrain_module import TerrainModule  # noqa: F401
-        from core.registry import list_plugins
-
+        seed_builtin_plugins(groups=("autonomy",), reload_loaded=True)
         require_backend(
             "terrain",
             args.terrain_backend,

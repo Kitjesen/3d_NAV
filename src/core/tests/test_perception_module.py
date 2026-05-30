@@ -463,6 +463,29 @@ class TestDetectorConfiguration:
         with pytest.raises(ValueError, match="Unknown perception_encoder backend 'bogus'"):
             PerceptionModule(encoder_type="bogus")
 
+    def test_constructor_accepts_registered_detector_and_encoder_plugins(self):
+        from core.registry import register
+
+        @register("perception_detector", "constructor_test_detector")
+        class _DetectorProvider:
+            @staticmethod
+            def create(_module):
+                return object()
+
+        @register("perception_encoder", "constructor_test_encoder")
+        class _EncoderProvider:
+            @staticmethod
+            def create(_module):
+                return object()
+
+        mod = PerceptionModule(
+            detector_type="constructor_test_detector",
+            encoder_type="constructor_test_encoder",
+        )
+
+        assert mod._detector_type == "constructor_test_detector"
+        assert mod._encoder_type == "constructor_test_encoder"
+
     @patch("semantic.perception.semantic_perception.instance_tracker.InstanceTracker")
     def test_setup_uses_tracking_iou_threshold(self, instance_tracker_cls):
         mod = PerceptionModule(

@@ -90,9 +90,36 @@ def test_autonomy_backend_registry_names_are_visible():
     from base_autonomy.modules.terrain_module import TerrainModule  # noqa: F401
     from core.registry import list_plugins
 
-    assert {"nanobind", "native", "simple"} <= set(list_plugins("terrain"))
+    assert {"nanobind", "native", "cmu", "simple"} <= set(list_plugins("terrain"))
     assert {"nav_core", "pure_pursuit", "pid"} <= set(list_plugins("path_follower"))
     assert {"nanobind", "cmu", "cmu_py", "simple"} <= set(list_plugins("local_planner"))
+
+
+def test_autonomy_backend_allowlists_match_registry_catalog():
+    from base_autonomy.modules import local_planner_module
+    from base_autonomy.modules import path_follower_module
+    from base_autonomy.modules import terrain_module
+    from core.registry import list_plugins
+
+    assert set(terrain_module._AVAILABLE_TERRAIN_BACKENDS) <= set(list_plugins("terrain"))
+    assert set(local_planner_module._AVAILABLE_LOCAL_PLANNER_BACKENDS) <= set(
+        list_plugins("local_planner")
+    )
+    assert set(path_follower_module._AVAILABLE_PATH_FOLLOWER_BACKENDS) <= set(
+        list_plugins("path_follower")
+    )
+
+
+def test_terrain_cmu_backend_uses_native_setup(monkeypatch):
+    from base_autonomy.modules.terrain_module import TerrainModule
+
+    called = []
+    terrain = TerrainModule(backend="cmu")
+    monkeypatch.setattr(terrain, "_setup_native", lambda: called.append("native"))
+
+    terrain.setup()
+
+    assert called == ["native"]
 
 
 @pytest.mark.parametrize(

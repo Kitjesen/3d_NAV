@@ -1125,6 +1125,15 @@ class TestMCPServerModule(unittest.TestCase):
         result = json.loads(m.set_mode("autonomous"))
         self.assertEqual(result["mode"], "autonomous")
 
+    def test_set_mode_estop_publishes_stop_and_zero_twist(self):
+        import json
+        m = self._make()
+        result = json.loads(m.set_mode("estop"))
+        self.assertEqual(result["mode"], "estop")
+        self.assertEqual(m.mode_cmd.msg_count, 1)
+        self.assertEqual(m.stop_cmd.msg_count, 1)
+        self.assertEqual(m.cmd_vel.msg_count, 1)
+
     def test_set_mode_invalid(self):
         import json
         m = self._make()

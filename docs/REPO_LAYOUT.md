@@ -63,7 +63,7 @@ brain/lingtu/
 │       ├── planner_pct_py.launch.py
 │       ├── planner_far.launch.py
 │       └── planner_stub.launch.py
-├── sim/                   # MuJoCo simulation assets, scenes, scripts
+├── sim/                   # Simulation engine, worlds, assets, robots, scripts, validation/evaluation
 ├── tests/                 # Integration + planning tests (some need ROS2)
 ├── tools/                 # Robot-side helpers (dashboards, BPU export, diagnostics)
 ├── scripts/               # Build helpers, deploy, ota, proto, lingtu CLI shell wrapper

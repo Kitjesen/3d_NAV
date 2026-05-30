@@ -41,7 +41,7 @@
 - `run_semantic_full_stack.py` — 语义全栈
 - `demo_search.py` — 搜索演示
 - `policy_nav_smoke.py` — policy 导航冒烟
-- `go1_indoor_nav.py` / `go1_nav_full.py` — Go1 室内/全栈导航
+- `go1_indoor_nav.py` / `go1_nav_full.py` — legacy Go1 demos; require optional `sim/robots/go1_playground/` assets and are not part of current G4 closure
 - `nav_overlay.py` — 导航叠加可视化
 - `view_scene.py` — 场景查看
 - `benchmark_following.py` — 跟随基准

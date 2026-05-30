@@ -31,8 +31,8 @@ if str(SRC_DIR) not in sys.path:
 
 from core.runtime_interface import FRAMES, TOPICS
 
-ROBOT_XML = SIM_DIR / "robot" / "robot.xml"
-POLICY_ONNX = SIM_DIR / "robot" / "policy.onnx"
+ROBOT_XML = SIM_DIR / "robots" / "nova_dog" / "robot_with_camera.xml"
+POLICY_ONNX = SIM_DIR / "robots" / "nova_dog" / "policy.onnx"
 
 # ── 场景 XML ─────────────────────────────────────────────────────
 SCENE_TEMPLATE = """\
@@ -54,7 +54,7 @@ SCENE_TEMPLATE = """\
     <material name="wall_mat" texture="wall_tex"/>
   </asset>
 
-  <include file="robot.xml"/>
+  <include file="robot_with_camera.xml"/>
 
   <worldbody>
     <light pos="5 -5 8" dir="-0.3 0.3 -1" diffuse="0.9 0.88 0.82" castshadow="true"/>
@@ -624,7 +624,7 @@ def main():
     parser.add_argument('--scene', type=str, default=None,
                         help='自定义场景 XML 路径')
     parser.add_argument('--policy', type=str, default=None,
-                        help='ONNX policy 路径 (默认: sim/robot/policy.onnx)')
+                        help='ONNX policy 路径 (默认: sim/robots/nova_dog/policy.onnx)')
     parser.add_argument('--start', type=float, nargs=3, default=[0.0, 0.0, 0.35],
                         metavar=('X', 'Y', 'Z'), help='机器人起始位置 (m), 默认 0 0 0.35')
     args = parser.parse_args()

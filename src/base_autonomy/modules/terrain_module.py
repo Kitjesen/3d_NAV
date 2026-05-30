@@ -4,6 +4,7 @@ Analyzes point cloud + odometry to produce terrain maps for local planning.
 
 Backends:
   "nanobind" — C++ terrain_core via nanobind (zero-copy, GIL-released, preferred)
+  "cmu"      — alias for the legacy C++ NativeModule terrain stack
   "native"   — C++ NativeModule subprocess (legacy, S100P fallback)
   "simple"   — Python passthrough (testing, no analysis)
 
@@ -33,10 +34,11 @@ from core.stream import In, Out
 logger = logging.getLogger(__name__)
 
 
-_AVAILABLE_TERRAIN_BACKENDS = ("nanobind", "native", "simple")
+_AVAILABLE_TERRAIN_BACKENDS = ("nanobind", "native", "cmu", "simple")
 
 
 @register("terrain", "nanobind", description="C++ terrain analysis via nanobind (zero-copy)")
+@register("terrain", "cmu", description="CMU-style C++ terrain analysis via NativeModule subprocess")
 @register("terrain", "native", description="C++ terrain analysis via NativeModule subprocess")
 @register("terrain", "simple", description="Passthrough for testing")
 class TerrainModule(Module, layer=2):
@@ -44,6 +46,7 @@ class TerrainModule(Module, layer=2):
 
     "nanobind": C++ TerrainAnalysisCore called directly from Python.
       Data flows through In/Out ports. Zero-copy numpy. GIL released during C++.
+    "cmu": Alias for the legacy NativeModule subprocess (C++ process + DDS).
     "native": Legacy NativeModule subprocess (C++ process + DDS).
     "simple": Passthrough for testing.
     """
@@ -77,7 +80,7 @@ class TerrainModule(Module, layer=2):
 
         if self._backend == "nanobind":
             self._setup_nanobind()
-        elif self._backend == "native":
+        elif self._backend in {"native", "cmu"}:
             self._setup_native()
         else:
             logger.info("TerrainModule: simple backend (passthrough)")
@@ -139,7 +142,7 @@ class TerrainModule(Module, layer=2):
 
     def start(self):
         super().start()
-        if self._backend == "native":
+        if self._backend in {"native", "cmu"}:
             started = 0
             for name, node in self._nodes.items():
                 try:

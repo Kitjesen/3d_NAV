@@ -6,22 +6,14 @@ import logging
 
 from core.blueprint import Blueprint
 from core.config import get_config
+from core.plugin_seed import seed_builtin_plugins
 from core.registry import auto_select, get
 
 logger = logging.getLogger(__name__)
 
 
 def _ensure_drivers_registered():
-    for mod in (
-        "drivers.real.thunder.han_dog_module",
-        "core.blueprints.stub",
-        "drivers.sim.mujoco_driver_module",
-        "drivers.sim.ros2_sim_driver",
-    ):
-        try:
-            __import__(mod)
-        except ImportError:
-            pass
+    seed_builtin_plugins(groups=("driver",))
 
 
 def driver(robot: str = "thunder", **config) -> Blueprint:

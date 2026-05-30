@@ -162,6 +162,9 @@ def test_diagnostics_plugin_catalog_route_exposes_active_backend_status():
                     "configured_backend": "pct",
                     "backend": "astar",
                     "fallback_backend": "astar",
+                    "reconfigurable": True,
+                    "capabilities": ["global_planning", "saved_map_navigation"],
+                    "readiness": {"pct_native": False, "fallback_ready": True},
                     "degraded": True,
                     "degraded_reason": "pct path_safety failed",
                 }
@@ -197,6 +200,10 @@ def test_diagnostics_plugin_catalog_route_exposes_active_backend_status():
     assert vector["backend"] == "lexical_hash"
     assert planner["configured_backend"] == "pct"
     assert planner["backend"] == "astar"
+    assert planner["fallback_backend"] == "astar"
+    assert planner["reconfigurable"] is True
+    assert planner["capabilities"] == ["global_planning", "saved_map_navigation"]
+    assert planner["readiness"] == {"pct_native": False, "fallback_ready": True}
     assert planner["degraded"] is True
     assert broken["error"] == "health failed"
 
@@ -263,6 +270,13 @@ def test_gateway_motion_backend_switch_reads_nested_navigation_state():
 
     assert result["ok"] is False
     assert result["reason"] == "backend_reconfigure_unsupported"
+
+
+def test_gateway_and_mcp_backend_route_tables_stay_in_parity():
+    from gateway import gateway_module, mcp_server
+
+    assert mcp_server._MOTION_BACKEND_CATEGORIES == gateway_module._MOTION_BACKEND_CATEGORIES
+    assert mcp_server._BACKEND_RECONFIGURE_TARGETS == gateway_module._BACKEND_RECONFIGURE_TARGETS
 
 
 def test_mcp_backend_switch_tool_uses_gateway_guard():

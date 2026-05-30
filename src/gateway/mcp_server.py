@@ -425,6 +425,7 @@ class MCPServerModule(Module, layer=6):
         self.mode_cmd.publish(mode)
         if mode == "estop":
             self.stop_cmd.publish(2)
+            self.cmd_vel.publish(Twist())
         return json.dumps({"mode": mode})
 
     @skill

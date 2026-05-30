@@ -18,13 +18,14 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from core.algorithm_gates import DIMOS_BENCHMARK_REQUIRED_GATES
+from core.algorithm_gates import G4_SERVER_FULL_SIM_REQUIRED_GATES
 from core.algorithm_gates import INSPECTION_MVP_REQUIRED_GATES
 
 MID360_PATTERN_REL = "sim/assets/livox/mid360.npy"
 MID360_PATTERN_SHA256 = "448821576a658673e8f7929992c8c0d687eb052657d7b584d038729a83da1bfb"
 LIVE_NAV_MAP_TOPIC = "/nav/map_cloud"
 DEFAULT_REQUIRED_MAX_REPORT_AGE_S = 24.0 * 60.0 * 60.0
-DEFAULT_FRESHNESS_REQUIRED_GATES = frozenset(DIMOS_BENCHMARK_REQUIRED_GATES)
+DEFAULT_FRESHNESS_REQUIRED_GATES = frozenset(G4_SERVER_FULL_SIM_REQUIRED_GATES)
 
 
 @dataclass(frozen=True)
@@ -2631,6 +2632,7 @@ ALGORITHM_PRESETS: dict[str, tuple[str, ...]] = {
         *INSPECTION_MVP_REQUIRED_GATES,
     ),
     "dimos_benchmark": (*DIMOS_BENCHMARK_REQUIRED_GATES,),
+    "g4_server_full_sim": (*G4_SERVER_FULL_SIM_REQUIRED_GATES,),
     "full_algorithm": tuple(spec.name for spec in GATES),
 }
 
@@ -2696,6 +2698,8 @@ ALGORITHM_VALIDATION_FLOW: tuple[dict[str, Any], ...] = (
 def _ordered_gate_names(names: set[str]) -> list[str]:
     if names == set(DIMOS_BENCHMARK_REQUIRED_GATES):
         return list(DIMOS_BENCHMARK_REQUIRED_GATES)
+    if names == set(G4_SERVER_FULL_SIM_REQUIRED_GATES):
+        return list(G4_SERVER_FULL_SIM_REQUIRED_GATES)
     if names == set(INSPECTION_MVP_REQUIRED_GATES):
         return list(INSPECTION_MVP_REQUIRED_GATES)
     ordered = [spec.name for spec in GATES if spec.name in names]
@@ -3149,12 +3153,12 @@ def summarize(
 
     missing_or_failed = [
         name
-        for name in sorted(required_names)
+        for name in _ordered_gate_names(required_names)
         if not bool((gates.get(name) or {}).get("ok"))
     ]
     optional_missing_or_failed = [
         name
-        for name in sorted(set(gates) - required_names)
+        for name in _ordered_gate_names(set(gates) - required_names)
         if not bool((gates.get(name) or {}).get("ok"))
     ]
     verified = {name: bool(item.get("ok")) for name, item in gates.items()}
@@ -3291,7 +3295,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Named required-gate preset; inspection_mvp is product-facing "
-            "patrol readiness, dimos_benchmark is the strict reference suite."
+            "patrol readiness, dimos_benchmark is the strict reference suite, "
+            "and g4_server_full_sim is the server-side full simulation matrix."
         ),
     )
     parser.add_argument(

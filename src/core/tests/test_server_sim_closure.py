@@ -14,6 +14,9 @@ from core.runtime_interface import resolved_runtime_data_flow
 from sim.scripts import server_sim_closure
 
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
 def _write_json(path: Path, payload: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -40,6 +43,90 @@ def test_dimos_required_gates_come_from_core_algorithm_gate_constant():
         DIMOS_BENCHMARK_REQUIRED_GATES
     )
     assert DIMOS_BENCHMARK_REQUIRED_GATES[0] == "gateway_runtime_acceptance"
+
+
+def _readme_current_full_closure_gates() -> tuple[str, ...]:
+    readme = (REPO_ROOT / "sim/README.md").read_text(encoding="utf-8")
+    lines = readme.splitlines()
+    start = lines.index("Current full closure gates:")
+    gates: list[str] = []
+    for line in lines[start + 1:]:
+        if not line.strip():
+            if gates:
+                break
+            continue
+        if line.startswith("| `"):
+            gates.append(line.split("`", 2)[1])
+    return tuple(gates)
+
+
+def test_g4_server_full_sim_required_gates_come_from_core_algorithm_gate_constant():
+    from core.algorithm_gates import DIMOS_BENCHMARK_REQUIRED_GATES
+    from core.algorithm_gates import G4_SERVER_FULL_SIM_REQUIRED_GATES
+
+    assert tuple(server_sim_closure.ALGORITHM_PRESETS["g4_server_full_sim"]) == tuple(
+        G4_SERVER_FULL_SIM_REQUIRED_GATES
+    )
+    assert set(G4_SERVER_FULL_SIM_REQUIRED_GATES) == (
+        set(DIMOS_BENCHMARK_REQUIRED_GATES) | {"multifloor_exploration"}
+    )
+
+
+def test_readme_current_full_closure_gates_match_g4_server_full_sim_preset():
+    from core.algorithm_gates import G4_SERVER_FULL_SIM_REQUIRED_GATES
+
+    assert _readme_current_full_closure_gates() == tuple(
+        G4_SERVER_FULL_SIM_REQUIRED_GATES
+    )
+
+
+def test_readme_full_closure_command_uses_g4_server_full_sim_preset():
+    readme = (REPO_ROOT / "sim/README.md").read_text(encoding="utf-8")
+    command_section = readme.split(
+        "PYTHONPATH=src:. python sim/scripts/server_sim_closure.py",
+        1,
+    )[1].split("```", 1)[0]
+
+    assert "--preset g4_server_full_sim" in command_section
+
+
+def test_g4_summary_required_gate_sequence_preserves_core_order(tmp_path: Path, monkeypatch):
+    from core.algorithm_gates import G4_SERVER_FULL_SIM_REQUIRED_GATES
+
+    monkeypatch.setattr(server_sim_closure, "ROOT", tmp_path)
+
+    summary = server_sim_closure.summarize(
+        report_overrides={},
+        required=set(G4_SERVER_FULL_SIM_REQUIRED_GATES),
+        include_optional=False,
+    )
+
+    assert tuple(summary["required_gate_sequence"]) == G4_SERVER_FULL_SIM_REQUIRED_GATES
+
+
+def test_g4_missing_required_gates_preserve_core_order(tmp_path: Path, monkeypatch):
+    from core.algorithm_gates import G4_SERVER_FULL_SIM_REQUIRED_GATES
+
+    monkeypatch.setattr(server_sim_closure, "ROOT", tmp_path)
+
+    summary = server_sim_closure.summarize(
+        report_overrides={},
+        required=set(G4_SERVER_FULL_SIM_REQUIRED_GATES),
+        include_optional=False,
+    )
+
+    assert tuple(summary["missing_or_failed"]) == G4_SERVER_FULL_SIM_REQUIRED_GATES
+    assert tuple(
+        gap.split(":", 1)[0] for gap in summary["remaining_gaps"]
+    ) == G4_SERVER_FULL_SIM_REQUIRED_GATES
+
+
+def test_g4_required_gates_are_default_freshness_required():
+    from core.algorithm_gates import G4_SERVER_FULL_SIM_REQUIRED_GATES
+
+    assert set(G4_SERVER_FULL_SIM_REQUIRED_GATES) <= set(
+        server_sim_closure.DEFAULT_FRESHNESS_REQUIRED_GATES
+    )
 
 
 def test_dimos_summary_required_gate_sequence_preserves_core_order(tmp_path: Path, monkeypatch):
@@ -3505,6 +3592,17 @@ def test_server_sim_closure_dimos_benchmark_preset_selects_reference_gate_set():
         "saved_map_relocalize",
         "pct_saved_map_navigation",
     }
+
+
+def test_server_sim_closure_g4_server_full_sim_preset_selects_closure_gate_set():
+    from core.algorithm_gates import G4_SERVER_FULL_SIM_REQUIRED_GATES
+
+    parser = server_sim_closure._build_parser()
+    args = parser.parse_args(["--preset", "g4_server_full_sim"])
+
+    assert server_sim_closure._required_from_args(args) == set(
+        G4_SERVER_FULL_SIM_REQUIRED_GATES
+    )
 
 
 def test_server_sim_closure_gateway_runtime_acceptance_gate_is_product_data_plane():

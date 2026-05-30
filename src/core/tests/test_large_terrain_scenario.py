@@ -66,6 +66,25 @@ def test_large_terrain_assets_write_schema_and_route_catalog(tmp_path):
     }
 
 
+def test_large_terrain_assets_publish_same_source_saved_map_metadata(tmp_path):
+    from core.same_source_map_artifacts import validate_saved_map_artifact_dir
+
+    assets = build_large_terrain_assets(tmp_path)
+
+    result = validate_saved_map_artifact_dir(
+        assets.tomogram.parent,
+        require_tomogram=True,
+        expected_source_profile="large_terrain_synthetic_assets",
+        expected_data_source="synthetic_large_terrain_geometry",
+        expected_frame_id="map",
+    )
+
+    assert result["ok"] is True, result["blockers"]
+    assert result["checked_required_artifacts"] == ["map_pcd", "tomogram"]
+    assert result["artifacts"]["map_pcd"]["sha256_ok"] is True
+    assert result["artifacts"]["tomogram"]["sha256_ok"] is True
+
+
 def test_large_terrain_tomogram_marks_obstacles_and_terrain_costs(tmp_path):
     assets = build_large_terrain_assets(tmp_path)
 

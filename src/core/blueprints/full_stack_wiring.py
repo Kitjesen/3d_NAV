@@ -241,6 +241,9 @@ def apply_full_stack_wires(
             WireSpec("GatewayModule", "stop_cmd", drv, "stop_signal"),
             WireSpec("GatewayModule", "stop_cmd", "NavigationModule", "stop_signal"),
             WireSpec("GatewayModule", "cmd_vel", "CmdVelMux", "teleop_cmd_vel"),
+            WireSpec("MCPServerModule", "stop_cmd", drv, "stop_signal"),
+            WireSpec("MCPServerModule", "stop_cmd", "NavigationModule", "stop_signal"),
+            WireSpec("MCPServerModule", "cmd_vel", "CmdVelMux", "teleop_cmd_vel"),
         ],
     )
 

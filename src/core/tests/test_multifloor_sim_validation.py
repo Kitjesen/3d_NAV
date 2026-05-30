@@ -55,6 +55,25 @@ def test_multifloor_assets_have_floor_transition_gateway(tmp_path):
     assert int(np.sum(mask_t & mask_g)) > 0
 
 
+def test_multifloor_assets_publish_same_source_saved_map_metadata(tmp_path):
+    from core.same_source_map_artifacts import validate_saved_map_artifact_dir
+
+    assets = build_multifloor_assets(tmp_path)
+
+    result = validate_saved_map_artifact_dir(
+        assets.tomogram.parent,
+        require_tomogram=True,
+        expected_source_profile="multifloor_synthetic_assets",
+        expected_data_source="synthetic_multifloor_geometry",
+        expected_frame_id="map",
+    )
+
+    assert result["ok"] is True, result["blockers"]
+    assert result["checked_required_artifacts"] == ["map_pcd", "tomogram"]
+    assert result["artifacts"]["map_pcd"]["sha256_ok"] is True
+    assert result["artifacts"]["tomogram"]["sha256_ok"] is True
+
+
 def test_multifloor_lidar_localization_and_frontier_contracts():
     localization = run_lidar_localization_contract()
     exploration = run_frontier_exploration_probe()

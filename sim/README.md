@@ -44,7 +44,10 @@ Four pre-built environments are provided, each targeting different navigation ch
 | Building | `worlds/building_scene.xml` | Multi-room indoor building with corridors | None |
 | Factory | `worlds/factory_scene.xml` | Warehouse layout with shelving and obstacles | None |
 
-Additional composite scenes in `scenes/` combine robots with specific environments (e.g., `go2_room_nova.xml` places a Go2 in a furnished room).
+Additional composite scenes are kept in `worlds/` alongside the base
+environments (for example, `go2_room_nova.xml` places a Go2 in a furnished
+room). `sim/worlds/` is the canonical scene path used by profiles and runtime
+contracts.
 
 ## 4. LiDAR Simulation
 
@@ -127,8 +130,9 @@ bash sim/scripts/install_deps.sh        # optional: installs all deps
 ### 6.2 Basic Simulation (No ROS2)
 
 ```bash
-python sim/scripts/go1_indoor_nav.py    # Go1 indoor navigation demo
-python lingtu.py sim                     # Full LingTu stack in simulation
+# Legacy Go1 demos require optional sim/robots/go1_playground assets.
+python sim/scripts/go1_indoor_nav.py    # legacy Go1 indoor demo
+python lingtu.py sim                    # Full LingTu stack in simulation
 ```
 
 ### 6.2.1 Product Tasks On Simulation Endpoints
@@ -203,6 +207,7 @@ PYTHONPATH=src:. python sim/scripts/routecheck_preflight_gate.py \
   --strict
 
 PYTHONPATH=src:. python sim/scripts/server_sim_closure.py \
+  --preset g4_server_full_sim \
   --json-out artifacts/server_sim_closure_summary_all.json \
   --strict
 ```
@@ -220,16 +225,18 @@ Current full closure gates:
 
 | Gate | Required evidence |
 | --- | --- |
+| `gateway_runtime_acceptance` | Gateway runtime data plane, stage evidence, and non-motion command whitelist through ModulePort streams |
+| `routecheck_preflight` | Gateway non-motion baseline/candidate route preflight with zero published goal/cmd_vel/stop |
 | `multifloor_exploration` | multi-floor matrix, frontier loop, LiDAR localization contract, native PCT, nanobind local planning, nav_core tracking |
 | `large_terrain` | PCT/native planning on large terrain routes with path safety |
 | `native_pct_mujoco` | native PCT route through ROS2 local planner/path follower into MuJoCo kinematic motion |
 | `dynamic_obstacle_local_planner` | nanobind local planner replans around changing obstacles |
-| `fastlio2_live` | live MuJoCo LiDAR/IMU through Fast-LIO2 and SlamBridge tracking |
-| `policy_nav` | ONNX gait policy plus full-stack simulated navigation dataflow |
-| `gateway_dry_run` | Gateway preview/goal command flow without hardware cmd_vel |
-| `routecheck_preflight` | Gateway non-motion baseline/candidate route preflight with zero published goal/cmd_vel/stop |
+| `fastlio2_dynamic_inspection` | live MID-360/IMU through Fast-LIO2 into PCT/local planning with moving-obstacle video evidence |
+| `moving_obstacle_sweep` | moving-obstacle inspection evidence across speed and density bins |
+| `large_loop_closure` | long-range live Fast-LIO/PCT/local planner loop with bounded drift and return closure |
 | `gazebo_runtime` | ROS-native Gazebo TF, odometry, and point-cloud frame smoke |
 | `saved_map_relocalize` | saved-map relocalization contract for localizer navigation mode |
+| `pct_saved_map_navigation` | saved-map PCT navigation after relocalization through localPlanner/pathFollower and MuJoCo motion |
 
 For server bootstrap verification, `scripts/deploy/setup_server_ros_pct.sh`
 runs the setup-safe subset it generates itself: the multi-floor closure gate,
@@ -679,7 +686,7 @@ python sim/scripts/benchmark_following.py
 | Unitree Go2 | `robots/go2/` | RL policy (48D obs, action_scale=0.5) | MuJoCo Playground compatible |
 | Thunder v3 | `assets/{urdf,xml,mjcf}/` | LingTu MuJoCo adapter | Current upstream CAD asset baseline |
 | Thunder v3 compatibility | `robots/nova_dog/robot_with_camera.xml` | LingTu MuJoCo adapter | Legacy path now mirrors the current Thunder v3 runtime XML |
-| Thunder v3 URDF compatibility | `robot/thunder.urdf` | URDF | Legacy path with mesh references adjusted to `assets/meshes/` |
+| Thunder v3 URDF compatibility | `robots/thunder.urdf` | URDF | Compatibility path with mesh references adjusted to `assets/meshes/` |
 
 ## 8. Datasets
 
@@ -804,20 +811,22 @@ messages in the bag.
 | Directory | Contents |
 |-----------|----------|
 | `engine/` | Simulation engine framework (physics loop, MuJoCo wrappers, scenario management) |
-| `worlds/` | MuJoCo XML scene definitions (4 environments) |
-| `scenes/` | Composite robot + environment configs |
-| `robots/` | Robot model definitions (Go2, NOVA Dog) |
-| `robot/` | Legacy Thunder URDF + meshes |
-| `sensors/` | LiDAR simulation (Livox Mid-360 Python fallback) |
+| `worlds/` | Canonical MuJoCo XML and Gazebo SDF world/scene definitions |
+| `robots/` | Compatibility robot model and policy paths for older scripts |
+| `assets/` | Canonical Thunder v3 robot assets, meshes, MJCF/URDF, and Livox assets |
+| `sensors/` | Standalone sensor simulators and fallbacks |
 | `bridge/` | Physics ↔ navigation bridges (ROS2, direct Python, visualization) |
 | `following/` | Person-following simulation (FSM, controllers, perception, metrics) |
-| `semantic/` | Semantic navigation simulation tests |
+| `semantic/` | Legacy semantic simulation test residue |
 | `datasets/` | Offline LiDAR/IMU datasets |
-| `scripts/` | Demo scripts, benchmarks, terrain generation, dependency installer |
+| `scripts/` | Stable launcher, gate, validation, demo, and benchmark script contract |
+| `validation/` | Full-system validation package used by scripts and tests |
+| `evaluation/` | Offline SLAM evaluation manifests and dataset tooling |
+| `external_scenes/` | Optional external/license-constrained scene placeholders |
+| `meshes/` | Legacy mesh path; keep until references are fully audited |
 | `launch/` | ROS2 launch files |
-| `assets/` | Generated terrain meshes |
 | `maps/` | Saved simulation maps |
-| `output/` | Demo videos and benchmark results |
+| `output/` | Local generated outputs; reproducible evidence should prefer `artifacts/` |
 | `configs/` | Simulation configuration files |
 
 ## 11. Dependencies

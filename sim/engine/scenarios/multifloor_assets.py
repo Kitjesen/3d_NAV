@@ -10,6 +10,8 @@ from typing import Any
 
 import numpy as np
 
+from core.same_source_map_artifacts import build_saved_map_metadata, sha256_file
+
 
 @dataclass(frozen=True)
 class MultiFloorBox:
@@ -401,24 +403,49 @@ def build_multifloor_assets(
     metadata = out / "metadata.json"
 
     scene_xml.write_text(_scene_xml(start, goal), encoding="utf-8")
+    tomogram_payload = _tomogram(
+        floors=floors,
+        resolution=resolution,
+        origin=origin,
+        shape_xy=shape_xy,
+        slice_dh=slice_dh,
+        obstacle_thr=obstacle_thr,
+        inflation=inflation,
+    )
     with tomogram_path.open("wb") as fh:
-        pickle.dump(
-            _tomogram(
-                floors=floors,
-                resolution=resolution,
-                origin=origin,
-                shape_xy=shape_xy,
-                slice_dh=slice_dh,
-                obstacle_thr=obstacle_thr,
-                inflation=inflation,
-            ),
-            fh,
-            protocol=pickle.HIGHEST_PROTOCOL,
-        )
+        pickle.dump(tomogram_payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
     _write_ascii_pcd(map_pcd)
-    metadata.write_text(
-        json.dumps(
-            {
+    map_sha = sha256_file(map_pcd)
+    tomogram_sha = sha256_file(tomogram_path)
+    point_count = int(len(sample_multifloor_map_points()))
+    metadata_payload = build_saved_map_metadata(
+        source_profile="multifloor_synthetic_assets",
+        data_source="synthetic_multifloor_geometry",
+        slam_source="synthetic_multifloor_map_cloud",
+        localization_source="synthetic_multifloor_ground_truth",
+        mapping_source="synthetic_multifloor_geometry_to_map_pcd_and_tomogram",
+        frame_id="map",
+        artifacts={
+            "map_pcd": {
+                "path": str(map_pcd),
+                "sha256": map_sha,
+                "source_profile": "multifloor_synthetic_assets",
+                "data_source": "synthetic_multifloor_geometry",
+                "slam_source": "synthetic_multifloor_map_cloud",
+                "frame_id": "map",
+                "point_count": point_count,
+            },
+            "tomogram": {
+                "path": str(tomogram_path),
+                "sha256": tomogram_sha,
+                "source_map_sha256": map_sha,
+                "source_profile": "multifloor_synthetic_assets",
+                "data_source": "synthetic_multifloor_geometry",
+                "frame_id": "map",
+                "shape": list(np.asarray(tomogram_payload["data"]).shape),
+            },
+        },
+        extra_metadata={
                 "schema_version": 1,
                 "name": "multifloor_stairs",
                 "source": "synthetic_sim_geometry",
@@ -435,11 +462,10 @@ def build_multifloor_assets(
                 "inflation_m": inflation,
                 "transitions": [asdict(t) for t in floor_transitions()],
                 "obstacles": [asdict(box) for box in multifloor_boxes()],
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
+        },
+    )
+    metadata.write_text(
+        json.dumps(metadata_payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return MultiFloorAssets(

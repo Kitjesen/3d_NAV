@@ -197,8 +197,8 @@ class PerceptionModule(Module, layer=3):
         **kw: Any,
     ) -> None:
         super().__init__(**kw)
-        require_backend("perception_detector", detector_type, _PERCEPTION_DETECTOR_BACKENDS)
-        require_backend("perception_encoder", encoder_type, _PERCEPTION_ENCODER_BACKENDS)
+        require_backend("perception_detector", detector_type, list_plugins("perception_detector"))
+        require_backend("perception_encoder", encoder_type, list_plugins("perception_encoder"))
         self._detector_type = detector_type
         self._encoder_type = encoder_type
         self._detector_status = BackendStatus.configured_as(detector_type)
