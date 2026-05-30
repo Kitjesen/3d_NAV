@@ -133,7 +133,7 @@ def main():
 
     sim_dir = _ROOT / "sim"
     robot_xml = sim_dir / "robots" / "nova_dog" / "robot_with_camera.xml"
-    scene_xml = sim_dir / "scenes" / "go2_room_nova.xml"
+    scene_xml = sim_dir / "worlds" / "go2_room_nova.xml"
     policy_path = find_policy()
 
     # Person trajectory: walks through doors, never through walls

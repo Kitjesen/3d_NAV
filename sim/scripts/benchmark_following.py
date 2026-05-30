@@ -157,7 +157,7 @@ def main():
 
     sim_dir = _ROOT / "sim"
     robot_xml = sim_dir / "robots" / "nova_dog" / "robot_with_camera.xml"
-    scene_xml = sim_dir / "scenes" / "go2_room_nova.xml"
+    scene_xml = sim_dir / "worlds" / "go2_room_nova.xml"
     policy_path = find_policy()
     output_dir = sim_dir / "output" / "benchmark"
     os.makedirs(output_dir, exist_ok=True)

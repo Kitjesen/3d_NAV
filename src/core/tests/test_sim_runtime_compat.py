@@ -59,7 +59,7 @@ def test_thunder_v3_urdf_xml_assets_are_current_and_resolvable():
     sim_root = Path(__file__).resolve().parents[3] / "sim"
     urdf_path = sim_root / "assets" / "urdf" / "thunder_v3.urdf"
     xml_path = sim_root / "assets" / "xml" / "thunder_v3.xml"
-    compat_urdf_path = sim_root / "robot" / "thunder.urdf"
+    compat_urdf_path = sim_root / "robots" / "thunder.urdf"
 
     assert urdf_path.exists()
     assert xml_path.exists()

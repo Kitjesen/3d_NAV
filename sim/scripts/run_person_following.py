@@ -196,7 +196,7 @@ def main():
     # Paths
     sim_dir = Path(__file__).resolve().parent.parent
     robot_xml = sim_dir / "robots" / "nova_dog" / "robot_with_camera.xml"
-    scene_xml = Path(args.scene) if args.scene else sim_dir / "scenes" / "go2_room_nova.xml"
+    scene_xml = Path(args.scene) if args.scene else sim_dir / "worlds" / "go2_room_nova.xml"
 
     policy_path = args.policy
     if policy_path is None:
