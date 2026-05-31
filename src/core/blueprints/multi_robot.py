@@ -11,7 +11,7 @@ Typical usage::
 
     system = autoconnect(
         multi_robot_blueprint(
-            ["nova_dog", "omni_cart"],
+            ["stub", "stub"],
             enable_semantic=True,
             llm="mock",
             enable_gateway=False,
@@ -43,13 +43,18 @@ def multi_robot_blueprint(
 
     Args:
         robots:
-            List of robot profile names (e.g. ``["nova_dog", "omni_cart"]``).
-            Each must be a registered robot preset understood by
-            :func:`full_stack_blueprint`.
+            List of robot preset names (e.g. ``["stub", "nova_dog"]``).
+            Each must be a registered driver backend understood by
+            :func:`full_stack_blueprint`.  Valid values include ``"stub"``
+            (testing, no hardware), ``"thunder"`` (real S100P),
+            ``"nova_dog"`` (gRPC brainstem), ``"sim_mujoco"`` (MuJoCo sim),
+            and ``"sim_ros2"`` (ROS2 bridge).
         **shared_config:
             Configuration forwarded to :func:`full_stack_blueprint` for every
             robot.  Use this to set shared options such as ``llm="mock"``,
             ``enable_gateway=False``, or ``gateway_port=...``.
+            Do **not** pass ``robot`` or ``namespace`` here — these are
+            set per-robot automatically.
 
     Returns:
         A single :class:`~core.blueprint.Blueprint` with every robot's
@@ -57,7 +62,7 @@ def multi_robot_blueprint(
 
     Cross-robot wiring example::
 
-        bp = multi_robot_blueprint(["nova_dog", "omni_cart"])
+        bp = multi_robot_blueprint(["stub", "stub"])
         bp.wire(
             "robot_0/NavigationModule", "mission_status",
             "robot_1/SafetyRingModule", "external_mission_status",

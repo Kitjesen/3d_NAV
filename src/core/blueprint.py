@@ -496,6 +496,17 @@ def _do_wire(
     )
 
 
+def _get_ns(mod_name: str) -> str:
+    """Extract the leading namespace from a ``/``-separated module name.
+
+    Returns:
+        The namespace prefix (e.g. ``"robot_0"``) or ``""`` if the name
+        has no namespace separator.
+    """
+    idx = mod_name.find("/")
+    return mod_name[:idx] if idx > 0 else ""
+
+
 def _do_auto_wire(
     instances: dict[str, Any],
     out_ports: dict[str, dict[str, Out]],
@@ -503,7 +514,14 @@ def _do_auto_wire(
     wired_in:  set[tuple[str, str]],
     connections: list[tuple[str, str, str, str]],
 ) -> None:
-    """Auto-match Out→In by (port_name, msg_type)."""
+    """Auto-match Out→In by (port_name, msg_type).
+
+    When multiple candidates exist, the function prefers those in the same
+    namespace as the input module (determined by a leading ``namespace/``
+    prefix).  This prevents false ambiguity when two separately-namespaced
+    stacks (e.g. ``robot_0/`` and ``robot_1/``) are merged into a single
+    Blueprint.
+    """
     # Index: (port_name, msg_type) → [(module_name, Out)]
     out_index: dict[tuple[str, type], list[tuple[str, Out]]] = defaultdict(list)
     for mod_name, ports in out_ports.items():
@@ -520,6 +538,17 @@ def _do_auto_wire(
                 for mn, op in out_index.get((in_port_name, in_port.msg_type), [])
                 if mn != in_mod
             ]
+
+            # ----- namespace-aware candidate filtering -----
+            in_ns = _get_ns(in_mod)
+            if in_ns:
+                same_ns = [
+                    (mn, op) for mn, op in candidates
+                    if _get_ns(mn) == in_ns
+                ]
+                if same_ns:
+                    candidates = same_ns
+            # -----------------------------------------------
 
             if len(candidates) == 1:
                 out_mod, out_port = candidates[0]

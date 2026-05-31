@@ -25,6 +25,7 @@ from __future__ import annotations
 import enum
 import logging
 import threading
+from collections.abc import Sequence
 from typing import Any
 
 from core.registry import get, list_plugins
@@ -108,33 +109,29 @@ class SwapManager:
         self._saved_state: dict | None = None
         self._old_driver_name: str | None = None
         self._old_driver: Any = None
+        self._new_driver_name: str | None = None
 
         # -- resolve mutable data containers -----------------------------------
-        # Tests pass MagicMock with plain-dict modules/connections.
-        # Production uses SystemHandle with read-only properties backed
-        # by private ``_modules`` / ``_connections`` dicts.
         self._resolve_data_containers()
 
     def _resolve_data_containers(self) -> None:
-        """Bind ``self._mods`` / ``self._conns`` to mutable dict/list.
+        """Bind ``self._mods`` / ``self._conns`` to mutable dict/list list.
 
-        SystemHandle:  ``_modules`` (dict), ``_connections`` (list)
-        MagicMock:     ``modules`` (dict),  ``connections`` (list)
+        SystemHandle exposes private ``_modules`` / ``_connections``;
+        test mocks expose ``modules`` / ``connections`` directly.
         """
         if self._system is None:
             self._mods: dict[str, Any] = {}
             self._conns: list[tuple[str, str, str, str]] = []
             return
-        if hasattr(self._system, "_modules") and isinstance(
-            self._system._modules, dict
-        ):
-            # Real SystemHandle -- use the private mutable backing store.
-            self._mods = self._system._modules
-            self._conns = self._system._connections
-        else:
-            # MagicMock or plain object -- expect direct mutable attrs.
-            self._mods = self._system.modules
-            self._conns = self._system.connections
+        mods = getattr(self._system, "_modules", None)
+        if not isinstance(mods, dict):
+            mods = getattr(self._system, "modules", {})
+        conns = getattr(self._system, "_connections", None)
+        if not isinstance(conns, (list, Sequence)):
+            conns = getattr(self._system, "connections", [])
+        self._mods = mods
+        self._conns = conns
 
     # -- module instance lookups (constructor fallback) -----------------------
 
@@ -235,6 +232,7 @@ class SwapManager:
             self._saved_state = None
             self._old_driver_name = None
             self._old_driver = None
+            self._new_driver_name = None
 
     def rollback(self) -> None:
         """Manually rollback a swap in progress.
@@ -292,6 +290,7 @@ class SwapManager:
 
             # 3. WIRE -- instantiate new driver, setup, wire, start
             self._swap_phase = SwapState.WIRE_NEW
+            self._new_driver_name = driver_name
             new_driver = self._start_new_driver(driver_name, **config)
 
             # 4. RESTORE -- seed new driver's state from snapshot
@@ -372,31 +371,25 @@ class SwapManager:
         return new_mod
 
     def _do_rollback(self) -> None:
-        """Undo a failed swap: restore old driver and unfreeze."""
+        """Undo a failed swap: remove new driver, restore old driver, unfreeze."""
         self._swap_phase = SwapState.ROLLBACK
         self._state = self.FAILED
 
-        # Remove any new driver that may have been partially added
-        for name in list(self._mods.keys()):
-            mod = self._mods[name]
-            if (
-                getattr(mod, "_layer", None) == 1
-                and "cmd_vel" in getattr(mod, "ports_in", {})
-                and "stop_signal" in getattr(mod, "ports_in", {})
-                and name != self._old_driver_name
-            ):
-                try:
-                    mod.stop()
-                    logger.debug(
-                        "SwapManager rollback: stopped new driver %s", name,
-                    )
-                except Exception:
-                    logger.exception(
-                        "SwapManager rollback: error stopping new driver %s",
-                        name,
-                    )
-                del self._mods[name]
-                break
+        # Remove new driver if it was added to the system
+        if self._new_driver_name and self._new_driver_name in self._mods:
+            new_mod = self._mods[self._new_driver_name]
+            try:
+                new_mod.stop()
+                logger.debug(
+                    "SwapManager rollback: stopped new driver %s",
+                    self._new_driver_name,
+                )
+            except Exception:
+                logger.exception(
+                    "SwapManager rollback: error stopping new driver %s",
+                    self._new_driver_name,
+                )
+            del self._mods[self._new_driver_name]
 
         # Restore old driver
         if self._old_driver is not None and self._old_driver_name is not None:
@@ -434,10 +427,7 @@ class SwapManager:
         )
         for attr in _COMMON_STATE_ATTRS:
             if hasattr(driver, attr):
-                try:
-                    state[attr] = getattr(driver, attr)
-                except Exception:
-                    pass
+                state[attr] = getattr(driver, attr)
 
         if state:
             logger.info(
@@ -463,13 +453,7 @@ class SwapManager:
 
         for key, value in state.items():
             if hasattr(driver, key):
-                try:
-                    setattr(driver, key, value)
-                except Exception:
-                    logger.exception(
-                        "Error restoring %s on %s",
-                        key, type(driver).__name__,
-                    )
+                setattr(driver, key, value)
 
         # Trigger a fresh state publication so downstream consumers catch up
         if hasattr(driver, "robot_state") and state.get("_connected") is not None:
@@ -489,7 +473,7 @@ class SwapManager:
             try:
                 driver.alive.publish(bool(state["_connected"]))
             except Exception:
-                pass
+                logger.exception("Error publishing restored alive signal")
 
         logger.info(
             "SwapManager: restored driver state (%d keys): %s",

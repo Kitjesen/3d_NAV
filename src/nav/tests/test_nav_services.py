@@ -1750,8 +1750,9 @@ class TestTeleopModule(unittest.TestCase):
         self.assertGreaterEqual(h["last_joy_age_ms"], 0)
 
     def test_get_teleop_status_skill(self):
+        import json
         mod = self._make_teleop(port=9999)
-        status = mod.get_teleop_status()
+        status = json.loads(mod.get_teleop_status())
         self.assertEqual(status["port"], 9999)
         self.assertFalse(status["active"])
 

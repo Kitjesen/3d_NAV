@@ -259,7 +259,8 @@ def main() -> None:
     # --- Copy meshes reference ---
     if args.meshes:
         meshes_dest = os.path.join(dest, "meshes")
-        os.symlink(os.path.abspath(args.meshes), meshes_dest) if os.name != "nt" else None
+        if os.name != "nt":
+            os.symlink(os.path.abspath(args.meshes), meshes_dest)
         print(f"Meshes:  reference {args.meshes} -> sim/robots/{args.name}/meshes/")
 
     # --- Write policy manifest ---

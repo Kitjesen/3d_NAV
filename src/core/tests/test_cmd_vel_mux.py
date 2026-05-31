@@ -289,9 +289,10 @@ class TestTeleopModule(unittest.TestCase):
 
     def test_get_teleop_status(self):
         """Skill method returns correct status."""
+        import json
         tm = self._make_teleop()
         tm._on_joy({"lx": 0.1})
-        status = tm.get_teleop_status()
+        status = json.loads(tm.get_teleop_status())
         self.assertTrue(status["active"])
         self.assertIsNotNone(status["last_joy_age_ms"])
 
