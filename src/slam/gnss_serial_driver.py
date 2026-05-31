@@ -17,10 +17,9 @@ Usage from GnssModule (integrated):
 from __future__ import annotations
 
 import logging
-import re
 import threading
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 

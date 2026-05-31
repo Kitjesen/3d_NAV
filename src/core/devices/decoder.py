@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterator
 
 logger = logging.getLogger(__name__)
 

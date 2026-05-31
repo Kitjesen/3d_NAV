@@ -7,6 +7,7 @@ import types
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from core.runtime_interface import TOPICS, topic_default_frame_id
 
@@ -27,7 +28,7 @@ def _dds_pointcloud_msg():
         width=1,
         height=1,
         point_step=16,
-        data=list(points.tobytes()),
+        data=points.tobytes(),
     )
 
 
@@ -51,6 +52,7 @@ def _module(name: str, **attrs):
     return module
 
 
+@pytest.mark.ros2
 def test_rclpy_pointcloud_callback_does_not_block_odom_executor():
     from slam.slam_bridge_module import SlamBridgeModule
 
@@ -83,6 +85,7 @@ def test_rclpy_pointcloud_callback_does_not_block_odom_executor():
     assert bridge._last_cloud_time > 0.0
 
 
+@pytest.mark.ros2
 def test_rclpy_saved_map_has_independent_worker_from_live_cloud():
     from slam.slam_bridge_module import SlamBridgeModule
 
@@ -116,6 +119,7 @@ def test_dds_pointcloud_callback_does_not_block_reader_loop():
     from slam.slam_bridge_module import SlamBridgeModule
 
     bridge = SlamBridgeModule()
+    bridge.setup()
     callback_entered = threading.Event()
     release_callback = threading.Event()
     callback_done = threading.Event()
@@ -212,6 +216,7 @@ def test_dds_odom_callback_does_not_block_reader_loop():
     _assert_odom_callback_does_not_block_receiver("_on_dds_odom")
 
 
+@pytest.mark.ros2
 def test_rclpy_odom_callback_does_not_block_executor():
     _assert_odom_callback_does_not_block_receiver("_on_rclpy_odom")
 
@@ -220,6 +225,7 @@ def test_dds_odom_normalizes_header_frame_ids():
     _assert_odom_callback_normalizes_frame_ids("_on_dds_odom")
 
 
+@pytest.mark.ros2
 def test_rclpy_odom_normalizes_header_frame_ids():
     _assert_odom_callback_normalizes_frame_ids("_on_rclpy_odom")
 
@@ -235,6 +241,7 @@ def test_slam_bridge_freshness_age_uses_monotonic_clock():
     assert abs(bridge._cloud_age_s(mono_now=50.9) - 0.9) < 1e-9
 
 
+@pytest.mark.ros2
 def test_rclpy_subscriptions_use_separate_callback_groups(monkeypatch):
     from slam.slam_bridge_module import SlamBridgeModule
 

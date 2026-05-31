@@ -79,7 +79,7 @@ def create_perception_pipeline(
         from qp_perception.config import SelectorConfig
         from qp_perception.reid.extractor import ReIDConfig, ReIDExtractor
         from qp_perception.selection.weighted import WeightedTargetSelector
-        from qp_perception.tracking.fusion import FusionMOT, FusionMOTConfig
+        from qp_perception.tracking.fusion import FusionMOT, FusionMOTConfig  # noqa: F401
 
         # Re-ID
         reid_cfg = ReIDConfig(backbone=reid_backbone, device="")
@@ -103,7 +103,6 @@ def create_perception_pipeline(
     except ImportError as e:
         logger.warning("qp_perception not available (%s), falling back to BoT-SORT", e)
         # 降级: 用 ultralytics BoT-SORT
-        from .bpu_tracker import BPUTracker
         return BPUTrackerFallback(bpu, class_whitelist)
 
 
@@ -117,7 +116,6 @@ class FusionMOTWrapper:
 
     def update(self, detections, timestamp: float):
         """Tracker 协议: detections → list[Track]。"""
-        from qp_perception.types import BoundingBox, Track
 
         if not detections:
             # 传空数组更新（维护 lost tracks）
@@ -140,7 +138,6 @@ class FusionMOTWrapper:
 
     def update_with_frame(self, detections, frame: np.ndarray, timestamp: float):
         """Selective Re-ID: only extract features for ambiguous detections."""
-        from qp_perception.types import BoundingBox, Track
 
         if not detections:
             empty = np.empty((0, 4))

@@ -13,7 +13,7 @@ Usage:
     coord.shutdown()
 """
 import logging
-from typing import Any, Dict, Optional, Set, Tuple, Type
+from typing import Any
 
 from core.module import Module
 from core.rpc_client import RPCClient

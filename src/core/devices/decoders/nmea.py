@@ -6,7 +6,7 @@ Reusable across any NMEA-speaking device (WTRTK-980, ZED-F9P, BD-980, ...).
 from __future__ import annotations
 
 import time
-from typing import Any, Iterator, Optional
+from typing import Iterator
 
 from core.devices.decoder import Decoder, register_decoder
 from core.msgs.gnss import GnssFix, GnssFixType

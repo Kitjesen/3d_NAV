@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import random
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -489,7 +488,7 @@ class QwenClient(LLMClientBase):
     def _sync_call(self, messages: list[dict[str, str]], temperature: float) -> str:
         """同步调用 DashScope API。"""
         try:
-            import dashscope
+            import dashscope  # noqa: F401
             from dashscope import Generation
         except ImportError:
             raise LLMError(

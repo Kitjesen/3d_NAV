@@ -16,9 +16,9 @@ import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from core import In, Module, Out, skill
+from core import In, Module, skill
 from core.msgs import Odometry
 from core.registry import register
 

@@ -25,13 +25,13 @@ LingTu Skill 注册系统 — 让 LLM Agent 能自动发现和调用机器人能
 import inspect
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 try:
-    from pydantic import BaseModel, Field
+    from pydantic import BaseModel, Field  # noqa: F401
     from pydantic import create_model as pydantic_create_model
     _PYDANTIC_AVAILABLE = True
 except ImportError:

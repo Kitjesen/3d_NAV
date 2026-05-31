@@ -22,6 +22,7 @@ class ContractError(ValueError):
 
 @dataclass(frozen=True)
 class ValidationIssue:
+    """A single validation error found on a message payload field."""
     path: str
     code: str
     message: str
@@ -32,6 +33,11 @@ Validator = Callable[[Mapping[str, Any]], list[ValidationIssue]]
 
 @dataclass(frozen=True)
 class MessageContract:
+    """Defines the contract for a message type: required fields and a validator function.
+
+    Used for backward-compatibility checks and payload validation
+    across module boundaries.
+    """
     name: str
     required_fields: tuple[str, ...]
     validate: Validator

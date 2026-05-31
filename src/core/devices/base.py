@@ -6,10 +6,11 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 
 class DeviceType(str, Enum):
+    """Supported hardware device types in the sensor/actuator suite."""
     GNSS = "gnss"
     LIDAR = "lidar"
     CAMERA = "camera"
@@ -21,6 +22,7 @@ class DeviceType(str, Enum):
 
 
 class DeviceStatus(str, Enum):
+    """Lifecycle states for a hardware device from detection through streaming."""
     OFFLINE = "offline"        # not detected
     DETECTED = "detected"      # found but not opened
     READY = "ready"            # opened, ready to read

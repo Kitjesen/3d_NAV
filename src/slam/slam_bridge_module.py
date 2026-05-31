@@ -22,7 +22,7 @@ import os
 import subprocess
 import threading
 import time as _time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable
 
 import numpy as np
 
@@ -408,7 +408,7 @@ class SlamBridgeModule(Module, layer=1):
             from rclpy.node import Node
             from rclpy.qos import QoSProfile, ReliabilityPolicy
             from sensor_msgs.msg import PointCloud2
-            from std_msgs.msg import Float32
+            from std_msgs.msg import Float32  # noqa: F401
             try:
                 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
             except Exception:

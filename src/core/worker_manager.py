@@ -12,7 +12,7 @@ Usage::
 """
 import logging
 import multiprocessing
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.worker import Worker
 

@@ -12,12 +12,10 @@ Classes:
 
 from __future__ import annotations
 
-import struct
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any
 
-from .geometry import Quaternion, Vector3
 from .sensor import Imu
 
 NUM_JOINTS = 16

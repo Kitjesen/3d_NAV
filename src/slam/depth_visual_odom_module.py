@@ -22,7 +22,7 @@ import importlib
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 

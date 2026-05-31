@@ -9,7 +9,7 @@ Strategy selection:
 
 import logging
 from collections.abc import Callable
-from typing import Any, Optional
+from typing import Any
 
 from .abc import (
     Publisher,

@@ -51,6 +51,7 @@ exclude = [
     "src/global_planning/pct_planner/planner/lib/3rdparty",
     "src/global_planning/pct_planner/planner/scripts",
     "src/global_planning/pct_planner/tomography",
+    "src/global_planning/pct_planner/launch",
     "**/legacy/*",
 ]
 

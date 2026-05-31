@@ -48,12 +48,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import collections
 import json
 import logging
 import math
 import os
-import queue
 import subprocess
 import sys
 import threading
@@ -64,34 +62,25 @@ from typing import Any, Callable
 import numpy as np
 
 from core.module import Module
-from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+from core.msgs.geometry import PoseStamped, Twist, Vector3
 from core.msgs.nav import Odometry, Path
 from core.msgs.semantic import ExecutionEval, SafetyState, SceneGraph
 from core.msgs.sensor import PointCloud2
 from core.registry import register
 from core.stream import In, Out
 from gateway.schemas import (
-    BitrateRequest,
-    CancelRequest,
-    ClickNavRequest,
-    CmdVelRequest,
     DriverSwapRequest,
     DriverSwapResponse,
     GatewayErrorResponse,
-    GoalRequest,
-    InstructionRequest,
-    LeaseRequest,
     MapLifecycleResponse,
     MapRequest,
-    ModeRequest,
-    StopRequest,
 )
 from gateway.services.commands import CommandJournal
 from gateway.services.map_paths import (
     active_map_name,
     map_dir_for,
 )
-from gateway.services.map_safety import (
+from core.dynamic_filter import (
     apply_dynamic_filter_step1half as _map_apply_dynamic_filter_step1half,
 )
 from gateway.services.map_safety import (

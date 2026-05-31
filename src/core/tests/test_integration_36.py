@@ -5,6 +5,7 @@ TODO: Replace time.sleep with threading.Event for module output
       results; using Events would be faster and more deterministic.
 """
 import io
+import json
 import logging
 import os
 import sys
@@ -54,8 +55,8 @@ v = VectorMemoryModule()
 v.setup()
 v._robot_xy = (15, 5)
 v._store_snapshot(["backpack", "bench"])
-T("2.VectorMemory query", v.query_location("find backpack")["found"])
-T("2.VectorMemory stats", v.get_memory_stats()["entries"] == 1)
+T("2.VectorMemory query", json.loads(v.query_location("find backpack"))["found"])
+T("2.VectorMemory stats", json.loads(v.get_memory_stats())["entries"] == 1)
 
 # 3
 from semantic.planner.visual_servo_module import VisualServoModule
@@ -86,8 +87,6 @@ tp._check_idle()
 T("4.Teleop idle", not tp._active)
 
 # 5
-import json
-
 from semantic.planner.agent_loop import AGENT_TOOLS, AgentLoop
 
 r = AgentLoop._parse_text_tool_call('{"tool":"navigate_to","args":{"x":5,"y":3}}')

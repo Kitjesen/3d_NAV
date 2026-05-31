@@ -38,7 +38,6 @@ import numpy as np
 from core.module import Module, skill
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.semantic import GoalResult as MsgGoalResult
 from core.msgs.semantic import SceneGraph
 from core.registry import register
 from core.runtime_interface import map_frame_id

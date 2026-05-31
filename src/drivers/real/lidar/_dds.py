@@ -9,7 +9,6 @@ requires real type objects at class-definition time.
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 

@@ -21,12 +21,10 @@
 
 import logging
 from pathlib import Path
-from typing import Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import patches
-from mpl_toolkits.mplot3d import Axes3D
 
 logger = logging.getLogger(__name__)
 

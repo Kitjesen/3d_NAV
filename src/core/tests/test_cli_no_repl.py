@@ -199,6 +199,7 @@ def test_external_simulation_profile_runs_relative_launcher(monkeypatch):
     assert captured["check"] is False
 
 
+@pytest.mark.sim
 def test_product_task_endpoint_routes_to_mujoco_live_launcher(monkeypatch):
     import subprocess
 
@@ -344,6 +345,7 @@ def test_external_launcher_overrides_stale_runtime_env(monkeypatch, capsys):
     assert captured["env"]["LINGTU_SIMULATION_ONLY"] == "1"
 
 
+@pytest.mark.sim
 def test_tare_product_task_endpoint_record_routes_to_mujoco_live_video(monkeypatch):
     import subprocess
 
@@ -412,6 +414,7 @@ def test_endpoint_launcher_accepts_trailing_action_after_options(monkeypatch):
     assert captured["env"]["LINGTU_ENDPOINT"] == "mujoco_live"
 
 
+@pytest.mark.sim
 def test_mujoco_live_endpoint_accepts_visible_demo_action(monkeypatch):
     import subprocess
 
@@ -444,6 +447,7 @@ def test_mujoco_live_endpoint_accepts_visible_demo_action(monkeypatch):
     assert captured["env"]["LINGTU_ENDPOINT"] == "mujoco_live"
 
 
+@pytest.mark.sim
 def test_switch_plan_prints_sim_to_real_boundary(monkeypatch, capsys):
     import cli.main as main_mod
 
@@ -1669,6 +1673,7 @@ def test_real_runtime_evidence_cli_prints_validation_blockers(
     assert "  command_boundary[cmd_vel_mux_to_endpoint_sink|body_twist] ok=false" in out
 
 
+@pytest.mark.sim
 def test_mujoco_live_endpoint_accepts_pct_moving_obstacle_action(monkeypatch):
     import subprocess
 
@@ -1701,6 +1706,7 @@ def test_mujoco_live_endpoint_accepts_pct_moving_obstacle_action(monkeypatch):
     assert captured["env"]["LINGTU_RUNTIME_CONTRACT"] == "mujoco_fastlio2_live"
 
 
+@pytest.mark.sim
 def test_mujoco_live_endpoint_accepts_inspection_video_action(monkeypatch):
     import subprocess
 
@@ -1769,6 +1775,7 @@ def test_tare_product_task_endpoint_routes_to_cmu_unity_launcher(monkeypatch):
     assert captured["check"] is False
 
 
+@pytest.mark.sim
 def test_tare_product_task_endpoint_routes_to_mujoco_live_launcher(monkeypatch):
     import subprocess
 

@@ -21,7 +21,6 @@ import sys
 import time
 from io import StringIO
 from pathlib import Path
-from typing import Dict, List
 
 import numpy as np
 

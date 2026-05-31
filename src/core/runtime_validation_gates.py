@@ -274,6 +274,7 @@ _GATE_ACCEPTANCE_EXPECTATIONS: dict[str, dict[str, Any]] = {
 
 @dataclass(frozen=True)
 class RuntimeValidationGateCheck:
+    """Result of a system validation gate check with blockers and remedial commands."""
     ok: bool
     blockers: tuple[str, ...]
     commands: dict[str, str | None]

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 
-from core.dynamic_filter import apply_dynamic_filter_step1half
 
 
 def safe_map_name(name: str) -> str | None:

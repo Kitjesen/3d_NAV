@@ -143,6 +143,7 @@ class TestTAREExplorerModule:
 # TAREROS2BridgeModule
 # =============================================================================
 
+@pytest.mark.ros2
 class TestTAREROS2BridgeModule:
     """Contract tests for TAREROS2BridgeModule (layer=5, rclpy bridge)."""
 

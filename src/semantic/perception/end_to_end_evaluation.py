@@ -32,7 +32,6 @@ from semantic.perception.dataset_loader import create_dataset_loader
 from semantic.perception.evaluation_framework import (
     BenchmarkFramework,
     BenchmarkResult,
-    ExplorationEvaluator,
     MemoryEvaluator,
     PathEvaluator,
     UpdateEvaluator,

@@ -43,12 +43,10 @@ Requirements (server-side):
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import logging
 import os
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
@@ -118,7 +116,7 @@ class ReconServer:
         max_workers: int = 2,
         auto_trigger_frames: int = 0,  # 0 = manual trigger only
     ) -> None:
-        from .backends.registry import get_backend, list_backends
+        from .backends.registry import list_backends
 
         self._default_backend  = backend
         self._backend_status   = BackendStatus.configured_as(backend)
@@ -310,7 +308,7 @@ def create_app(
     """
     try:
         from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-        from fastapi.responses import FileResponse, JSONResponse
+        from fastapi.responses import FileResponse, JSONResponse  # noqa: F401
     except ImportError as exc:
         raise ImportError(
             "FastAPI is required for the reconstruction server. "

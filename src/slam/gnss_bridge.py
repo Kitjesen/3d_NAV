@@ -11,11 +11,11 @@ without disrupting Phase 1+2 work.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from core.module import Module
 from core.registry import register
-from core.stream import In, Out
+from core.stream import Out
 
 logger = logging.getLogger(__name__)
 

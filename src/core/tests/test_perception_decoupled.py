@@ -25,31 +25,11 @@ from semantic.perception.encoder_module import (
 )
 
 # ---------------------------------------------------------------------------
-# Mock backends (no GPU needed)
+# Mock backends (no GPU needed) — imported from shared test utilities
 # ---------------------------------------------------------------------------
 
-class _MockDetection:
-    def __init__(self):
-        self.bbox = np.array([10, 20, 100, 200])
-        self.score = 0.9
-        self.label = "chair"
-        self.mask = None
-
-
-class _MockDetectorBackend:
-    def load_model(self): pass
-    def detect(self, rgb, text_prompt):
-        return [_MockDetection()]
-    def shutdown(self): pass
-
-
-class _MockEncoderBackend:
-    def load_model(self): pass
-    def encode_image(self, image):
-        return np.random.randn(512).astype(np.float32)
-    def encode_text(self, text):
-        return np.random.randn(512).astype(np.float32)
-    def shutdown(self): pass
+from core.tests._test_utils import (_MockDetection, _MockDetectorBackend,
+                                    _MockEncoderBackend)
 
 
 # ---------------------------------------------------------------------------

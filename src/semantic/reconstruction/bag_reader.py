@@ -45,7 +45,6 @@ from typing import Any
 
 import numpy as np
 
-from .dataset_io import _quat_to_matrix
 from .server.backends.base import Keyframe
 
 logger = logging.getLogger(__name__)
@@ -187,14 +186,12 @@ def read_rgb_d_bag(
 
         # 保存深度图
         depth_path = output_dir / "depths" / f"{frame_count:06d}.png"
-        has_depth = False
         if latest_depth is not None:
             depth_msg, _ = latest_depth
             try:
                 import cv2  # type: ignore
                 depth_arr = _decode_depth_msg(depth_msg, max_depth_m=max_depth_m)
                 cv2.imwrite(str(depth_path), depth_arr)
-                has_depth = True
             except Exception:
                 pass
 

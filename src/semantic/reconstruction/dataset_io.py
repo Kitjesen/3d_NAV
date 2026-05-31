@@ -158,7 +158,7 @@ def _load_tum(base: Path) -> list[Keyframe]:
             continue
         ts_rgb   = parts[0]
         rgb_rel  = parts[1]
-        ts_depth = parts[2]
+        parts[2]
         dep_rel  = parts[3]
 
         color_path = base / rgb_rel

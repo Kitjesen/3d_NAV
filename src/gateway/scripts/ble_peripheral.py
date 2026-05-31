@@ -25,7 +25,6 @@ systemd service:
 """
 
 import logging
-import os
 import signal
 import struct
 import subprocess

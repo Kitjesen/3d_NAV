@@ -6,9 +6,7 @@ Semantic Perception API - 追踪器接口
 
 from abc import ABC, abstractmethod
 
-import numpy as np
 
-from .exceptions import TrackerError
 from .types import Detection3D
 
 

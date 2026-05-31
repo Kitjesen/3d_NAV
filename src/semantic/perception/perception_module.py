@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import logging
 import threading
-import time
 from typing import Any
 
 import numpy as np
@@ -34,7 +33,7 @@ from core.msgs.semantic import (
     Relation,
     SceneGraph,
 )
-from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat
+from core.msgs.sensor import CameraIntrinsics, Image
 from core.registry import get, list_plugins, register
 from core.runtime_interface import map_frame_id
 

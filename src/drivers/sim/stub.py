@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING
 
 from core.module import Module
 
@@ -93,11 +93,26 @@ class StubConnection(Module, layer=1):
 def stub_blueprint(**config) -> Blueprint:
     """Test blueprint -- StubConnection + new module architecture.
 
-    NOTE: Blueprint factory — cross-layer imports are intentional here (see CLAUDE.md).
+    NOTE: Blueprint factory -- cross-layer module resolution uses stack_module()
+    to avoid eager cross-package imports at module load time. NavigationModule
+    and SafetyRingModule (both from nav/) are resolved lazily via the registry
+    helper when this factory function is called.
     """
     from core.blueprint import Blueprint
-    from nav.navigation_module import NavigationModule
-    from nav.safety_ring_module import SafetyRingModule
+    from core.blueprints.stacks._registry import stack_module
+
+    NavigationModule = stack_module(
+        "navigation",
+        "default",
+        seed_group="navigation",
+        fallback="nav.navigation_module.NavigationModule",
+    )
+    SafetyRingModule = stack_module(
+        "safety",
+        "ring",
+        seed_group="safety",
+        fallback="nav.safety_ring_module.SafetyRingModule",
+    )
 
     bp = Blueprint()
     bp.add(StubConnection)

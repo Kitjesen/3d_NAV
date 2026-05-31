@@ -30,8 +30,8 @@ from typing import Any
 import yaml
 
 try:
-    from core.config import load_config
-    from core.config import validate_config as _validate_typed
+    from core.config import load_config  # noqa: F401
+    from core.config import validate_config as _validate_typed  # noqa: F401
     _HAS_TYPED_CONFIG = True
 except ImportError:
     _HAS_TYPED_CONFIG = False

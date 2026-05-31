@@ -236,7 +236,7 @@ class TestVectorMemoryOperations(unittest.TestCase):
         m._store_snapshot(["backpack", "bench"])
 
         results = m._query("find backpack")
-        response = m.query_location("find backpack")
+        response = json.loads(m.query_location("find backpack"))
 
         self.assertGreater(len(results), 0)
         self.assertAlmostEqual(results[0]["x"], 2.0)
@@ -250,8 +250,7 @@ class TestVectorMemoryOperations(unittest.TestCase):
         m._encoder_type = "lexical_hash"
 
         health = m.health()
-        stats = m.get_memory_stats()
-
+        stats = json.loads(m.get_memory_stats())
         self.assertTrue(health["encoder_ready"])
         self.assertFalse(health["semantic_encoder_ready"])
         self.assertTrue(health["degraded"])
@@ -335,7 +334,9 @@ class TestVectorMemoryOperations(unittest.TestCase):
         m._collection = _BrokenCollection()
 
         health = m.health()
-        stats = m.get_memory_stats()
+        stats_raw = m.get_memory_stats()
+        import json
+        stats = json.loads(stats_raw) if isinstance(stats_raw, str) else stats_raw
 
         self.assertFalse(m._use_chromadb)
         self.assertEqual(health["backend"], "numpy")
@@ -391,7 +392,7 @@ class TestVectorMemoryOperations(unittest.TestCase):
 
     def test_query_location_skill_not_found(self):
         m = self._make()
-        result = m.query_location("missing thing")
+        result = json.loads(m.query_location("missing thing"))
         self.assertFalse(result["found"])
 
     def test_query_location_skill_found(self):
@@ -399,7 +400,7 @@ class TestVectorMemoryOperations(unittest.TestCase):
         m._robot_xy = (3.0, 4.0)
         m._robot_z = 1.25
         m._store_snapshot(["backpack", "tree"])
-        result = m.query_location("backpack")
+        result = json.loads(m.query_location("backpack"))
         self.assertTrue(result["found"])
         self.assertIn("best", result)
         self.assertEqual(result["best"]["z"], 1.25)
@@ -408,7 +409,7 @@ class TestVectorMemoryOperations(unittest.TestCase):
         m = self._make()
         m._robot_xy = (0.0, 0.0)
         m._store_snapshot(["item"])
-        stats = m.get_memory_stats()
+        stats = json.loads(m.get_memory_stats())
         self.assertEqual(stats["backend"], "numpy")
         self.assertEqual(stats["entries"], 1)
 

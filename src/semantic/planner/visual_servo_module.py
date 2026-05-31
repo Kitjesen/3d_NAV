@@ -39,7 +39,7 @@ from core.registry import register
 from core.runtime_interface import map_frame_id
 from core.stream import In, Out
 
-from .bbox_navigator import STATE_ARRIVED, STATE_LOST, STATE_TRACKING, BBoxNavConfig, BBoxNavigator
+from .bbox_navigator import STATE_ARRIVED, STATE_LOST, BBoxNavConfig, BBoxNavigator
 from .person_tracker import PersonTracker
 
 logger = logging.getLogger(__name__)

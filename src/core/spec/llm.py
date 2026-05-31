@@ -6,7 +6,7 @@ same async ``chat`` interface defined here.
 
 from __future__ import annotations
 
-from typing import Any, List, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable

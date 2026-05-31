@@ -21,7 +21,6 @@ import heapq
 import logging
 import time
 from dataclasses import dataclass
-from typing import Tuple
 
 import numpy as np
 

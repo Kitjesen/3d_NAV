@@ -21,8 +21,8 @@ class Tomogram(object):
 
     def initKernel(self):
         self.tomography_kernel = tomographyKernel(
-            self.resolution, 
-            self.map_dim_x, 
+            self.resolution,
+            self.map_dim_x,
             self.map_dim_y,
             self.n_slice_init,
             self.slice_h0,
@@ -35,9 +35,9 @@ class Tomogram(object):
             self.half_trav_k_size,
             self.interval_min,
             self.interval_free,
-            self.step_cross, 
-            self.step_stand, 
-            self.standable_th, 
+            self.step_cross,
+            self.step_stand,
+            self.standable_th,
             self.cost_barrier
         )
 
@@ -48,7 +48,7 @@ class Tomogram(object):
         )
 
         self.inf_table = np.zeros(
-            (2 * self.half_inf_k_size + 1, 2 * self.half_inf_k_size + 1), 
+            (2 * self.half_inf_k_size + 1, 2 * self.half_inf_k_size + 1),
             dtype=np.float32
         )
         for i in range(self.inf_table.shape[0]):
@@ -76,7 +76,7 @@ class Tomogram(object):
         self.map_dim_y = int(map_dim_y)
         self.n_slice_init = int(n_slice_init)
         self.slice_h0 = float(slice_h0)
-        
+
         self.initBuffers()
         self.initKernel()
 
@@ -98,23 +98,23 @@ class Tomogram(object):
 
         # Tomogram
         start_time = time.time()
-        
+
         self.tomography_kernel(
-            points, self.center, 
+            points, self.center,
             self.layers_g, self.layers_c
         )
 
         diff_x_sq = np.maximum(
-            (self.layers_g[:, 1:-1, :] - self.layers_g[:, :-2, :]) ** 2, 
+            (self.layers_g[:, 1:-1, :] - self.layers_g[:, :-2, :]) ** 2,
             (self.layers_g[:, 1:-1, :] - self.layers_g[:,  2:, :]) ** 2
         )
         diff_y_sq = np.maximum(
-            (self.layers_g[:, :, 1:-1] - self.layers_g[:, :, :-2]) ** 2, 
+            (self.layers_g[:, :, 1:-1] - self.layers_g[:, :, :-2]) ** 2,
             (self.layers_g[:, :, 1:-1] - self.layers_g[:, :,  2:]) ** 2
         )
         self.grad_mag_sq[:, 1:-1, 1:-1] = diff_x_sq[:, :, 1:-1] + diff_y_sq[:, 1:-1, :]
         self.grad_mag_max[:, 1:-1, 1:-1] = np.maximum(diff_x_sq[:, :, 1:-1], diff_y_sq[:, 1:-1, :])
-        
+
         interval = (self.layers_c - self.layers_g)
 
         t_map = (time.time() - start_time) * 1e3
@@ -155,20 +155,20 @@ class Tomogram(object):
 
         trav_grad_x = (self.inflated_cost[idx_simp][:, 2:, :] - self.inflated_cost[idx_simp][:, :-2, :])
         trav_grad_y = (self.inflated_cost[idx_simp][:, :, 2:] - self.inflated_cost[idx_simp][:, :, :-2])
-        
+
         t_simp = (time.time() - start_time) * 1e3
-        
-        t_all = t_map + t_trav + t_simp
+
+        t_map + t_trav + t_simp
 
         layers_t = self.inflated_cost[idx_simp]
         layers_g = np.where(
-            self.layers_g[idx_simp] > -1e6, 
+            self.layers_g[idx_simp] > -1e6,
             self.layers_g[idx_simp],
             np.nan
         )
         layers_c = np.where(
-            self.layers_c[idx_simp] < 1e6, 
-            self.layers_c[idx_simp], 
+            self.layers_c[idx_simp] < 1e6,
+            self.layers_c[idx_simp],
             np.nan
         )
         trav_gx = np.zeros_like(layers_g)
@@ -177,9 +177,9 @@ class Tomogram(object):
         trav_gy[:, :, 1:-1] = trav_grad_y
 
         t_cpu = {
-            't_map': t_map, 
-            't_trav': t_trav, 
-            't_simp': t_simp, 
+            't_map': t_map,
+            't_trav': t_trav,
+            't_simp': t_simp,
         }
-        
+
         return layers_t, trav_gx, trav_gy, layers_g, layers_c, t_cpu

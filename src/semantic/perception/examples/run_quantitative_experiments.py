@@ -21,7 +21,6 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List
 
 import matplotlib
 
@@ -36,7 +35,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from semantic.perception.end_to_end_evaluation import EndToEndEvaluator
 from semantic.perception.evaluation_framework import BenchmarkResult
 from semantic.perception.visualization_tools import (
-    ComprehensiveVisualizer,
     PerformanceVisualizer,
 )
 

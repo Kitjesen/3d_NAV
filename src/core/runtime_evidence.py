@@ -64,6 +64,7 @@ REAL_RUNTIME_TEMPORAL_FLOW_STAGES = {
 
 @dataclass(frozen=True)
 class RuntimeEvidenceResult:
+    """Result of checking runtime evidence requirements before system start."""
     ok: bool
     blockers: tuple[str, ...]
 

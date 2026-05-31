@@ -21,14 +21,14 @@ import math
 import threading
 import time
 from enum import Enum
-from typing import Any, Tuple
+from typing import Any
 
 import numpy as np
 
 from core.module import Module, skill
-from core.msgs.geometry import Twist, Vector3
+from core.msgs.geometry import Twist
 from core.msgs.nav import Odometry, Path
-from core.msgs.semantic import ExecutionEval, MissionStatus, SafetyState
+from core.msgs.semantic import ExecutionEval, SafetyState
 from core.registry import register
 from core.stream import In, Out
 
@@ -36,12 +36,14 @@ logger = logging.getLogger(__name__)
 
 
 class SafetyLevel(Enum):
+    """Safety severity levels for SafetyRing reflex actions."""
     SAFE = 0
     WARN = 1
     STOP = 2
 
 
 class Assessment(Enum):
+    """Robot motion assessment categories from the safety evaluator."""
     IDLE = "IDLE"
     ON_TRACK = "ON_TRACK"
     DRIFTING = "DRIFTING"

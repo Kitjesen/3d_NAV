@@ -6,7 +6,6 @@ Extracted from semantic/perception/tracked_objects.py for cross-module sharing.
 
 import math
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -79,12 +78,12 @@ ROOM_NAMING_STABILITY_SEC = 10.0
 
 def infer_room_type(labels: list[str]) -> str:
     """Infer room type from object labels (rule-based fallback for LLM naming)."""
-    labels_lower = [l.lower() for l in labels]
+    labels_lower = [label.lower() for label in labels]
     best_type = ""
     best_priority = -1
 
     for room_type, rule in ROOM_TYPE_RULES.items():
-        matches = sum(1 for kw in rule["keywords"] if any(kw in l for l in labels_lower))
+        matches = sum(1 for kw in rule["keywords"] if any(kw in label for label in labels_lower))
         if matches >= rule["min_match"]:
             score = matches * 10 + rule["priority"]
             if score > best_priority:
@@ -96,7 +95,7 @@ def infer_room_type(labels: list[str]) -> str:
     if labels:
         from collections import Counter
         common = Counter(labels).most_common(2)
-        return f"area_{'_'.join(l for l, _ in common)}"
+        return f"area_{'_'.join(label for label, _ in common)}"
     return "unknown_area"
 
 
@@ -104,66 +103,32 @@ def infer_room_type(labels: list[str]) -> str:
 
 @dataclass
 class SpatialRelation:
-    subject_id: int
-    relation: str
-    object_id: int
-    distance: float = 0.0
+    """Oriented spatial relation between two tracked objects (e.g. "on", "near")."""
 
 
 @dataclass
 class Region:
-    region_id: int
-    center: np.ndarray
-    object_ids: list[int] = field(default_factory=list)
-    name: str = ""
-    llm_named: bool = False
+    """A clustered region in space grouping nearby objects (SG-Nav clustering unit)."""
 
 
 @dataclass
 class GroupNode:
-    group_id: int
-    room_id: int
-    name: str
-    center: np.ndarray
-    object_ids: list[int] = field(default_factory=list)
-    semantic_labels: list[str] = field(default_factory=list)
+    """A semantic group within a room — objects sharing a sub-region and label."""
 
 
 @dataclass
 class RoomNode:
-    room_id: int
-    name: str
-    center: np.ndarray
-    object_ids: list[int] = field(default_factory=list)
-    group_ids: list[int] = field(default_factory=list)
-    semantic_labels: list[str] = field(default_factory=list)
-    llm_named: bool = False
-    clip_feature: np.ndarray | None = None
-    feature_count: int = 0
+    """A named room in the topology graph with associated objects and groups."""
 
 
 @dataclass
 class FloorNode:
-    floor_id: int
-    floor_level: int
-    z_range: tuple[float, float]
-    room_ids: list[int] = field(default_factory=list)
-    object_ids: list[int] = field(default_factory=list)
-    center_z: float = 0.0
+    """A floor level defined by a vertical Z range containing rooms and objects."""
 
 
 @dataclass
 class PhantomNode:
-    phantom_id: int
-    label: str
-    room_id: int
-    room_type: str
-    position: np.ndarray
-    belief_alpha: float
-    belief_beta: float = 1.0
-    kg_prior_strength: float = 0.0
-    safety_level: str = "safe"
-    source: str = "kg_room_prior"
+    """A hypothesised object from KG prior with Beta-distribution existence belief."""
 
     @property
     def existence_prob(self) -> float:

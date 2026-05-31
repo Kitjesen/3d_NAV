@@ -28,14 +28,15 @@ from typing import Any
 
 from core.blueprint import Blueprint
 from core.plugin_seed import seed_builtin_plugins
-from core.registry import get, register
+from core.registry import get
 
 logger = logging.getLogger(__name__)
 
 # The three class names are lazy-forward references resolved by __getattr__
-# below.  ruff F822 is expected — each name is exported via lazy import from
-# its real module (base_autonomy.modules.*).
-__all__ = [
+# below — each name is exported via lazy import from its real module.
+# noqa comments below: ruff F822 sees these as undefined but they are
+# resolved by __getattr__ at runtime.
+__all__ = [  # noqa: F822
     "LocalPlannerModule",
     "PathFollowerModule",
     "TerrainModule",

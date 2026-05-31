@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import List, Tuple
 
 # Env var name patterns that indicate secrets
 _SECRET_PATTERNS = re.compile(

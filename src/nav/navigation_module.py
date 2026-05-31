@@ -70,6 +70,13 @@ class _PlanPreviewBusy(RuntimeError):
 
 
 class MissionState:
+    """Mission FSM states for NavigationModule.
+
+    State machine covering the full lifecycle of a navigation mission:
+    IDLE → PLANNING → EXECUTING → SUCCESS | FAILED | STUCK | CANCELLED.
+    PATROLLING is a persistent cyclic state. Any state can transition
+    back to IDLE via stop/cancel/reset.
+    """
     IDLE       = "IDLE"
     PLANNING   = "PLANNING"
     EXECUTING  = "EXECUTING"

@@ -23,7 +23,7 @@ Usage::
 import logging
 import pickle
 from collections.abc import Callable
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .abc import Publisher, Subscriber, TopicConfig, TransportABC
 

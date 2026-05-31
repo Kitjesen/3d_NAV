@@ -14,8 +14,7 @@ belief_propagation.py — KG-Augmented Loopy Belief Propagation Mixin
 
 import logging
 import math
-import time
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 

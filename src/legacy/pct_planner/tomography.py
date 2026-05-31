@@ -5,12 +5,11 @@ import time
 import pickle
 import numpy as np
 import open3d as o3d
-import os
 os.environ['NUMEXPR_MAX_THREADS'] = '4'
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Header
-from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 
 from tomogram import Tomogram
@@ -72,7 +71,7 @@ class Tomography(Node):
         if points.shape[1] > 3:
             points = points[:, :3]
         self.points_max = np.max(points, axis=0)
-        self.points_min = np.min(points, axis=0)           
+        self.points_min = np.min(points, axis=0)
         self.points_min[-1] = self.ground_h
         self.map_dim_x = int(np.ceil((self.points_max[0] - self.points_min[0]) / self.resolution)) + 4
         self.map_dim_y = int(np.ceil((self.points_max[1] - self.points_min[1]) / self.resolution)) + 4
@@ -90,15 +89,15 @@ class Tomography(Node):
             GRID_POINTS_XYZI(self.resolution, self.map_dim_x, self.map_dim_y)
 
         return points
-        
-    def process(self, points):        
+
+    def process(self, points):
         t_map = 0.0
         t_trav = 0.0
         t_simp = 0.0
         t_all = 0.0
         n_repeat = 10
 
-        """ 
+        """
         CPU time benchmark.
         The function is repeatedly run for n_repeat times to calculate the average processing time of each modules.
         The time of the first warm-up run is excluded to reduce timing fluctuation and exclude the overhead in initial invocations.
@@ -133,7 +132,7 @@ class Tomography(Node):
         self.publishLayers(self.layer_C_pub_list, layers_c, None)
         self.publishTomogram(layers_g, layers_t)
 
-    def exportTomogram(self, tomogram, map_file):        
+    def exportTomogram(self, tomogram, map_file):
         data_dict = {
             'data': tomogram.astype(np.float16),
             'resolution': self.resolution,
@@ -169,10 +168,10 @@ class Tomography(Node):
                 layer_points[:, 3] = color[i, self.VISPROTO_I[:, 0], self.VISPROTO_I[:, 1]]
             else:
                 layer_points[:, 3] = 1.0
-        
+
             valid_points = layer_points[~np.isnan(layer_points).any(axis=-1)]
             points_msg = point_cloud2.create_cloud(header, POINT_FIELDS_XYZI, valid_points)
-            pub_list[i].publish(points_msg) 
+            pub_list[i].publish(points_msg)
 
     def publishTomogram(self, layers_g, layers_t):
         header = Header()
@@ -181,7 +180,7 @@ class Tomography(Node):
 
         n_slice = layers_g.shape[0]
         vis_g = layers_g.copy()
-        vis_t = layers_t.copy() 
+        vis_t = layers_t.copy()
         layer_points = self.VISPROTO_P.copy()
         layer_points[:, :2] += self.center
 
@@ -202,7 +201,7 @@ class Tomography(Node):
         layer_points[:, 3] = vis_t[-1, self.VISPROTO_I[:, 0], self.VISPROTO_I[:, 1]]
         valid_points = layer_points[~np.isnan(layer_points).any(axis=-1)]
         global_points = np.concatenate((global_points, valid_points), axis=0)
-        
+
         points_msg = point_cloud2.create_cloud(header, POINT_FIELDS_XYZI, global_points)
         self.tomogram_pub.publish(points_msg)
 
@@ -220,7 +219,7 @@ def main(args=None):
     # ROS 2 需要将 sys.argv 传递给 rclpy.init
     import sys
     rclpy.init(args=sys.argv if args is None else args)
-    
+
     mapping = Tomography(cfg, scene_cfg)
 
     try:

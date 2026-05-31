@@ -165,7 +165,6 @@ def example_6_error_handling():
     print("\n=== 示例6: 错误处理 ===")
 
     from semantic.perception.api.exceptions import (
-        DetectorError,
         InvalidImageError,
         PerceptionAPIError,
     )

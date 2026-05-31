@@ -17,18 +17,17 @@ Or standalone:
 from __future__ import annotations
 
 import logging
-import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 
 from core.module import Module
 from core.msgs.geometry import PoseStamped, Twist
-from core.msgs.nav import Odometry, Path
+from core.msgs.nav import Odometry
 from core.msgs.semantic import SafetyState, SceneGraph
 from core.registry import register
-from core.stream import In, Out
+from core.stream import In
 
 logger = logging.getLogger(__name__)
 

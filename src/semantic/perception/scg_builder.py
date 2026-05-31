@@ -22,7 +22,6 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum
-from typing import Set, Tuple
 
 import numpy as np
 from scipy.spatial import KDTree

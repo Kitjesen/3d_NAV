@@ -25,7 +25,7 @@ import threading
 from typing import Any
 
 from core.module import Module, skill
-from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+from core.msgs.geometry import PoseStamped, Twist
 from core.msgs.nav import Odometry
 from core.msgs.semantic import SafetyState, SceneGraph
 from core.registry import register

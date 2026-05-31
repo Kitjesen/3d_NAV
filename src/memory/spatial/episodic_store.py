@@ -169,9 +169,7 @@ class SqliteEpisodicStore:
 
     def load_recent(self, n: int) -> list[MemoryRecord]:
         """Return the *n* most recent records, oldest-first."""
-        import numpy as np
 
-        from memory.spatial.episodic import MemoryRecord
         with self._lock:
             cur = self._conn.execute(
                 "SELECT ts, position, labels, room, desc, emb"

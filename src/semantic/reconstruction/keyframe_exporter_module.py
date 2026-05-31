@@ -26,7 +26,6 @@ Ports:
 
 from __future__ import annotations
 
-import io
 import json
 import logging
 import math
@@ -309,7 +308,7 @@ class ReconKeyframeExporterModule(Module, layer=3):
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=15) as resp:
-                resp_body = resp.read()
+                resp.read()
 
             self._total_exported += len(batch)
             self._total_bytes    += len(body)

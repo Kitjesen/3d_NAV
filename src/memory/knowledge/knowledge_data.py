@@ -7,7 +7,6 @@ kg_data.py — 工业知识图谱静态数据定义。
 由 knowledge_graph.IndustrialKnowledgeGraph._build_industrial_knowledge() 调用。
 """
 
-from typing import Dict, List
 
 from .knowledge_graph import (
     AffordanceType,

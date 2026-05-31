@@ -19,9 +19,7 @@ Leiden 区域分割 — 在 SCG 上进行社区检测。
 """
 
 import logging
-from collections import defaultdict
 from dataclasses import dataclass
-from typing import Set
 
 import numpy as np
 
@@ -72,13 +70,13 @@ class LeidenSegmenter:
     def _check_dependencies(self) -> None:
         """检查依赖库。"""
         try:
-            import igraph
+            import igraph  # noqa: F401
             self.use_igraph = True
             logger.info("Using igraph for Leiden clustering")
         except ImportError:
             try:
-                import leidenalg
-                import networkx
+                import leidenalg  # noqa: F401
+                import networkx  # noqa: F401
                 self.use_igraph = False
                 logger.info("Using networkx + leidenalg for Leiden clustering")
             except ImportError:

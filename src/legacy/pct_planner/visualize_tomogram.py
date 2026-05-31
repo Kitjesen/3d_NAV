@@ -17,10 +17,10 @@ from config import Config
 class TomogramVisualizer(Node):
     def __init__(self, scene_name):
         super().__init__('tomogram_visualizer')
-        
+
         # Load Config
         self.cfg = Config()
-        
+
         # Determine paths
         # Assuming run from tomography/scripts/
         rsg_root = os.path.dirname(os.path.abspath(__file__)) + '/../..'
@@ -33,46 +33,46 @@ class TomogramVisualizer(Node):
             sys.exit(1)
 
         self.get_logger().info(f"Loading tomogram from: {self.pickle_path}")
-        
+
         # Load Data
         self.load_tomogram()
-        
+
         # Initialize ROS Publishers
         self.init_ros()
-        
+
         # Publish
         self.get_logger().info("Publishing tomogram visualization...")
         self.publish_all()
-        
+
         # Create a timer to keep publishing (optional, for late joiners if not using latching correctly)
         # self.create_timer(2.0, self.publish_all)
 
     def load_tomogram(self):
         with open(self.pickle_path, 'rb') as handle:
             data_dict = pickle.load(handle)
-        
+
         # Restore metadata
         self.resolution = data_dict['resolution']
         self.center = data_dict['center']
         self.slice_h0 = data_dict['slice_h0']
         self.slice_dh = data_dict['slice_dh']
         tomogram_data = data_dict['data'] # Shape: (5, n_slice, dim_x, dim_y)
-        
+
         # Unpack layers (matching tomography.py structure)
         # 0: layers_t (traversability)
         # 1: trav_grad_x
         # 2: trav_grad_y
         # 3: layers_g (geometric elevation)
         # 4: layers_c (ceiling elevation, optional for vis but usually included)
-        
+
         self.layers_t = tomogram_data[0]
         self.layers_g = tomogram_data[3]
-        
+
         # Handle shapes
         self.n_slice = self.layers_g.shape[0]
         self.map_dim_x = self.layers_g.shape[1]
         self.map_dim_y = self.layers_g.shape[2]
-        
+
         self.get_logger().info(f"Loaded map: {self.map_dim_x}x{self.map_dim_y} with {self.n_slice} slices")
 
         # Prepare grid points for visualization
@@ -81,7 +81,7 @@ class TomogramVisualizer(Node):
 
     def init_ros(self):
         self.map_frame = self.cfg.ros.map_frame
-        
+
         # QoS setup
         from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
         qos_profile = QoSProfile(
@@ -93,7 +93,7 @@ class TomogramVisualizer(Node):
         # Publishers
         self.tomogram_pub = self.create_publisher(
             PointCloud2, self.cfg.ros.tomogram_topic, qos_profile)
-            
+
         # Optional: Layer publishers if you want to see individual slices
         # self.layer_G_pub_list = []
         # layer_G_topic = self.cfg.ros.layer_G_topic
@@ -112,25 +112,25 @@ class TomogramVisualizer(Node):
 
         n_slice = layers_g.shape[0]
         vis_g = layers_g.copy()
-        vis_t = layers_t.copy() 
-        
+        vis_t = layers_t.copy()
+
         # Prepare points container
         layer_points = self.VISPROTO_P.copy()
         layer_points[:, :2] += self.center
 
         global_points = None
-        
+
         # Logic copied from tomography.py to merge layers for visualization
         for i in range(n_slice - 1):
             mask_h = (vis_g[i + 1] - vis_g[i]) < self.slice_dh
             vis_g[i, mask_h] = np.nan
             vis_t[i + 1, mask_h] = np.minimum(vis_t[i, mask_h], vis_t[i + 1, mask_h])
-            
+
             layer_points[:, 2] = vis_g[i, self.VISPROTO_I[:, 0], self.VISPROTO_I[:, 1]]
             layer_points[:, 3] = vis_t[i, self.VISPROTO_I[:, 0], self.VISPROTO_I[:, 1]]
-            
+
             valid_points = layer_points[~np.isnan(layer_points).any(axis=-1)]
-            
+
             if global_points is None:
                 global_points = valid_points
             else:
@@ -140,12 +140,12 @@ class TomogramVisualizer(Node):
         layer_points[:, 2] = vis_g[-1, self.VISPROTO_I[:, 0], self.VISPROTO_I[:, 1]]
         layer_points[:, 3] = vis_t[-1, self.VISPROTO_I[:, 0], self.VISPROTO_I[:, 1]]
         valid_points = layer_points[~np.isnan(layer_points).any(axis=-1)]
-        
+
         if global_points is not None:
             global_points = np.concatenate((global_points, valid_points), axis=0)
         else:
             global_points = valid_points
-        
+
         # Publish
         if global_points is not None and len(global_points) > 0:
             points_msg = point_cloud2.create_cloud(header, POINT_FIELDS_XYZI, global_points)
@@ -161,9 +161,9 @@ def main(args=None):
     parsed_args, unknown = parser.parse_known_args()
 
     rclpy.init(args=args)
-    
+
     visualizer = TomogramVisualizer(parsed_args.scene)
-    
+
     try:
         rclpy.spin(visualizer)
     except KeyboardInterrupt:

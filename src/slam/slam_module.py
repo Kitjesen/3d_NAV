@@ -26,7 +26,7 @@ Usage::
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from core.backend_status import BackendStatus
 from core.module import Module

@@ -1,4 +1,3 @@
-import numpy as np
 from numba import jit, prange
 
 
@@ -7,7 +6,7 @@ def get_index_map_1d(px, py, cx, cy, resolution, n_row, n_col):
     """Return 1D index of a point (x, y) in a layer"""
     idx_x = int(round((px - cx) / resolution)) + n_row // 2
     idx_y = int(round((py - cy) / resolution)) + n_col // 2
-    
+
     if idx_x < 0 or idx_x >= n_row or idx_y < 0 or idx_y >= n_col:
         return -1
     return n_col * idx_x + idx_y
@@ -27,20 +26,20 @@ def tomographyKernel_cpu(points, center, layers_g, layers_c, resolution, n_row, 
     """
     cx, cy = center[0], center[1]
     layer_size = n_row * n_col
-    
+
     for i in range(points.shape[0]):
         px = points[i, 0]
         py = points[i, 1]
         pz = points[i, 2]
-        
+
         idx = get_index_map_1d(px, py, cx, cy, resolution, n_row, n_col)
         if idx < 0:
             continue
-            
+
         for s_idx in range(n_slice):
             slice_height = slice_h0 + s_idx * slice_dh
             block_idx = get_index_block_1d(idx, s_idx, layer_size)
-            
+
             if pz <= slice_height:
                 # Update ground layer (take maximum)
                 # Note: max() between float and memory view works in Numba
@@ -62,19 +61,19 @@ def get_idx_relative(idx, dx, dy, n_row, n_col, layer_size):
     idx_y = idx_2d % n_col
     idx_rx = idx_x + dx
     idx_ry = idx_y + dy
-    
+
     if idx_rx < 0 or idx_rx >= n_row:
         return -1
     if idx_ry < 0 or idx_ry >= n_col:
         return -1
-    
+
     return n_col * dx + dy + idx
 
 
 @jit(nopython=True, parallel=True)
-def travKernel_cpu(interval, grad_mag_sq, grad_mag_max, trav_cost, 
-                   n_row, n_col, half_kernel_size, 
-                   interval_min, interval_free, step_cross, step_stand, 
+def travKernel_cpu(interval, grad_mag_sq, grad_mag_max, trav_cost,
+                   n_row, n_col, half_kernel_size,
+                   interval_min, interval_free, step_cross, step_stand,
                    standable_th, cost_barrier):
     """
     CPU version of traversability kernel (Accelerated with Numba)
@@ -83,7 +82,7 @@ def travKernel_cpu(interval, grad_mag_sq, grad_mag_max, trav_cost,
     layer_size = n_row * n_col
     step_cross_sq = step_cross ** 2
     step_stand_sq = step_stand ** 2
-    
+
     total_size = interval.size
     # Parallel loop over all grid cells
     for i in prange(total_size):
@@ -94,7 +93,7 @@ def travKernel_cpu(interval, grad_mag_sq, grad_mag_max, trav_cost,
             # Use separate variable to avoid read-write race if any (though i is unique here)
             cost = 0.0
             cost += max(0.0, 20 * (interval_free - interval.flat[i]))
-            
+
         if grad_mag_sq.flat[i] <= step_stand_sq:
             cost += 15 * grad_mag_sq.flat[i] / step_stand_sq
             trav_cost.flat[i] += cost
@@ -121,7 +120,7 @@ def travKernel_cpu(interval, grad_mag_sq, grad_mag_max, trav_cost,
 
 
 @jit(nopython=True, parallel=True)
-def inflationKernel_cpu(trav_cost, score_table, inflated_cost, 
+def inflationKernel_cpu(trav_cost, score_table, inflated_cost,
                         n_row, n_col, half_kernel_size):
     """
     CPU version of inflation kernel (Accelerated with Numba)
@@ -129,12 +128,12 @@ def inflationKernel_cpu(trav_cost, score_table, inflated_cost,
     """
     layer_size = n_row * n_col
     total_size = trav_cost.size
-    
+
     # Parallel loop
     for i in prange(total_size):
         counter = 0
         max_cost = inflated_cost.flat[i]
-        
+
         for dy in range(-half_kernel_size, half_kernel_size + 1):
             for dx in range(-half_kernel_size, half_kernel_size + 1):
                 idx = get_idx_relative(i, dx, dy, n_row, n_col, layer_size)
@@ -142,7 +141,7 @@ def inflationKernel_cpu(trav_cost, score_table, inflated_cost,
                     cost_val = trav_cost.flat[idx] * score_table.flat[counter]
                     max_cost = max(max_cost, cost_val)
                 counter += 1
-                
+
         inflated_cost.flat[i] = max_cost
 
 
@@ -150,13 +149,13 @@ def inflationKernel_cpu(trav_cost, score_table, inflated_cost,
 def tomographyKernel(resolution, n_row, n_col, n_slice, slice_h0, slice_dh):
     """Wrapper function for CPU version"""
     def kernel_func(points, center, layers_g, layers_c):
-        tomographyKernel_cpu(points, center, layers_g, layers_c, 
+        tomographyKernel_cpu(points, center, layers_g, layers_c,
                             resolution, n_row, n_col, n_slice, slice_h0, slice_dh)
     return kernel_func
 
 
 def travKernel(n_row, n_col, half_kernel_size,
-               interval_min, interval_free, step_cross, step_stand, 
+               interval_min, interval_free, step_cross, step_stand,
                standable_th, cost_barrier):
     """Wrapper function for CPU version"""
     def kernel_func(interval, grad_mag_sq, grad_mag_max, trav_cost):

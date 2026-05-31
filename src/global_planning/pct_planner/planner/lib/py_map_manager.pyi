@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import typing
 
-import py_map_manager
 
 __all__ = [
     "DenseElevationMap"

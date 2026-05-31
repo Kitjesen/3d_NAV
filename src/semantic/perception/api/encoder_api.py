@@ -5,11 +5,9 @@ Semantic Perception API - 编码器接口
 """
 
 from abc import ABC, abstractmethod
-from typing import Union
 
 import numpy as np
 
-from .exceptions import EncoderError
 
 
 class EncoderAPI(ABC):

@@ -12,7 +12,6 @@ import numpy as np
 
 from ..api.encoder_api import EncoderAPI
 from ..api.exceptions import (
-    EncoderError,
     EncoderInferenceError,
     EncoderInitError,
 )

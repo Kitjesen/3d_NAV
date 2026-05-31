@@ -25,7 +25,7 @@ import logging
 import random
 import time
 from collections.abc import Callable, Sequence
-from typing import Any, Optional, Type, TypeVar
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 

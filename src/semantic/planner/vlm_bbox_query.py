@@ -23,7 +23,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

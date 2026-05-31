@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.module import Module, skill
 from core.msgs.nav import Odometry

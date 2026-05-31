@@ -99,11 +99,9 @@ class TraversableFrontierModule(WavefrontFrontierExplorer):
         with self._state_lock:
             self._scene_graph_data = data
 
-    @skill
-    def get_traversable_frontiers(self) -> list[dict[str, Any]]:
-        """Return ranked frontier candidates enriched with traversability evidence."""
-
-        base_frontiers = super().get_frontiers()
+    def _compute_candidates(self) -> list[dict[str, Any]]:
+        """Internal: compute and return frontier candidates as structured data."""
+        base_frontiers = super()._compute_frontier_clusters()
         with self._state_lock:
             fused_cost = self._fused_cost_data
             slope_grid = self._slope_grid_data
@@ -128,18 +126,25 @@ class TraversableFrontierModule(WavefrontFrontierExplorer):
         return candidates
 
     @skill
-    def refresh_candidates(self) -> dict[str, Any]:
+    def get_traversable_frontiers(self) -> str:
+        """Return ranked frontier candidates enriched with traversability evidence."""
+        import json
+        return json.dumps(self._compute_candidates(), default=str)
+
+    @skill
+    def refresh_candidates(self) -> str:
         """Compute and publish candidates without publishing any motion command."""
 
-        candidates = self.get_traversable_frontiers()
+        candidates = self._compute_candidates()
         self.traversable_frontiers.publish(candidates)
         if candidates:
             self.frontier_candidate.publish(candidates[0])
-        return {
+        import json
+        return json.dumps({
             "candidate_count": len(candidates),
             "best_candidate_id": candidates[0]["id"] if candidates else None,
             "command_published": False,
-        }
+        })
 
     def health(self) -> dict[str, Any]:
         info = super().health()

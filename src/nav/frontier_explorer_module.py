@@ -28,7 +28,7 @@ import math
 import threading
 import time
 from collections import deque
-from typing import Any, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -354,9 +354,8 @@ class WavefrontFrontierExplorer(Module, layer=2):
         logger.info("WavefrontFrontierExplorer: exploration stopped")
         return "stopped"
 
-    @skill
-    def get_frontiers(self) -> list:
-        """Return the most recently computed frontier cluster list."""
+    def _compute_frontier_clusters(self) -> list:
+        """Internal: compute and return frontier clusters as structured data."""
         with self._state_lock:
             costmap_data = self._frontier_grid_data_unlocked()
             rx, ry, ryaw = self._robot_x, self._robot_y, self._robot_yaw
@@ -381,6 +380,12 @@ class WavefrontFrontierExplorer(Module, layer=2):
             }
             for c in clusters
         ]
+
+    @skill
+    def get_frontiers(self) -> str:
+        """Return the most recently computed frontier cluster list."""
+        import json
+        return json.dumps(self._compute_frontier_clusters())
 
     @skill
     def clear_frontier_blocks(self) -> str:

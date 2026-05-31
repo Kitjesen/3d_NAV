@@ -143,7 +143,6 @@ def _slam_operation_response(
 
 
 def _unsupported_saved_map_relocalization_response(gw) -> Any | None:
-    from fastapi.responses import JSONResponse
 
     from gateway.services.runtime_status import build_localization_status
 

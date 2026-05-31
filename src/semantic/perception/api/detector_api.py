@@ -8,7 +8,6 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
-from .exceptions import DetectorError
 from .types import Detection2D
 
 

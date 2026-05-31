@@ -94,7 +94,6 @@ class GroundingDINODetector(DetectorBase):
             raise RuntimeError("Model not loaded. Call load_model() first.")
 
         import groundingdino.datasets.transforms as T
-        import torch
         from PIL import Image
 
         # BGR → RGB → PIL

@@ -11,9 +11,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 import numpy as np
 
@@ -255,7 +254,7 @@ class EpisodicMemory:
 
     def _keyword_score(self, query: str, record: MemoryRecord) -> float:
         query_words = set(query.lower().split())
-        label_words = set(l.lower() for l in record.labels)
+        label_words = set(label.lower() for label in record.labels)
         desc_words = set(record.description.lower().split())
         all_words = label_words | desc_words
         if not all_words:

@@ -10,13 +10,13 @@ import struct
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, Union
+from typing import Any
 
 import numpy as np
 
 from core.runtime_interface import body_frame_id, map_frame_id, odom_frame_id
 
-from .geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+from .geometry import Pose, PoseStamped, Twist
 
 NAV_MAP_FRAME_ID = map_frame_id()
 NAV_ODOM_FRAME_ID = odom_frame_id()

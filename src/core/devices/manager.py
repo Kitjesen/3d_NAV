@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
-from core.devices.base import Device, DeviceHealth, DeviceStatus, DeviceType
+from core.devices.base import Device, DeviceStatus
 from core.devices.spec import DeviceSpec, load_device_specs
 from core.module import Module
 from core.registry import register
@@ -108,8 +107,7 @@ class DeviceManager(Module, layer=0):
     def _import_drivers(self) -> None:
         """Trigger driver registration by importing the package."""
         try:
-            import core.devices.decoders
-            import core.devices.drivers
+            pass
         except Exception as e:
             logger.warning("DeviceManager: driver import failed: %s", e)
 

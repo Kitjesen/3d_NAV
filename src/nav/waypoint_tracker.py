@@ -5,9 +5,12 @@ logic from the mission FSM.
 """
 from __future__ import annotations
 
+import logging
 import math
 import time
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 

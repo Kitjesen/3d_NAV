@@ -19,7 +19,7 @@
 import logging
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 

@@ -636,8 +636,8 @@ def main():
     if rc != 0:
         print(_c(Colors.RED, f"  Cannot connect to gRPC server at {args.host}:{args.port}"))
         print(f"  Error: {err.strip()}")
-        print(f"\n  Make sure the gateway is running:")
-        print(f"    ros2 launch remote_monitoring grpc_gateway.launch.py")
+        print("\n  Make sure the gateway is running:")
+        print("    ros2 launch remote_monitoring grpc_gateway.launch.py")
         sys.exit(1)
     print(_c(Colors.GREEN, f"  Connected to gRPC server at {args.host}:{args.port}"))
 

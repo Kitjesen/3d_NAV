@@ -348,7 +348,7 @@ def _localization_state(
     degeneracy = _reported_state(diagnostics.get("degeneracy"))
     localizer_health = _reported_state(diagnostics.get("localizer_health"))
     recovery_signal = _active_recovery_signal(diagnostics.get("recovery_signal"))
-    confidence = diagnostics.get("confidence")
+    diagnostics.get("confidence")
     algorithm_healthy = _localizer_algorithm_healthy(diagnostics, icp_quality)
     pose_fresh, _ = _pose_freshness(diagnostics)
 

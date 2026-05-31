@@ -3,7 +3,6 @@ from __future__ import annotations
 import typing
 
 import numpy
-import traj_opt
 
 _Shape = tuple[int, ...]
 

@@ -14,7 +14,6 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import time
 import uuid
 
@@ -345,12 +344,12 @@ def test_11_save_map_service_bridge(t: BridgeTestRunner):
 def test_12_topic_health_detection(t: BridgeTestRunner):
     """HealthMonitor 正确检测话题状态"""
     out = t.stream("robot.v1.TelemetryService/StreamSlowState", "{}", timeout=4)
-    
+
     # Parse health subsystems
     slam_detected = "slam" in out.lower()
-    terrain_detected = "terrain" in out.lower()
+    "terrain" in out.lower()
     tf_detected = "tf" in out.lower()
-    
+
     t.record("HealthMonitor-SLAM检测", slam_detected,
              f"SLAM状态{'已报告' if slam_detected else '未报告'}")
     t.record("HealthMonitor-TF链检测", tf_detected,
@@ -390,8 +389,8 @@ def main():
     except Exception as e:
         print(_c(Colors.RED, f"  无法连接 gRPC 服务: {args.host}:{args.port}"))
         print(f"  错误: {e}")
-        print(f"\n  请确保 gateway 已启动:")
-        print(f"    ros2 launch remote_monitoring grpc_gateway.launch.py")
+        print("\n  请确保 gateway 已启动:")
+        print("    ros2 launch remote_monitoring grpc_gateway.launch.py")
         sys.exit(1)
 
     # Run tests

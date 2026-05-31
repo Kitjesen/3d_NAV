@@ -52,6 +52,7 @@ PROFILE_SNAPSHOT_TARGETS = (
 
 @dataclass(frozen=True, order=True)
 class WireEdge:
+    """A directed edge in the profile dependency graph between two module ports."""
     out_module: str
     out_port: str
     in_module: str
@@ -80,9 +81,7 @@ class WireEdge:
 
 @dataclass(frozen=True)
 class ProfileGraph:
-    profile: str
-    modules: tuple[str, ...]
-    explicit_wires: tuple[WireEdge, ...]
+    """DAG representation of a runtime profile: which modules and explicit wires it includes."""
 
     def as_snapshot(self) -> dict[str, list[str]]:
         return {

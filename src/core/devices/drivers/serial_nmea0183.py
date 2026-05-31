@@ -10,7 +10,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from core.devices.base import Device, DeviceStatus
 from core.devices.decoders.nmea import NmeaDecoder

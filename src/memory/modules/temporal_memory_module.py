@@ -18,10 +18,9 @@ import re
 import threading
 import time
 from collections import deque
-from dataclasses import asdict, dataclass, field
-from typing import Any, Deque, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any
 
-import numpy as np
 
 from core.module import Module, skill
 from core.msgs.nav import Odometry

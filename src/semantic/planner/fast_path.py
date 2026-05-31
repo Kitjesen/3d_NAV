@@ -21,7 +21,7 @@ import math
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Tuple
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -688,7 +688,7 @@ class FastPathMixin:
             if not labels:
                 oids = r.get("object_ids", [])
                 labels = [obj_by_id.get(oid, {}).get("label", "") for oid in oids]
-            room_texts.append(" ".join(str(l) for l in labels[:10] if l))
+            room_texts.append(" ".join(str(label) for label in labels[:10] if label))
         if not room_texts:
             return None
         try:

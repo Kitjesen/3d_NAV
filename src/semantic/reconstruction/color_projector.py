@@ -13,7 +13,6 @@ color_projector.py — RGB-D 帧 → 世界坐标系彩色点云
 
 import threading
 import time
-from typing import Tuple
 
 import numpy as np
 

@@ -12,7 +12,6 @@ from gateway.services.media_status import build_media_status
 from gateway.services.runtime_status import (
     build_localization_status_from_parts,
     build_navigation_status,
-    safe_lease as _safe_lease,
     safe_session as _safe_session,
 )
 from gateway.services.safety_status import (

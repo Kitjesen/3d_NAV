@@ -2007,7 +2007,8 @@ def test_navigation_status_blocks_goal_when_super_lio_recovery_signal_is_active(
 
 
 def test_goal_route_rejects_stale_localization_without_publishing():
-    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import GoalRequest
     from gateway.schemas import GatewayErrorResponse
 
     gateway = GatewayModule()
@@ -2050,7 +2051,8 @@ def test_goal_route_rejects_stale_localization_without_publishing():
 
 
 def test_goal_route_accepts_ready_navigation_goal():
-    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import GoalRequest
     from gateway.schemas import ControlCommandResponse
 
     class FakeNavigation:
@@ -2707,7 +2709,7 @@ def test_runtime_dataflow_exposes_traversable_frontier_candidates_read_only(
     module.slope_grid._deliver({**payload, "grid": slope})
     module.esdf_field._deliver({**payload, "distance_field": clearance})
     module.elevation_map._deliver({**payload, "max_z": elevation})
-    result = module.refresh_candidates()
+    result = json.loads(module.refresh_candidates())
 
     assert result["command_published"] is False
     assert module.exploration_goal.msg_count == 0

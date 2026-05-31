@@ -17,7 +17,7 @@ ReID 默认关闭，仅靠 IoU + Kalman 滤波，适合嵌入式场景。
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 

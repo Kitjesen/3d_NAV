@@ -972,7 +972,8 @@ def test_navigation_plan_preview_preserves_non_map_start_frame_when_blocked():
 
 
 def test_command_journal_replays_duplicate_request_id_without_republish():
-    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import GoalRequest
     from gateway.schemas import ControlCommandResponse
 
     gateway = GatewayModule()
@@ -1013,7 +1014,8 @@ def test_command_journal_replays_duplicate_request_id_without_republish():
 
 
 def test_control_commands_publish_command_ack_events():
-    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import GoalRequest
 
     gateway = GatewayModule()
     gateway.setup()
@@ -1053,7 +1055,8 @@ def test_control_commands_publish_command_ack_events():
 
 
 def test_goal_request_yaw_is_published_as_pose_orientation():
-    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import GoalRequest
     from gateway.schemas import ControlCommandResponse
 
     gateway = GatewayModule()
@@ -1095,7 +1098,8 @@ def test_goal_request_yaw_is_published_as_pose_orientation():
 
 
 def test_goal_route_rejects_infeasible_plan_preview_without_publishing():
-    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import GoalRequest
     from gateway.schemas import GatewayErrorResponse
 
     gateway = GatewayModule()
@@ -1161,7 +1165,8 @@ def test_goal_route_rejects_infeasible_plan_preview_without_publishing():
     ],
 )
 def test_goal_route_rejects_inconsistent_or_unsafe_feasible_preview(nav):
-    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import GoalRequest
     from gateway.schemas import GatewayErrorResponse
 
     gateway = GatewayModule()
@@ -1194,7 +1199,8 @@ def test_goal_route_rejects_inconsistent_or_unsafe_feasible_preview(nav):
 
 
 def test_goal_route_rejects_infeasible_preview_with_instruction_without_any_publish():
-    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import GoalRequest
     from gateway.schemas import GatewayErrorResponse
 
     gateway = GatewayModule()
@@ -1227,7 +1233,8 @@ def test_goal_route_rejects_infeasible_preview_with_instruction_without_any_publ
 
 
 def test_goal_route_rejects_safety_stop_without_planning_or_publishing():
-    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import GoalRequest
     from gateway.schemas import GatewayErrorResponse
 
     gateway = GatewayModule()
@@ -1266,7 +1273,8 @@ def test_goal_route_rejects_safety_stop_without_planning_or_publishing():
 
 
 def test_goal_route_rejects_inactive_navigation_session_without_planning_or_publishing():
-    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import GoalRequest
     from gateway.schemas import GatewayErrorResponse
 
     gateway = GatewayModule()
@@ -1303,7 +1311,8 @@ def test_goal_route_rejects_inactive_navigation_session_without_planning_or_publ
 
 
 def test_click_navigation_rejects_infeasible_plan_preview_without_publishing():
-    from gateway.gateway_module import ClickNavRequest, GatewayModule
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import ClickNavRequest
     from gateway.schemas import GatewayErrorResponse
 
     gateway = GatewayModule()
@@ -1341,7 +1350,8 @@ def test_click_navigation_rejects_infeasible_plan_preview_without_publishing():
 
 
 def test_click_navigation_rejects_safety_stop_without_planning_or_publishing():
-    from gateway.gateway_module import ClickNavRequest, GatewayModule
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import ClickNavRequest
     from gateway.schemas import GatewayErrorResponse
 
     gateway = GatewayModule()
@@ -1375,7 +1385,8 @@ def test_click_navigation_rejects_safety_stop_without_planning_or_publishing():
 
 
 def test_click_navigation_previews_publishes_and_replays_request_id_once():
-    from gateway.gateway_module import ClickNavRequest, GatewayModule
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import ClickNavRequest
     from gateway.schemas import ControlCommandResponse
 
     gateway = GatewayModule()
@@ -1419,7 +1430,8 @@ def test_click_navigation_previews_publishes_and_replays_request_id_once():
 
 
 def test_goal_route_rejects_missing_plan_preview_without_publishing():
-    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import GoalRequest
     from gateway.schemas import GatewayErrorResponse
 
     gateway = GatewayModule()
@@ -1454,7 +1466,8 @@ def test_goal_route_rejects_missing_plan_preview_without_publishing():
 
 
 def test_direct_motion_commands_reject_safety_stop_without_publishing():
-    from gateway.gateway_module import CmdVelRequest, GatewayModule, InstructionRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import CmdVelRequest, InstructionRequest
     from gateway.schemas import GatewayErrorResponse
 
     gateway = GatewayModule()
@@ -1501,7 +1514,8 @@ def test_direct_motion_commands_reject_safety_stop_without_publishing():
 
 
 def test_cmd_vel_rejects_safety_stop_without_publishing_and_emits_rejected_ack():
-    from gateway.gateway_module import CmdVelRequest, GatewayModule
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import CmdVelRequest
     from gateway.schemas import GatewayErrorResponse
 
     gateway = GatewayModule()
@@ -1539,7 +1553,8 @@ def test_cmd_vel_rejects_safety_stop_without_publishing_and_emits_rejected_ack()
 
 
 def test_cmd_vel_replays_duplicate_request_id_without_republish():
-    from gateway.gateway_module import CmdVelRequest, GatewayModule
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import CmdVelRequest
     from gateway.schemas import ControlCommandResponse
 
     gateway = GatewayModule()
@@ -1566,7 +1581,7 @@ def test_cmd_vel_replays_duplicate_request_id_without_republish():
 
 
 def test_cmd_vel_rejects_non_finite_vy():
-    from gateway.gateway_module import CmdVelRequest
+    from gateway.schemas import CmdVelRequest
 
     with pytest.raises(ValueError):
         CmdVelRequest(vx=0.0, vy=float("nan"), wz=0.0)
@@ -1592,7 +1607,8 @@ def test_stop_command_remains_available_when_safety_stop_is_active():
 
 
 def test_navigation_cancel_publishes_cancel_without_motion_outputs():
-    from gateway.gateway_module import CancelRequest, GatewayModule
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import CancelRequest
     from gateway.schemas import ControlCommandResponse
 
     gateway = GatewayModule()
@@ -1647,7 +1663,8 @@ def test_commands_without_request_id_preserve_existing_execute_every_time_behavi
 
 
 def test_lease_command_uses_receipt_and_replays_duplicate_request_id():
-    from gateway.gateway_module import GatewayModule, LeaseRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import LeaseRequest
     from gateway.schemas import LeaseResponse
 
     gateway = GatewayModule()
@@ -1708,7 +1725,8 @@ def test_lease_command_uses_receipt_and_replays_duplicate_request_id():
 
 
 def test_lease_conflict_emits_rejected_ack_and_lease_event():
-    from gateway.gateway_module import GatewayModule, LeaseRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import LeaseRequest
 
     gateway = GatewayModule()
     gateway.setup()

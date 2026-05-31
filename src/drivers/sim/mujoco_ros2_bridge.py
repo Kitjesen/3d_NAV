@@ -36,7 +36,6 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TwistStamped, TransformStamped
 from sensor_msgs.msg import PointCloud2, PointField
-from std_msgs.msg import Header
 from tf2_ros import TransformBroadcaster
 
 from core.runtime_interface import FRAMES, TOPICS

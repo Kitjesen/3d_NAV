@@ -24,7 +24,8 @@ from core.module import Module, rpc, skill
 from core.msgs.geometry import PoseStamped, Vector3
 from core.msgs.semantic import Detection3D, GoalResult, SceneGraph
 from core.runtime_interface import TOPICS
-from core.stream import In, LocalTransport, Out
+from core.stream import In, Out
+from core.transport.local import LocalTransport
 
 # ============================================================================
 # Test Fixtures — 测试用模块定义

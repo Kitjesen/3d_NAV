@@ -20,18 +20,17 @@ import numpy as np
 import time
 import sys
 import collections
+from pathlib import Path
 
 import mujoco
 import mujoco.viewer
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from nav_msgs.msg import Odometry, Path
+from nav_msgs.msg import Odometry, Path  # noqa: F811 -- Path used as msg type
 from geometry_msgs.msg import TwistStamped, TransformStamped
 from sensor_msgs.msg import PointCloud2, PointField
 from tf2_ros import TransformBroadcaster
-
-from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 if str(SRC_DIR) not in sys.path:

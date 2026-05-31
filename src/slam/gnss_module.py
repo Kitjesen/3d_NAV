@@ -36,7 +36,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from core.module import Module
 from core.msgs.gnss import GnssFix, GnssFixType, GnssOdom, GnssStatus

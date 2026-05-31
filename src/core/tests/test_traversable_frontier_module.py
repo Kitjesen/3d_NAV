@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 
 from core.msgs.geometry import Pose
@@ -76,7 +78,7 @@ def test_traversable_frontier_module_outputs_preview_candidates_without_motion()
     )
     module.elevation_map._deliver(_elevation_payload(elevation))
 
-    result = module.refresh_candidates()
+    result = json.loads(module.refresh_candidates())
 
     assert result["command_published"] is False
     assert result["candidate_count"] > 0
@@ -130,7 +132,7 @@ def test_traversable_frontier_marks_steep_or_high_cost_support_blocked():
     )
     module.elevation_map._deliver(_elevation_payload(elevation))
 
-    candidates = module.get_traversable_frontiers()
+    candidates = json.loads(module.get_traversable_frontiers())
 
     assert candidates
     assert candidates[0]["state"] == "blocked"
@@ -173,7 +175,7 @@ def test_traversable_frontier_marks_configured_high_cost_support_blocked():
     )
     module.elevation_map._deliver(_elevation_payload(elevation))
 
-    candidates = module.get_traversable_frontiers()
+    candidates = json.loads(module.get_traversable_frontiers())
 
     assert candidates
     assert candidates[0]["state"] == "blocked"
@@ -219,7 +221,7 @@ def test_traversable_frontier_uses_nearby_scene_graph_semantics_without_motion()
     )
     module.elevation_map._deliver(_elevation_payload(elevation))
 
-    before = module.get_traversable_frontiers()
+    before = json.loads(module.get_traversable_frontiers())
     assert before
     target = before[0]
     module.scene_graph._deliver(
@@ -242,8 +244,8 @@ def test_traversable_frontier_uses_nearby_scene_graph_semantics_without_motion()
         )
     )
 
-    after = module.refresh_candidates()
-    candidates = module.get_traversable_frontiers()
+    after = json.loads(module.refresh_candidates())
+    candidates = json.loads(module.get_traversable_frontiers())
     enriched = next(
         item
         for item in candidates

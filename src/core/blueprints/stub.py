@@ -4,6 +4,11 @@ StubDogModule is a drop-in replacement for HanDogModule that publishes
 synthetic odometry by integrating cmd_vel (simple dead reckoning).  No
 gRPC, no hardware, no threads -- completely self-contained.
 
+The blueprint factory stub_blueprint() composes StubDogModule with
+NavigationModule and SafetyRingModule from nav/. Cross-package module
+resolution uses stack_module() to avoid eager cross-package imports at
+module load time.
+
 Usage::
 
     from core.blueprints.stub import stub_blueprint
@@ -17,7 +22,7 @@ from __future__ import annotations
 import math
 import threading
 import time
-from typing import Any, Dict
+from typing import Any
 
 from core.blueprint import Blueprint
 from core.module import Module
@@ -28,10 +33,11 @@ from core.msgs.sensor import Image
 from core.registry import register
 from core.runtime_interface import (
     body_frame_id as runtime_body_frame_id,
+)
+from core.runtime_interface import (
     odom_frame_id as runtime_odom_frame_id,
 )
 from core.stream import In, Out
-
 
 STUB_ODOM_FRAME_ID = runtime_odom_frame_id()
 STUB_BODY_FRAME_ID = runtime_body_frame_id()
@@ -195,9 +201,27 @@ class StubDogModule(Module, layer=1):
 # -- Blueprint factory -------------------------------------------------
 
 def stub_blueprint(**config: Any) -> Blueprint:
-    """Test blueprint -- StubDogModule + new module architecture."""
-    from nav.navigation_module import NavigationModule
-    from nav.safety_ring_module import SafetyRingModule
+    """Test blueprint -- StubDogModule + new module architecture.
+
+    NOTE: Blueprint factory -- cross-layer module resolution uses stack_module()
+    to avoid eager cross-package imports at module load time. NavigationModule
+    and SafetyRingModule (both from nav/) are resolved lazily via the registry
+    helper when this factory function is called.
+    """
+    from core.blueprints.stacks._registry import stack_module
+
+    NavigationModule = stack_module(
+        "navigation",
+        "default",
+        seed_group="navigation",
+        fallback="nav.navigation_module.NavigationModule",
+    )
+    SafetyRingModule = stack_module(
+        "safety",
+        "ring",
+        seed_group="safety",
+        fallback="nav.safety_ring_module.SafetyRingModule",
+    )
 
     bp = Blueprint()
     bp.add(StubDogModule)

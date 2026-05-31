@@ -21,7 +21,7 @@ import hashlib
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
@@ -428,17 +428,18 @@ class VectorMemoryModule(Module, layer=3):
     # ── @skill methods (MCP-exposed) ──────────────────────────────────────────
 
     @skill
-    def query_location(self, text: str) -> dict:
+    def query_location(self, text: str) -> str:
         """Fuzzy search for a location by natural language description.
 
         Example: "去上次放背包的地方" → returns closest matching position.
         """
+        import json
         results = self._query(text)
         semantic_encoder_ready = self._semantic_encoder_ready()
         degraded = self._encoder_type == "lexical_hash"
         navigable = semantic_encoder_ready and not degraded
         if not results:
-            return {
+            return json.dumps({
                 "query": text,
                 "found": False,
                 "results": [],
@@ -446,8 +447,8 @@ class VectorMemoryModule(Module, layer=3):
                 "semantic_encoder_ready": semantic_encoder_ready,
                 "degraded": degraded,
                 "navigable": navigable,
-            }
-        return {
+            }, ensure_ascii=False)
+        return json.dumps({
             "query": text,
             "found": True,
             "best": {"x": results[0]["x"], "y": results[0]["y"],
@@ -458,7 +459,7 @@ class VectorMemoryModule(Module, layer=3):
             "semantic_encoder_ready": semantic_encoder_ready,
             "degraded": degraded,
             "navigable": navigable,
-        }
+        }, ensure_ascii=False)
 
     def _semantic_encoder_ready(self) -> bool:
         return self._encoder_type in (
@@ -497,10 +498,11 @@ class VectorMemoryModule(Module, layer=3):
         return info
 
     @skill
-    def get_memory_stats(self) -> dict:
+    def get_memory_stats(self) -> str:
         """Return vector memory statistics."""
+        import json
         count = self._entry_count()
-        return {
+        return json.dumps({
             "backend": "chromadb" if self._use_chromadb else "numpy",
             "entries": count,
             "store_count": self._store_count,
@@ -511,4 +513,4 @@ class VectorMemoryModule(Module, layer=3):
             "semantic_encoder_ready": self._semantic_encoder_ready(),
             "degraded": self._encoder_type == "lexical_hash",
             "embedding_dim": self._embedding_dim,
-        }
+        })

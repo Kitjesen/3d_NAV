@@ -20,7 +20,6 @@ GitHub reference: isl-org/Open3D — examples/python/reconstruction_system/
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from pathlib import Path

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import subprocess
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 _LAYER_LABELS: dict[int | None, str] = {
     0: "L0 · Safety",

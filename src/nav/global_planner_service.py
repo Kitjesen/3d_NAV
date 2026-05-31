@@ -10,7 +10,7 @@ import os
 import pickle
 import time
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any
 
 import numpy as np
 

@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 from core.module import Module, skill
 from core.msgs.geometry import Twist, Vector3

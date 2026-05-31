@@ -53,8 +53,9 @@ def test_profile_motion_drivers_satisfy_motion_contract():
         assert issues == [], f"driver '{name}' violates MotionDriver: {issues}"
 
 
+@pytest.mark.sim
 @pytest.mark.parametrize("name", ["sim_mujoco", "sim_ros2"])
-def test_sim_drivers_are_full_sensor_sources(name):
+def test_sim_drivers_expose_sensors(name):
     cls = _get_driver(name)
     assert is_motion_driver(cls)
     assert is_camera_source(cls), f"{name} should expose camera source ports"

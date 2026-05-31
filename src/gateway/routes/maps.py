@@ -27,8 +27,8 @@ from gateway.schemas import (
     MapSaveRequest,
 )
 from gateway.services.map_paths import active_map_name, nav_map_root_str
+from core.dynamic_filter import apply_dynamic_filter_step1half
 from gateway.services.map_safety import (
-    apply_dynamic_filter_step1half,
     safe_map_name,
 )
 from gateway.services.runtime_status import backend_capability_defaults
@@ -561,7 +561,7 @@ def register_map_routes(app, gw) -> None:
                     "bash",
                     "-c",
                     ros_env
-                    + f"ros2 service call /nav/save_map interface/srv/SaveMaps "
+                    + "ros2 service call /nav/save_map interface/srv/SaveMaps "
                     + f"\"{{file_path: {safe_pcd}}}\"",
                 ],
                 capture_output=True,
@@ -583,7 +583,7 @@ def register_map_routes(app, gw) -> None:
                     "bash",
                     "-c",
                     ros_env
-                    + f"ros2 service call /pgo/save_maps interface/srv/SaveMaps "
+                    + "ros2 service call /pgo/save_maps interface/srv/SaveMaps "
                     + f"\"{{file_path: '{save_dir}', save_patches: true}}\"",
                 ],
                 capture_output=True,

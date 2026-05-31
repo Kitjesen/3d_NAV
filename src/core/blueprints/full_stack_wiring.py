@@ -31,6 +31,11 @@ _SEMANTIC_CAMERA_CONSUMERS = (
 
 @dataclass(frozen=True)
 class WireSpec:
+    """Blueprint wire specification — connects an output port on one module to an input port on another.
+
+    Used to define explicit cross-module connections that would otherwise
+    require runtime dispatch or manual wiring.
+    """
     out_module: str
     out_port: str
     in_module: str

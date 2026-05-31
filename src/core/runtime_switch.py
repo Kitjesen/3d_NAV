@@ -22,6 +22,7 @@ from core.runtime_interface import (
 
 @dataclass(frozen=True)
 class RuntimeSwitchValidation:
+    """Result of validating runtime feature switches before applying them."""
     ok: bool
     blockers: tuple[str, ...]
     warnings: tuple[str, ...] = ()

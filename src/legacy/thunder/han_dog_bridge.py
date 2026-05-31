@@ -31,7 +31,6 @@ Han Dog gRPC Bridge — 将 MapPilot 导航栈接入四足机器人
 import asyncio
 import math
 import threading
-import time
 from typing import Optional
 
 import rclpy
@@ -40,7 +39,6 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TwistStamped
 from std_msgs.msg import Bool, Int8
-from tf_transformations import quaternion_from_euler
 
 # interface 包定义的 RobotState 消息
 from interface.msg import RobotState, BatteryState

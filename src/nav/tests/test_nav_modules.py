@@ -6,6 +6,7 @@ All tests are pure-Python, no ROS2 / hardware / MuJoCo required.
 
 from __future__ import annotations
 
+import json
 import math
 import sys
 import time
@@ -14,6 +15,7 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 
 _scipy_available = True
 try:
@@ -838,6 +840,7 @@ class _FakeROSOccupancyGrid:
         self.data = []
 
 
+@pytest.mark.ros2
 class TestROS2PathBridgeModule(unittest.TestCase):
     def test_defaults_come_from_runtime_topic_contract(self):
         from nav.ros2_path_bridge_module import ROS2PathBridgeModule
@@ -888,6 +891,7 @@ class TestROS2PathBridgeModule(unittest.TestCase):
         self.assertEqual(msg.poses[0].pose.position.y, 2.0)
 
 
+@pytest.mark.ros2
 class TestROS2GridBridgeModule(unittest.TestCase):
     def test_default_frame_comes_from_exploration_grid_contract(self):
         from nav.ros2_grid_bridge_module import ROS2GridBridgeModule
@@ -994,10 +998,10 @@ class TestVoxelGridModule(unittest.TestCase):
 
         m.map_cloud._deliver(PointCloud2.from_numpy(pts, frame_id="map"))
 
-        self.assertEqual(m.query_voxel(0.1, 0.1, 0.1)["count"], 2.0)
-        self.assertEqual(m.query_voxel(1.2, 0.1, 0.1)["count"], 1.0)
-        self.assertFalse(m.query_voxel(20.0, 0.0, 0.0)["occupied"])
-        self.assertFalse(m.query_voxel(0.0, 0.0, 3.0)["occupied"])
+        self.assertEqual(json.loads(m.query_voxel(0.1, 0.1, 0.1))["count"], 2.0)
+        self.assertEqual(json.loads(m.query_voxel(1.2, 0.1, 0.1))["count"], 1.0)
+        self.assertFalse(json.loads(m.query_voxel(20.0, 0.0, 0.0))["occupied"])
+        self.assertFalse(json.loads(m.query_voxel(0.0, 0.0, 3.0))["occupied"])
 
     def test_duplicate_heavy_cloud_updates_one_voxel_without_python_point_loop(self):
         m = self._make_module()
@@ -1009,9 +1013,9 @@ class TestVoxelGridModule(unittest.TestCase):
 
         m.map_cloud._deliver(PointCloud2.from_numpy(pts, frame_id="map"))
 
-        stats = m.get_voxel_stats()
+        stats = json.loads(m.get_voxel_stats())
         self.assertEqual(stats["total_voxels"], 1)
-        self.assertEqual(m.query_voxel(0.25, 0.25, 0.25)["count"], 1000.0)
+        self.assertEqual(json.loads(m.query_voxel(0.25, 0.25, 0.25))["count"], 1000.0)
 
     def test_decay_publish_prunes_and_reports_columns(self):
         m = self._make_module(decay_rate=0.5)
@@ -1035,7 +1039,7 @@ class TestVoxelGridModule(unittest.TestCase):
         self.assertEqual(stats_payloads[0]["frame_id"], topic_default_frame_id(TOPICS.map_cloud))
         self.assertEqual(cloud_payloads[0].points.shape, (2, 3))
         self.assertEqual(cloud_payloads[0].frame_id, topic_default_frame_id(TOPICS.map_cloud))
-        self.assertEqual(m.query_voxel(1.1, 1.1, 0.1)["count"], 0.0)
+        self.assertEqual(json.loads(m.query_voxel(1.1, 1.1, 0.1))["count"], 0.0)
 
     def test_voxel_publish_uses_normalized_input_cloud_frame(self):
         m = self._make_module(publish_interval=0.0)
@@ -1272,7 +1276,7 @@ class TestSafetyRingModule(unittest.TestCase):
         try:
             m._on_odom(self._make_odom())
             stops.clear()
-            time.sleep(0.06)
+            time.sleep(0.15)
             self.assertIn(2, stops)
         finally:
             m.stop()

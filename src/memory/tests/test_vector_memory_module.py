@@ -7,6 +7,7 @@ Follows patterns from test_memory_modules.py.
 from __future__ import annotations
 
 import hashlib
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -265,7 +266,7 @@ class TestVectorMemorySkills(unittest.TestCase):
 
     def test_query_location_not_found(self):
         m = self._make()
-        result = m.query_location("missing thing")
+        result = json.loads(m.query_location("missing thing"))
         self.assertFalse(result["found"])
         self.assertEqual(result["encoder_type"], "none")
 
@@ -274,7 +275,7 @@ class TestVectorMemorySkills(unittest.TestCase):
         m._robot_xy = (3.0, 4.0)
         m._robot_z = 1.25
         m._store_snapshot(["backpack", "tree"])
-        result = m.query_location("backpack")
+        result = json.loads(m.query_location("backpack"))
         self.assertTrue(result["found"])
         self.assertIn("best", result)
         self.assertEqual(result["best"]["z"], 1.25)
@@ -283,7 +284,7 @@ class TestVectorMemorySkills(unittest.TestCase):
         m = self._make()
         m._robot_xy = (0.0, 0.0)
         m._store_snapshot(["bottle"])
-        result = m.query_location("bottle")
+        result = json.loads(m.query_location("bottle"))
         self.assertTrue(result["found"])
         self.assertGreaterEqual(len(result["results"]), 1)
 
@@ -291,13 +292,13 @@ class TestVectorMemorySkills(unittest.TestCase):
         m = self._make()
         m._robot_xy = (0.0, 0.0)
         m._store_snapshot(["item"])
-        stats = m.get_memory_stats()
+        stats = json.loads(m.get_memory_stats())
         self.assertEqual(stats["backend"], "numpy")
         self.assertEqual(stats["entries"], 1)
 
     def test_get_memory_stats_empty(self):
         m = self._make()
-        stats = m.get_memory_stats()
+        stats = json.loads(m.get_memory_stats())
         self.assertEqual(stats["entries"], 0)
 
     def test_health_numpy_backend(self):

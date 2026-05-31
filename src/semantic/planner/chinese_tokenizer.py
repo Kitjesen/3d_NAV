@@ -10,7 +10,6 @@
 """
 
 import logging
-from typing import Set, Tuple
 
 logger = logging.getLogger(__name__)
 

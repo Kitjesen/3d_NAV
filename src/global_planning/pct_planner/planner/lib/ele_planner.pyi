@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import typing
 
-import ele_planner
 import numpy
 
 from . import a_star as _a_star_mod

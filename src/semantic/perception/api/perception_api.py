@@ -8,7 +8,6 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
-from .exceptions import PerceptionAPIError
 from .types import CameraInfo, Detection3D, PerceptionConfig, SceneGraph
 
 

@@ -16,7 +16,6 @@ AdaCoT (Adaptive Chain-of-Thought) 动态快慢路径切换 (VLingNav 2026)。
 """
 
 import logging
-import re
 from dataclasses import dataclass
 from enum import Enum
 

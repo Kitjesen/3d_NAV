@@ -24,7 +24,7 @@ import math
 import time as _time_mod
 from collections import deque
 from pathlib import Path
-from typing import Any, Set, Tuple
+from typing import Any
 
 import numpy as np
 import yaml
@@ -76,11 +76,7 @@ def _load_frontier_weights() -> None:
 
 from .frontier_types import (
     # 辅助常量
-    _COOCCURRENCE,
-    _COOCCURRENCE_REVERSE,
-    # 常量 (向后兼容重新导出)
     FREE_CELL,
-    OCCUPIED_CELL,
     UNKNOWN_CELL,
     # 数据类 (向后兼容重新导出)
     Frontier,

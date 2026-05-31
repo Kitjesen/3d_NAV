@@ -27,7 +27,6 @@ so ``autoconnect`` wiring is identical.
 from __future__ import annotations
 
 import logging
-import time as _time
 from typing import Any
 
 from core.module import Module

@@ -19,7 +19,6 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Tuple
 
 import numpy as np
 import yaml
@@ -283,14 +282,14 @@ class SGNavReasoner:
         outputs: list[SubgraphScore] = []
         for c in candidates:
             h = heuristic_scores.get(c.subgraph_id, 0.0)
-            l = llm_scores.get(c.subgraph_id)
-            if l is None:
+            llm_val = llm_scores.get(c.subgraph_id)
+            if llm_val is None:
                 score = h
                 reason = f"heuristic={h:.2f}; {heuristic_reasons.get(c.subgraph_id, '')}"
             else:
-                score = self.heuristic_weight * h + self.llm_weight * l
+                score = self.heuristic_weight * h + self.llm_weight * llm_val
                 reason = (
-                    f"heuristic={h:.2f}, llm={l:.2f}; "
+                    f"heuristic={h:.2f}, llm={llm_val:.2f}; "
                     f"{heuristic_reasons.get(c.subgraph_id, '')}"
                 )
 

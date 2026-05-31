@@ -5,7 +5,6 @@ ply_writer.py — 零依赖 PLY 点云写入（binary little-endian）
 """
 
 import os
-import struct
 
 import numpy as np
 

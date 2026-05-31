@@ -25,12 +25,10 @@ from collections.abc import Callable
 from typing import (
     Any,
     Generic,
-    List,
-    Optional,
     TypeVar,
 )
 
-from .transport.local import LocalTransport, Transport  # canonical location
+from .transport.local import Transport  # canonical location
 
 logger = logging.getLogger(__name__)
 

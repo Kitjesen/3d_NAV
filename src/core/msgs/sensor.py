@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Optional, Tuple
+from typing import Any, ClassVar
 
 import numpy as np
 

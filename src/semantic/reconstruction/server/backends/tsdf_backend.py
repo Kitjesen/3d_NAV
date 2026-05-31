@@ -63,7 +63,7 @@ class TSDFBackend(ReconBackendBase):
         voxel_length = float(options.get("voxel_length", 0.04))
         sdf_trunc    = float(options.get("sdf_trunc", voxel_length * 2))
         extract_mesh = bool(options.get("extract_mesh", False))
-        min_depth    = float(options.get("min_depth_m", 0.1))
+        float(options.get("min_depth_m", 0.1))
         max_depth    = float(options.get("max_depth_m", 5.0))
 
         volume = o3d.pipelines.integration.ScalableTSDFVolume(

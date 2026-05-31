@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 # scipy is required for bilinear resampling. setup() raises loudly if missing.
 try:
-    import scipy.ndimage
+    import scipy.ndimage  # noqa: F401
 
     _SCIPY_AVAILABLE = True
 except ImportError:

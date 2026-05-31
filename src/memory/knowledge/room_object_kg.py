@@ -41,7 +41,6 @@ import logging
 import os
 import time
 from collections import defaultdict
-from typing import Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -493,7 +492,7 @@ def _infer_room_type_from_labels(labels: list[str]) -> str:
         pass
 
     # Minimal fallback
-    labels_lower = set(l.lower() for l in labels)
+    labels_lower = set(label.lower() for label in labels)
     if labels_lower & {"desk", "computer", "monitor", "keyboard"}:
         return "office"
     if labels_lower & {"refrigerator", "sink", "microwave", "oven"}:

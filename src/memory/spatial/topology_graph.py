@@ -22,7 +22,6 @@
 import logging
 import time
 from collections import defaultdict
-from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -31,7 +30,6 @@ from memory.spatial.topology_types import (
     _MIN_FRONTIER_DISTANCE,
     # 常量
     _REACHABILITY_LAMBDA,
-    _SEMANTIC_BOOST_FACTOR,
     _VISITED_PENALTY,
     ExplorationTarget,
     TopoEdge,

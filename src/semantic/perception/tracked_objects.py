@@ -9,53 +9,18 @@ live in core.msgs.scene for cross-module sharing. This file keeps TrackedObject
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Tuple
 
 import numpy as np
 
 # Re-export all shared data types and constants from core.msgs.scene
 from core.msgs.scene import (
     BELIEF_FRESHNESS_TAU,
-    BELIEF_LATERAL_SHARE,
     BELIEF_NEG_EVIDENCE_WEIGHT,
-    BELIEF_REPROJ_KAPPA,
-    BELIEF_ROOM_BOOST,
     BELIEF_SIGMA_BASE,
     BELIEF_SIGMA_DEPTH_COEFF,
-    BP_CONVERGENCE_EPS,
-    BP_KG_PRIOR_BOOST,
-    BP_KG_UNEXPECTED_PENALTY,
-    BP_LATERAL_DECAY,
-    BP_MAX_ITERATIONS,
-    BP_OBJ_TO_ROOM_WEIGHT,
-    BP_PHANTOM_BASE_ALPHA,
-    BP_PHANTOM_MIN_ROOM_CONFIDENCE,
-    BP_ROOM_TO_OBJ_WEIGHT,
-    FLOOR_HEIGHT,
-    FLOOR_MERGE_TOLERANCE,
-    GROUP_KEYWORDS,
-    REGION_CLUSTER_RADIUS,
-    # Constants
-    RELATION_NEAR_THRESHOLD,
-    RELATION_ON_THRESHOLD,
-    ROOM_NAMING_STABILITY_COUNT,
-    ROOM_NAMING_STABILITY_SEC,
-    ROOM_TYPE_RULES,
     SAFETY_PRIOR_ALPHA_SCALE,
     SAFETY_THRESHOLDS_INTERACTION,
     SAFETY_THRESHOLDS_NAVIGATION,
-    BeliefMessage,
-    FloorNode,
-    GroupNode,
-    PhantomNode,
-    Region,
-    RoomNode,
-    RoomTypePosterior,
-    # Data classes
-    SpatialRelation,
-    ViewNode,
-    # Functions
-    infer_room_type,
 )
 
 

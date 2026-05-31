@@ -181,31 +181,33 @@ class VoxelGridModule(Module, layer=2):
         self.voxel_cloud.publish(cloud)
 
     @skill
-    def get_voxel_stats(self) -> dict:
+    def get_voxel_stats(self) -> str:
         """Return stats about the current voxel map."""
 
         with self._lock:
             total = len(self._voxels)
         mem_kb = (total * 64) / 1024
-        return {
+        import json
+        return json.dumps({
             "total_voxels": total,
             "occupied": total,
             "memory_kb": round(mem_kb, 1),
             "voxel_size": self._res,
-        }
+        })
 
     @skill
-    def clear_voxels(self) -> dict:
+    def clear_voxels(self) -> str:
         """Reset the entire voxel map."""
 
         with self._lock:
             count = len(self._voxels)
             self._voxels.clear()
         logger.info("VoxelGrid cleared %d voxels", count)
-        return {"cleared": count}
+        import json
+        return json.dumps({"cleared": count})
 
     @skill
-    def query_voxel(self, x: float, y: float, z: float) -> dict:
+    def query_voxel(self, x: float, y: float, z: float) -> str:
         """Check whether the voxel containing (x, y, z) is occupied."""
 
         key: _VoxelKey = (
@@ -215,11 +217,12 @@ class VoxelGridModule(Module, layer=2):
         )
         with self._lock:
             count = self._voxels.get(key, 0.0)
-        return {
+        import json
+        return json.dumps({
             "occupied": count >= 1.0,
             "count": count,
             "voxel_key": list(key),
-        }
+        })
 
     def health(self) -> dict[str, Any]:
         info = super().port_summary()

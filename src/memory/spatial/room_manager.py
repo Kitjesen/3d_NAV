@@ -20,8 +20,7 @@ import asyncio
 import logging
 import math
 import time
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -217,7 +216,6 @@ class RoomManagerMixin:
         Returns:
             Region 列表
         """
-        from collections import Counter
 
         objs = list(self._objects.values())
         if not objs:

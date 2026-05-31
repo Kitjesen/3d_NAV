@@ -328,7 +328,8 @@ def _astar(trav, start, goal, obs_thr, timeout_sec=5.0):
     Raises TimeoutError if planning exceeds timeout_sec.
     """
     deadline = time.monotonic() + timeout_sec
-    h = lambda a, b: abs(a[0] - b[0]) + abs(a[1] - b[1])
+    def h(a, b):
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
     open_q = [(h(start, goal), 0.0, start, [])]
     visited = {}
     while open_q:

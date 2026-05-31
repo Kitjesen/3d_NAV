@@ -22,7 +22,7 @@ Stack factory usage (in blueprints/stacks/)::
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from core.module import Module
 from core.msgs.sensor import Imu, PointCloud2
@@ -30,7 +30,7 @@ from core.registry import register
 from core.runtime_interface import TOPICS, real_lidar_frame_id
 from core.stream import Out
 
-from .lidar import Lidar, LidarState
+from .lidar import Lidar
 
 logger = logging.getLogger(__name__)
 LIDAR_RAW_FRAME_ID = real_lidar_frame_id()

@@ -18,7 +18,6 @@ import logging
 import re
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -414,7 +413,7 @@ class SemanticPriorEngine:
                         max_prior = max(max_prior, prob)
 
             existing_labels = [
-                str(l).lower() for l in room.get("semantic_labels", [])
+                str(label).lower() for label in room.get("semantic_labels", [])
             ]
             direct_match = any(
                 kw in el or el in kw

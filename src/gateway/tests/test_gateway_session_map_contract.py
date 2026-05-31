@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import shutil
 import struct
@@ -21,6 +22,61 @@ def _payload(response_or_payload):
     if hasattr(response_or_payload, "body"):
         return json.loads(response_or_payload.body)
     return response_or_payload
+
+
+def _seed_map_artifacts(map_dir: Path) -> None:
+    """Create minimal valid map artifacts (map.pcd, tomogram.pickle, metadata.json)."""
+    pcd_content = (
+        "VERSION .7\n"
+        + "FIELDS x y z\n"
+        + "SIZE 4 4 4\n"
+        + "TYPE F F F\n"
+        + "COUNT 1 1 1\n"
+        + "WIDTH 1\n"
+        + "HEIGHT 1\n"
+        + "VIEWPOINT 0 0 0 1 0 0 0\n"
+        + "POINTS 1\n"
+        + "DATA ascii\n"
+        + "0.0 0.0 0.0\n"
+    )
+    map_path = map_dir / "map.pcd"
+    map_path.write_text(pcd_content, encoding="ascii")
+    tomogram_path = map_dir / "tomogram.pickle"
+    tomogram_path.write_bytes(b"gateway-test-tomogram")
+    map_sha = hashlib.sha256(map_path.read_bytes()).hexdigest()
+    tomogram_sha = hashlib.sha256(tomogram_path.read_bytes()).hexdigest()
+    (map_dir / "metadata.json").write_text(
+        json.dumps({
+            "schema_version": "lingtu.saved_map_artifacts.v1",
+            "source_profile": "real_s100p",
+            "data_source": "real_s100p",
+            "slam_source": "fastlio2",
+            "localization_source": "fastlio2",
+            "mapping_source": "fastlio2",
+            "frame_id": "map",
+            "created_at": "2026-05-25T00:00:00Z",
+            "artifacts": {
+                "map_pcd": {
+                    "path": "map.pcd",
+                    "sha256": map_sha,
+                    "source_profile": "real_s100p",
+                    "data_source": "real_s100p",
+                    "slam_source": "fastlio2",
+                    "frame_id": "map",
+                    "point_count": 1,
+                },
+                "tomogram": {
+                    "path": "tomogram.pickle",
+                    "sha256": tomogram_sha,
+                    "source_map_sha256": map_sha,
+                    "source_profile": "real_s100p",
+                    "data_source": "real_s100p",
+                    "frame_id": "map",
+                    "shape": [1],
+                },
+            },
+        })
+    )
 
 
 def _seed_ready_navigation(gateway):
@@ -140,7 +196,8 @@ def test_auth_login_invalid_key_preserves_legacy_message(monkeypatch):
 
 
 def test_lease_route_validates_success_and_conflict_payloads():
-    from gateway.gateway_module import GatewayModule, LeaseRequest
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import LeaseRequest
     from gateway.schemas import GatewayErrorResponse, LeaseResponse
 
     gateway = GatewayModule()
@@ -261,8 +318,7 @@ def test_session_start_accepts_legacy_map_field(monkeypatch):
         monkeypatch.setenv("NAV_MAP_DIR", str(map_root))
         map_dir = map_root / "demo"
         map_dir.mkdir(parents=True)
-        (map_dir / "map.pcd").write_bytes(b"pcd")
-        (map_dir / "tomogram.pickle").write_bytes(b"tomogram")
+        _seed_map_artifacts(map_dir)
 
         gateway = GatewayModule()
         gateway.setup()
@@ -275,6 +331,7 @@ def test_session_start_accepts_legacy_map_field(monkeypatch):
             )
         )
 
+        payload = _payload(payload)
         transition = SessionTransitionResponse.model_validate(payload)
         assert transition.schema_version == 1
         assert transition.ok is True
@@ -397,8 +454,7 @@ def test_session_start_can_select_super_lio_relocation_backend(monkeypatch):
         monkeypatch.setenv("NAV_MAP_DIR", str(map_root))
         map_dir = map_root / "demo"
         map_dir.mkdir(parents=True)
-        (map_dir / "map.pcd").write_bytes(b"pcd")
-        (map_dir / "tomogram.pickle").write_bytes(b"tomogram")
+        _seed_map_artifacts(map_dir)
 
         gateway = GatewayModule()
         gateway.setup()
@@ -417,6 +473,7 @@ def test_session_start_can_select_super_lio_relocation_backend(monkeypatch):
             )
         )
 
+        payload = _payload(payload)
         transition = SessionTransitionResponse.model_validate(payload)
         assert transition.schema_version == 1
         assert transition.ok is True
@@ -756,7 +813,8 @@ def test_maps_route_error_response_matches_openapi_contract():
 
 
 def test_operational_routes_validate_idle_json_contracts():
-    from gateway.gateway_module import BitrateRequest, GatewayModule
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import BitrateRequest
     from gateway.schemas import (
         BagOperationResponse,
         BagStatusResponse,

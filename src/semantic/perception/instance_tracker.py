@@ -28,7 +28,6 @@ import math
 import threading
 import time
 from collections.abc import Callable
-from typing import Tuple
 
 import numpy as np
 
@@ -43,45 +42,18 @@ INSTANCE_TRACKER_MAP_FRAME_ID = map_frame_id()
 
 # ── 从子模块导入所有公开符号 (向后兼容: 外部 from .instance_tracker import X 继续有效) ──
 from .tracked_objects import (
-    BELIEF_FRESHNESS_TAU,
-    BELIEF_LATERAL_SHARE,
-    BELIEF_NEG_EVIDENCE_WEIGHT,
-    BELIEF_REPROJ_KAPPA,
-    BELIEF_ROOM_BOOST,
-    BELIEF_SIGMA_BASE,
-    BELIEF_SIGMA_DEPTH_COEFF,
-    BP_CONVERGENCE_EPS,
-    BP_KG_PRIOR_BOOST,
-    BP_KG_UNEXPECTED_PENALTY,
-    BP_LATERAL_DECAY,
-    BP_MAX_ITERATIONS,
-    BP_OBJ_TO_ROOM_WEIGHT,
-    BP_PHANTOM_BASE_ALPHA,
-    BP_PHANTOM_MIN_ROOM_CONFIDENCE,
-    BP_ROOM_TO_OBJ_WEIGHT,
-    FLOOR_HEIGHT,
-    FLOOR_MERGE_TOLERANCE,
-    GROUP_KEYWORDS,
     REGION_CLUSTER_RADIUS,
     RELATION_NEAR_THRESHOLD,
-    RELATION_ON_THRESHOLD,
-    ROOM_NAMING_STABILITY_COUNT,
-    ROOM_NAMING_STABILITY_SEC,
-    ROOM_TYPE_RULES,
     SAFETY_PRIOR_ALPHA_SCALE,
     SAFETY_THRESHOLDS_INTERACTION,
     SAFETY_THRESHOLDS_NAVIGATION,
     BeliefMessage,
     FloorNode,
-    GroupNode,
     PhantomNode,
-    Region,
     RoomNode,
     RoomTypePosterior,
-    SpatialRelation,
     TrackedObject,
     ViewNode,
-    infer_room_type,
 )
 
 logger = logging.getLogger(__name__)

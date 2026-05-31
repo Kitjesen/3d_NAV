@@ -480,7 +480,7 @@ class TaskRulesMixin:
         Returns:
             TaskPlan or None (if too complex for rules)
         """
-        from .task_decomposer import SubGoal, SubGoalAction, SubGoalStatus, TaskPlan
+        from .task_decomposer import SubGoal, SubGoalAction, TaskPlan
         inst = instruction.strip()
 
         # ── 复杂度守卫: 含条件/多步/逻辑关系/时间约束 → 直接走 LLM ──

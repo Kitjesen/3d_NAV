@@ -191,7 +191,7 @@ class TestFullDecoupledPipeline(unittest.TestCase):
         # Mock detector backend
         from unittest.mock import patch
 
-        from core.tests.test_perception_decoupled import _MockDetectorBackend
+        from core.tests._test_utils import _MockDetectorBackend
 
         with patch.object(DetectorModule, '_create_backend',
                          return_value=_MockDetectorBackend()):

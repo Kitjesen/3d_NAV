@@ -19,7 +19,6 @@ USS-Nav pipeline:
   - USS-Nav: Mobile-CLIP BLT model for text encoding
 """
 
-import hashlib
 import logging
 
 import numpy as np
@@ -131,7 +130,7 @@ class MobileCLIPEncoder:
 
         由于物体类别集有限 (~10-50 个), 全部预编码仅需 ~5ms。
         """
-        uncached = [l for l in labels if l not in self._text_cache]
+        uncached = [label for label in labels if label not in self._text_cache]
         if uncached:
             features = self._batch_encode(uncached)
             for label, feat in zip(uncached, features):

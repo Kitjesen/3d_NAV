@@ -15,7 +15,7 @@
 """
 
 import logging
-from typing import Any, Tuple
+from typing import Any
 
 import numpy as np
 from scipy.spatial import ConvexHull

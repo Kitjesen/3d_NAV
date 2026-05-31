@@ -741,7 +741,7 @@ class TestWavefrontFrontierExplorer(unittest.TestCase):
         mod._on_exploration_grid(exploration_grid)
         mod._on_odometry(Odometry(pose=Pose(1.0, 1.0, 0.0)))
 
-        frontiers = mod.get_frontiers()
+        frontiers = json.loads(mod.get_frontiers())
 
         self.assertGreater(len(frontiers), 0)
         health = mod.health()
@@ -775,7 +775,7 @@ class TestWavefrontFrontierExplorer(unittest.TestCase):
         mod._on_exploration_grid(payload)
         mod._on_odometry(Odometry(pose=Pose(1.0, 1.0, 0.0)))
 
-        frontiers = mod.get_frontiers()
+        frontiers = json.loads(mod.get_frontiers())
         health = mod.health()
 
         self.assertGreater(len(frontiers), 0)

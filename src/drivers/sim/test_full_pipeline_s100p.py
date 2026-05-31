@@ -7,7 +7,6 @@ Run on S100P:
 """
 import math
 import os
-import pickle
 import sys
 import time
 
@@ -98,10 +97,8 @@ except AttributeError:
     print("MISSING")
 
 print("  planner backends...", end=" ")
-from global_planning.pct_adapters.global_planner_module import _AStarBackend
 
 try:
-    from global_planning.pct_adapters.global_planner_module import _PCTBackend
     print("A* + PCT")
     USE_PCT = True
 except Exception:

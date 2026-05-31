@@ -392,8 +392,7 @@ class NavBridge:
 
     def _init_ros2(self):
         import rclpy
-        from rclpy.node import Node
-        from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+        from rclpy.qos import QoSProfile, ReliabilityPolicy
         from nav_msgs.msg import Odometry
         from geometry_msgs.msg import TwistStamped, TransformStamped
         from sensor_msgs.msg import PointCloud2, PointField
@@ -451,7 +450,6 @@ class NavBridge:
 
     def publish_odom(self):
         """发布 odometry + TF."""
-        import rclpy
         pos = self.d.qpos[:3]
         quat_wxyz = self.d.qpos[3:7]  # MuJoCo: w,x,y,z
         vel = self.d.qvel[:3]
@@ -548,11 +546,11 @@ class NavBridge:
         last_policy = 0.0
         last_odom = 0.0
         last_cloud = 0.0
-        wall_start = time.time()
+        time.time()
 
-        print(f'\n[Bridge] Running — policy 50Hz, odom 50Hz, LiDAR 10Hz')
+        print('\n[Bridge] Running — policy 50Hz, odom 50Hz, LiDAR 10Hz')
         print(f'  base_id={self.base_id}, lidar_id={self.lidar_id}')
-        print(f'  Send cmd_vel to /nav/cmd_vel to move the robot\n')
+        print('  Send cmd_vel to /nav/cmd_vel to move the robot\n')
 
         if not self.headless:
             viewer_mod = __import__('mujoco.viewer', fromlist=['viewer'])

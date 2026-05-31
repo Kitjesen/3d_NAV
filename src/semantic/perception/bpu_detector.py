@@ -462,7 +462,7 @@ class BPUDetector(DetectorBase):
             return self._allowed_cids
 
         self._prompt_cache_key = text_prompt
-        labels = [l.strip().lower() for l in text_prompt.split(".") if l.strip()]
+        labels = [label.strip().lower() for label in text_prompt.split(".") if label.strip()]
         expanded = set(labels)
         for label in labels:
             if label in _SYNONYM_EXPAND:
