@@ -42,7 +42,7 @@ from sim.engine.bridge.gazebo_bridge import GazeboBridgeConfig
 from sim.engine.bridge.gazebo_runtime_adapter import Pose3, _odom_xyz_to_body, _transform_xyz
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _read(path: str) -> str:
@@ -813,7 +813,7 @@ def test_legacy_sim_launch_keeps_map_cloud_out_of_registered_scan_path():
 
 
 def test_legacy_mujoco_ros2_bridge_separates_registered_and_map_cloud_frames():
-    source = _read("sim/bridge/mujoco_ros2_bridge.py")
+    source = _read("src/drivers/sim/mujoco_ros2_bridge.py")
 
     assert "from core.runtime_interface import FRAMES, TOPICS" in source
     assert "registered_cloud = pack_pointcloud2(pts, FRAMES.body, stamp)" in source

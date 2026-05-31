@@ -1,5 +1,5 @@
 """MuJoCo LiDAR wrapper — wraps sim/sensors/livox_mid360.py
-# Extracted from sim/bridge/nova_nav_bridge.py (scan_lidar function)
+# Extracted from src/drivers/sim/nova_nav_bridge.py (scan_lidar function)
 # Wraps sim/sensors/livox_mid360.py (reuse as-is, no reimplementation)
 
 Prefers mujoco_ray_caster plugin (method A),
@@ -187,7 +187,7 @@ class MuJoCoLidar:
     def _scan_fallback(self) -> np.ndarray:
         """Inline fallback scan (mj_multiRay + golden angle spiral).
 
-        # Extracted from sim/bridge/nova_nav_bridge.py scan_lidar()
+        # Extracted from src/drivers/sim/nova_nav_bridge.py scan_lidar()
         """
         import mujoco
 

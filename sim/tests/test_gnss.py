@@ -8,12 +8,12 @@ from pathlib import Path
 import pytest
 
 # Ensure src/ on path for standalone pytest runs
-_SRC = Path(__file__).resolve().parent.parent.parent
+_ROOT = Path(__file__).resolve().parent.parent.parent
+_SRC = _ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 # And repo root (for sim/)
-_ROOT = _SRC.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 

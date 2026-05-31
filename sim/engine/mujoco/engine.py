@@ -1,5 +1,5 @@
 """MuJoCo simulation engine implementation
-# Extracted from sim/bridge/nova_nav_bridge.py
+# Extracted from src/drivers/sim/nova_nav_bridge.py
 
 Core logic sourced from nova_nav_bridge.py:
   - MuJoCo model loading and scene XML generation
@@ -296,7 +296,7 @@ class MuJoCoEngine(SimEngine):
 
     def _resolve_ids(self) -> None:
         """Resolve body/joint IDs in MuJoCo.
-        # Extracted from sim/bridge/nova_nav_bridge.py NavBridge.__init__
+        # Extracted from src/drivers/sim/nova_nav_bridge.py NavBridge.__init__
         """
         import mujoco
 
@@ -556,7 +556,7 @@ class MuJoCoEngine(SimEngine):
 
     def _watchdog_cmd_vel(self) -> None:
         """Zero out cmd_vel if watchdog timeout exceeded.
-        # Extracted from sim/bridge/nova_nav_bridge.py _watchdog_cmd_vel
+        # Extracted from src/drivers/sim/nova_nav_bridge.py _watchdog_cmd_vel
         """
         with self._lock:
             if (self._cmd_vel_time > 0 and
@@ -566,7 +566,7 @@ class MuJoCoEngine(SimEngine):
 
     def _step_policy(self) -> None:
         """Run one policy inference step, write action to MuJoCo ctrl.
-        # Extracted from sim/bridge/nova_nav_bridge.py NavBridge.step_policy
+        # Extracted from src/drivers/sim/nova_nav_bridge.py NavBridge.step_policy
         """
         with self._lock:
             direction = self._cmd_vel.copy()
@@ -697,7 +697,7 @@ class MuJoCoEngine(SimEngine):
 
     def _get_imu(self):
         """Extract IMU data (gyroscope + projected gravity).
-        # Extracted from sim/bridge/nova_nav_bridge.py get_imu()
+        # Extracted from src/drivers/sim/nova_nav_bridge.py get_imu()
         """
         body_id = self._base_body_id
         R = self._data.xmat[body_id].reshape(3, 3)  # body-to-world
@@ -712,7 +712,7 @@ class MuJoCoEngine(SimEngine):
 
     def _get_joint_state(self):
         """Read position and velocity of 16 leg joints.
-        # Extracted from sim/bridge/nova_nav_bridge.py get_joint_state()
+        # Extracted from src/drivers/sim/nova_nav_bridge.py get_joint_state()
         """
         valid_ids = [j for j in self._leg_joint_ids if j >= 0]
         if not valid_ids:
@@ -867,7 +867,7 @@ class MuJoCoEngine(SimEngine):
 
     def _background_sim_loop(self) -> None:
         """Background physics loop: 50Hz policy + 500Hz physics.
-        # Extracted from sim/bridge/nova_nav_bridge.py NavBridge.spin()
+        # Extracted from src/drivers/sim/nova_nav_bridge.py NavBridge.spin()
         """
         import mujoco
 

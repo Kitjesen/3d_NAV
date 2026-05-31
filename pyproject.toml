@@ -92,6 +92,7 @@ testpaths = [
     "src/gateway/tests",
     "src/drivers/tests",
     "src/memory/tests",
+    "sim/tests",
     "src/slam/tests",
     "src/semantic/perception/tests",
     "src/semantic/planner/test",

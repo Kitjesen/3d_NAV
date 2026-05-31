@@ -38,7 +38,7 @@ class RobotConfig:
     pd_kv: float = 5.0            # velocity gain (damping)
 
     # Policy parameters (consistent with brainstem StandardObservationBuilder)
-    # Extracted from sim/bridge/nova_nav_bridge.py
+    # Extracted from src/drivers/sim/nova_nav_bridge.py
     action_scale: List[float] = field(default_factory=lambda: [
         0.125, 0.25, 0.25,   # FR: hip, thigh, calf
         0.125, 0.25, 0.25,   # FL

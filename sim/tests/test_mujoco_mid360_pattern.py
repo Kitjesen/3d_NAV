@@ -6,7 +6,7 @@ import numpy as np
 
 from sim.engine.mujoco.lidar import MuJoCoLidar
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 MID360_PATTERN = ROOT / "sim/assets/livox/mid360.npy"
 MID360_SHA256 = "448821576a658673e8f7929992c8c0d687eb052657d7b584d038729a83da1bfb"
 

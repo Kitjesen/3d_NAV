@@ -15,7 +15,7 @@ from core.runtime_interface import resolved_runtime_data_flow
 from sim.scripts import server_sim_closure
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _write_json(path: Path, payload: dict) -> Path:

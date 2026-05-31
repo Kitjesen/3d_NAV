@@ -24,8 +24,8 @@ import mujoco
 
 # ── 路径 ─────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
-SIM_DIR = SCRIPT_DIR.parent
-SRC_DIR = SIM_DIR.parent / "src"
+SIM_DIR = SCRIPT_DIR.parents[2] / "sim"
+SRC_DIR = SCRIPT_DIR.parents[2] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 

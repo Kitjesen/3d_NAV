@@ -10,7 +10,7 @@ from sim.validation.full_system import (
 
 
 def test_scene_catalog_identifies_multifloor_building_contract():
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[2]
     checks = validate_scene_catalog(repo_root)
     by_name = {check.name: check for check in checks}
 

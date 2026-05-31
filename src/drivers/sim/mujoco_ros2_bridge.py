@@ -22,8 +22,8 @@ MuJoCo + ROS2 最小闭环 Bridge
 平台: S100P (aarch64), MuJoCo 3.5.0, ROS2 Humble
 
 用法:
-    python3 sim/bridge/mujoco_ros2_bridge.py          # 默认内联场景
-    python3 sim/bridge/mujoco_ros2_bridge.py scene.xml # 自定义场景
+    python3 src/drivers/sim/mujoco_ros2_bridge.py          # 默认内联场景
+    python3 src/drivers/sim/mujoco_ros2_bridge.py scene.xml # 自定义场景
 """
 import numpy as np
 import time

@@ -31,7 +31,7 @@ echo "============================================"
 
 # 1. MuJoCo bridge (sensor replacement)
 echo "[1/3] Starting MuJoCo bridge..."
-python3 sim/bridge/mujoco_ros2_bridge.py > /tmp/mujoco_bridge.log 2>&1 &
+python3 src/drivers/sim/mujoco_ros2_bridge.py > /tmp/mujoco_bridge.log 2>&1 &
 BRIDGE_PID=$!
 sleep 3
 

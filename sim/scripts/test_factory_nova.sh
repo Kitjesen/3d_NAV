@@ -28,7 +28,7 @@ VIZ=${5:-}       # "viz" 开启 MuJoCo viewer 可视化 (DISPLAY=:0)
 # ── 路径 ─────────────────────────────────────────────────────────
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SIM_DIR=${LINGTU_SIM_DIR:-${REPO_ROOT}/sim}
-BRIDGE_SCRIPT=${LINGTU_NOVA_BRIDGE_SCRIPT:-${REPO_ROOT}/sim/bridge/nova_nav_bridge.py}
+BRIDGE_SCRIPT=${LINGTU_NOVA_BRIDGE_SCRIPT:-${REPO_ROOT}/src/drivers/sim/nova_nav_bridge.py}
 SCENE_XML=${LINGTU_NOVA_SCENE_XML:-${SIM_DIR}/robots/nova_dog/robot_with_camera.xml}
 MAP_DIR=${LINGTU_SIM_MAP_DIR:-/tmp/sim_maps}
 MAP_FILE=${LINGTU_FACTORY_MAP_FILE:-${MAP_DIR}/factory_nova}

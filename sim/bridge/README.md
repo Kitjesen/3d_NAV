@@ -1,22 +1,22 @@
-# Simulation Bridge Boundary
+# sim/bridge/ — Thin Entrypoints
 
-`sim/bridge/` contains legacy top-level bridge entrypoints that connect a
-physics runtime to a navigation runtime.
+> Please do not re-add new bridge implementations here. This directory holds
+> only thin entrypoints for backward compatibility. All real bridge code
+> lives in `src/drivers/sim/`. Files in `sim/robot/` are preserved
+> separately.
 
-## Files
+## History
 
-| File | Role |
-| --- | --- |
-| `mujoco_ros2_bridge.py` | MuJoCo to ROS 2 topic bridge for native autonomy stack experiments. |
-| `nova_nav_bridge.py` | Direct MuJoCo to Python LingTu module bridge for fast local simulation. |
-| `mujoco_viz_bridge.py` | MuJoCo visualization bridge; not a navigation control path. |
+Bridge files were moved from `sim/bridge/` to `src/drivers/sim/` during
+the Sprint-6 consolidation. The `__init__.py` here redirects old imports
+(`from sim.bridge.xxx import ...`) to the canonical location.
 
-## Contract
+## Moved files
 
-- Keep these paths stable while existing scripts still launch them directly.
-- New reusable bridge logic should move into `sim/engine/` or module adapters;
-  this folder should stay as thin entrypoints.
-- Simulation bridge commands must not start robot services or connect to a
-  physical driver.
-- Robot model defaults must use `sim/robots/` or `sim/assets/`; do not re-add
-  deleted `sim/robot/` paths.
+| Old path | New path |
+|----------|----------|
+| `sim/bridge/mujoco_ros2_bridge.py` | `src/drivers/sim/mujoco_ros2_bridge.py` |
+| `sim/bridge/mujoco_viz_bridge.py` | `src/drivers/sim/mujoco_viz_bridge.py` |
+| `sim/bridge/nova_nav_bridge.py` | `src/drivers/sim/nova_nav_bridge.py` |
+
+See `src/drivers/sim/README_bridge.md` for full documentation.

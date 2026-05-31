@@ -21,7 +21,7 @@ from drivers.sim.mujoco_driver_module import MujocoDriverModule
 
 
 def test_default_nova_dog_resolves_real_robot_model():
-    sim_root = Path(__file__).resolve().parents[3] / "sim"
+    sim_root = Path(__file__).resolve().parents[2] / "sim"
     cfg = RobotConfig.default_nova_dog().resolve_paths(base_dir=str(sim_root))
 
     assert Path(cfg.robot_xml).name == "thunder_v3_lingtu.xml"
@@ -34,7 +34,7 @@ def test_default_nova_dog_resolves_real_robot_model():
 
 
 def test_default_nova_dog_resolves_paths_from_engine_core_default():
-    sim_root = Path(__file__).resolve().parents[3] / "sim"
+    sim_root = Path(__file__).resolve().parents[2] / "sim"
     cfg = RobotConfig.default_nova_dog().resolve_paths()
 
     assert Path(cfg.robot_xml).exists()
@@ -58,7 +58,7 @@ def test_mujoco_driver_splits_body_lidar_cloud_from_world_map_cloud():
 
 
 def test_thunder_v3_urdf_xml_assets_are_current_and_resolvable():
-    sim_root = Path(__file__).resolve().parents[3] / "sim"
+    sim_root = Path(__file__).resolve().parents[2] / "sim"
     urdf_path = sim_root / "assets" / "urdf" / "thunder_v3.urdf"
     xml_path = sim_root / "assets" / "xml" / "thunder_v3.xml"
     compat_urdf_path = sim_root / "robots" / "thunder.urdf"
@@ -94,7 +94,7 @@ def test_thunder_v3_urdf_xml_assets_are_current_and_resolvable():
 
 
 def test_thunder_v3_mjcf_runtime_keeps_lingtu_sensor_and_control_contracts():
-    sim_root = Path(__file__).resolve().parents[3] / "sim"
+    sim_root = Path(__file__).resolve().parents[2] / "sim"
     upstream_path = sim_root / "assets" / "mjcf" / "thunder_v3_mujoco.xml"
     runtime_path = sim_root / "assets" / "mjcf" / "thunder_v3_lingtu.xml"
 
@@ -286,7 +286,7 @@ def test_fastlio2_live_config_writes_degeneracy_guard(tmp_path):
 
 
 def test_fastlio2_cpp_applies_configured_ieskf_iteration_and_degeneracy_guard():
-    root = Path(__file__).resolve().parents[3]
+    root = Path(__file__).resolve().parents[2]
     lidar_processor = (
         root / "src" / "slam" / "fastlio2" / "src" / "map_builder" / "lidar_processor.cpp"
     ).read_text(encoding="utf-8")
@@ -1129,7 +1129,7 @@ def test_mujoco_fastlio2_live_gate_builds_navigation_diagnostic_sample():
 
 
 def test_mujoco_fastlio2_live_gate_emits_navigation_diagnostics_in_report():
-    root = Path(__file__).resolve().parents[3]
+    root = Path(__file__).resolve().parents[2]
     source = (root / "sim/scripts/mujoco_fastlio2_live_gate.py").read_text(encoding="utf-8")
 
     assert "navigation_diagnostic_samples.append(" in source
@@ -1580,7 +1580,7 @@ def test_mujoco_driver_setup_uses_selected_scene_and_real_robot(monkeypatch):
     )
     driver.setup()
 
-    expected_world = Path(__file__).resolve().parents[3] / "sim" / "worlds" / "open_field.xml"
+    expected_world = Path(__file__).resolve().parents[2] / "sim" / "worlds" / "open_field.xml"
 
     assert driver._engine is not None
     assert Path(driver._engine.loaded_xml_path) == expected_world
@@ -1623,7 +1623,7 @@ def test_mujoco_driver_policy_candidates_prioritize_brainstem_default():
 
 
 def test_legacy_nova_nav_bridge_uses_current_robot_paths():
-    bridge = Path(__file__).resolve().parents[3] / "sim" / "bridge" / "nova_nav_bridge.py"
+    bridge = Path(__file__).resolve().parents[2] / "src" / "drivers" / "sim" / "nova_nav_bridge.py"
     source = bridge.read_text(encoding="utf-8")
 
     assert 'SIM_DIR / "robot"' not in source
@@ -1633,7 +1633,7 @@ def test_legacy_nova_nav_bridge_uses_current_robot_paths():
 
 
 def test_legacy_sim_launch_global_planner_entrypoint_exists_and_is_guarded():
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[2]
     launch = (repo_root / "sim" / "launch" / "sim.launch.py").read_text(
         encoding="utf-8"
     )
@@ -1649,7 +1649,7 @@ def test_legacy_sim_launch_global_planner_entrypoint_exists_and_is_guarded():
 
 
 def test_legacy_manual_nova_scripts_default_to_current_robot_asset_paths():
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[2]
 
     for script_name in ("test_factory_nova.sh", "test_semantic_nav.sh"):
         source = (repo_root / "sim" / "scripts" / script_name).read_text(
@@ -1663,7 +1663,7 @@ def test_legacy_manual_nova_scripts_default_to_current_robot_asset_paths():
 
 
 def test_optional_go1_asset_contract_has_placeholder_readme():
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[2]
     indoor_office = (repo_root / "sim" / "worlds" / "indoor_office.xml").read_text(
         encoding="utf-8"
     )
@@ -1677,7 +1677,7 @@ def test_optional_go1_asset_contract_has_placeholder_readme():
 
 
 def test_root_operation_scripts_do_not_point_at_deleted_navigation_launches():
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[2]
     shell_entry = (repo_root / "scripts" / "lingtu.sh").read_text(encoding="utf-8")
     ota_start = (repo_root / "scripts" / "ota" / "start_nav.sh").read_text(
         encoding="utf-8"
@@ -1707,7 +1707,7 @@ def test_root_operation_scripts_do_not_point_at_deleted_navigation_launches():
 
 
 def test_sim_boundary_indexes_document_stable_contracts():
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[2]
     readme_text = (repo_root / "sim" / "README.md").read_text(encoding="utf-8")
     repo_layout = (repo_root / "docs" / "REPO_LAYOUT.md").read_text(encoding="utf-8")
     plan_text = (
@@ -1729,7 +1729,7 @@ def test_sim_boundary_indexes_document_stable_contracts():
     closure_index = (
         repo_root / "artifacts" / "server_sim_closure" / "README.md"
     ).read_text(encoding="utf-8")
-    sim_root = Path(__file__).resolve().parents[3] / "sim"
+    sim_root = Path(__file__).resolve().parents[2] / "sim"
     expected = {
         "bridge": [
             "thin entrypoints",
@@ -2226,7 +2226,7 @@ def test_policy_nav_smoke_free_costmap_covers_start_and_goal():
 
 def test_nova_dog_policy_manifest_records_verified_contract():
     manifest = (
-        Path(__file__).resolve().parents[3]
+        Path(__file__).resolve().parents[2]
         / "sim"
         / "robots"
         / "nova_dog"
@@ -2764,7 +2764,7 @@ finally:
 '''.replace("__POLICY_PATH__", str(policy_path).replace("\\", "\\\\"))
 
     env = os.environ.copy()
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[2]
     env["PYTHONPATH"] = os.pathsep.join(
         [str(repo_root / "src"), str(repo_root), env.get("PYTHONPATH", "")]
     )

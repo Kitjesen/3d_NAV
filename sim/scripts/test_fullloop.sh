@@ -10,7 +10,7 @@
 #   - 机器人 geom group=0, 环境 geom group=1, LiDAR 只检测 group=1
 #
 # 用法 (在 S100P 机器人上):
-#   scp sim/bridge/mujoco_ros2_bridge.py sunrise@192.168.66.190:/tmp/
+#   scp src/drivers/sim/mujoco_ros2_bridge.py sunrise@192.168.66.190:/tmp/
 #   scp sim/scripts/test_fullloop.sh sunrise@192.168.66.190:/tmp/
 #   ssh sunrise@192.168.66.190 'bash /tmp/test_fullloop.sh'
 set -e

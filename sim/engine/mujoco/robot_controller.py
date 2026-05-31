@@ -1,7 +1,7 @@
 """ONNX policy controller — PolicyRunner
-# Extracted from sim/bridge/nova_nav_bridge.py
+# Extracted from src/drivers/sim/nova_nav_bridge.py
 
-Original source: sim/bridge/nova_nav_bridge.py
+Original source: src/drivers/sim/nova_nav_bridge.py
 Extracted content: PolicyRunner class + all related constants
 Logic preserved exactly as-is.
 """
@@ -11,7 +11,7 @@ from typing import Optional
 import numpy as np
 
 # ── Original constants (ported directly from nova_nav_bridge.py) ──────────────
-# Extracted from sim/bridge/nova_nav_bridge.py
+# Extracted from src/drivers/sim/nova_nav_bridge.py
 
 # Dart standingPose (use as-is, no sign flip)
 STANDING_POSE = np.array([
@@ -49,7 +49,7 @@ class UnsupportedPolicyInputError(ValueError):
 class PolicyRunner:
     """ONNX gait policy inference, matching brainstem StandardObservationBuilder.
 
-    # Extracted from sim/bridge/nova_nav_bridge.py — logic preserved exactly.
+    # Extracted from src/drivers/sim/nova_nav_bridge.py — logic preserved exactly.
     """
 
     def __init__(self, onnx_path: str):
