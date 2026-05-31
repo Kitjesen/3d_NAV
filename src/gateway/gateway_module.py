@@ -71,6 +71,8 @@ from gateway.schemas import (
     CancelRequest,
     ClickNavRequest,
     CmdVelRequest,
+    DriverSwapRequest,
+    DriverSwapResponse,
     GatewayErrorResponse,
     GoalRequest,
     InstructionRequest,
@@ -458,6 +460,9 @@ class GatewayModule(Module, layer=6):
 
         # TaggedLocationsModule ref (set by on_system_modules)
         self._tagged_loc_module: Any = None
+
+        # Driver SwapManager ref (set by on_system_modules when SwapManager is available)
+        self._swap_manager: Any = None
 
         self._app   = None
         self._server: Any = None
@@ -1014,6 +1019,8 @@ class GatewayModule(Module, layer=6):
             None,
         )
 
+        self._swap_manager = modules.get("SwapManager")
+
     def _explorer_backend(self) -> str:
         if self._frontier_explorer is not None:
             return "frontier"
@@ -1060,6 +1067,66 @@ class GatewayModule(Module, layer=6):
                 return reconfigure(category, backend, **config)
 
         return super().reconfigure_backend(category, backend, **config)
+
+    # ------------------------------------------------------------------
+    # Driver swap — delegates to SwapManager when registered
+    # ------------------------------------------------------------------
+
+    def _on_driver_swap(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Swap the active driver backend at runtime.
+
+        Delegates to ``SwapManager.swap(driver_name, **config)`` if a
+        SwapManager is registered in the system.  When no SwapManager is
+        present the response reports ``success=False`` with a descriptive
+        message so callers can react gracefully (e.g. show a ui banner).
+        """
+        swap = self._swap_manager
+        if swap is None:
+            return {
+                "success": False,
+                "message": "SwapManager not available — driver swap requires a running SwapManager",
+                "swap_time_ms": 0.0,
+            }
+
+        driver_name = str(payload.get("driver", ""))
+        if not driver_name:
+            return {
+                "success": False,
+                "message": "Missing required field: driver",
+                "swap_time_ms": 0.0,
+            }
+
+        config = payload.get("config") or {}
+        if not isinstance(config, dict):
+            return {
+                "success": False,
+                "message": "config must be a dict",
+                "swap_time_ms": 0.0,
+            }
+
+        try:
+            t0 = time.monotonic()
+            result = swap.swap(driver_name, **config)
+            elapsed = (time.monotonic() - t0) * 1000.0  # ms
+            if isinstance(result, dict) and not result.get("success", True):
+                return {
+                    "success": False,
+                    "message": result.get("message", "swap failed"),
+                    "swap_time_ms": elapsed,
+                    "detail": result,
+                }
+            return {
+                "success": True,
+                "message": f"Swapped to {driver_name}",
+                "swap_time_ms": elapsed,
+            }
+        except Exception as e:
+            logger.exception("Driver swap to %s failed", driver_name)
+            return {
+                "success": False,
+                "message": str(e),
+                "swap_time_ms": 0.0,
+            }
 
     def _coerce_explorer_result(self, result: Any) -> Any:
         if isinstance(result, str):
@@ -2476,6 +2543,33 @@ class GatewayModule(Module, layer=6):
                     "reason": "invalid_config",
                 }
             return gw.reconfigure_backend(category, backend, **config)
+
+        @app.post(
+            "/api/v1/driver/swap",
+            summary="Swap the active driver backend at runtime",
+            response_model=DriverSwapResponse,
+            responses={
+                503: {"model": GatewayErrorResponse},
+            },
+        )
+        async def post_driver_swap(body: DriverSwapRequest):
+            result = gw._on_driver_swap(body.model_dump())
+            if not result.get("success"):
+                return JSONResponse(
+                    status_code=503,
+                    content=GatewayErrorResponse(
+                        error=result.get("message", "driver swap failed"),
+                        message=result.get("message", "driver swap failed"),
+                        detail=result,
+                    ).model_dump(),
+                )
+            return DriverSwapResponse(
+                success=True,
+                message=result.get("message", f"Swapped to {body.driver}"),
+                swap_time_ms=result.get("swap_time_ms", 0.0),
+                driver=body.driver,
+                detail=result.get("detail"),
+            )
 
         register_operation_routes(app, gw)
         register_diagnostic_routes(app, gw)

@@ -213,6 +213,9 @@ def full_stack_blueprint(
     enable_teleop: bool = True,
     enable_map_modules: bool = True,
     enable_rerun: bool = False,
+    enable_swap: bool = False,
+    swap_mux_name: str = "CmdVelMux",
+    swap_nav_name: str = "NavigationModule",
     scene_xml: str = "",
     run_startup_checks: bool = True,
     manage_external_services: bool = True,
@@ -280,7 +283,7 @@ def full_stack_blueprint(
         else Blueprint(),
     )
 
-    return apply_full_stack_wires(
+    bp = apply_full_stack_wires(
         bp,
         robot=robot,
         driver_module=drv,
@@ -289,3 +292,15 @@ def full_stack_blueprint(
         enable_semantic=enable_semantic,
         safety_stop_wiring=bool(config.get("safety_stop_wiring", True)),
     )
+
+    # Opt-in swap manager: enables hot-swap of navigation backends at runtime.
+    # Stored on the Blueprint so build() can create the SwapManager automatically
+    # without changing the caller's .build() step.
+    if enable_swap:
+        bp._swap_config = {
+            "mux_name": swap_mux_name,
+            "nav_name": swap_nav_name,
+            "driver_name": drv,
+        }
+
+    return bp

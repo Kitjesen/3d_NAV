@@ -170,3 +170,32 @@ def driver_name(robot: str) -> str:
         import platform
         robot = auto_select("driver", platform=platform.machine().lower()) or "stub"
     return get("driver", robot).__name__
+
+
+# Known driver class names (used by Blueprint as module names).
+_KNOWN_DRIVER_CLASSES = frozenset({
+    "ThunderDriver",
+    "StubDogModule",
+    "MujocoDriverModule",
+    "ROS2SimDriverModule",
+    "NovaDogConnection",
+    "StubConnection",
+})
+
+
+def get_current_driver_name(system: Any) -> str:
+    """Inspect a SystemHandle to find the active driver module name.
+
+    Scans ``system.modules`` for known driver class names and returns the
+    first match.  Raises ``KeyError`` if no known driver is found.
+
+    Useful for wiring helpers that need to know which module is the robot
+    driver without hardcoding a class name.
+    """
+    for name in system.modules:
+        if name in _KNOWN_DRIVER_CLASSES:
+            return name
+    raise KeyError(
+        f"No known driver module found in system. "
+        f"Available modules: {list(system.modules.keys())}"
+    )

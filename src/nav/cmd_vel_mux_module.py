@@ -84,6 +84,20 @@ class CmdVelMux(Module, layer=0):
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._monitor_thread: threading.Thread | None = None
+        self._frozen: bool = False
+
+    def freeze(self) -> None:
+        self._frozen = True
+        self.driver_cmd_vel.publish(Twist.zero())
+        logger.info("CmdVelMux: frozen")
+
+    def unfreeze(self) -> None:
+        self._frozen = False
+        logger.info("CmdVelMux: unfrozen")
+
+    @property
+    def is_frozen(self) -> bool:
+        return self._frozen
 
     def setup(self) -> None:
         self.teleop_cmd_vel.subscribe(
@@ -131,6 +145,8 @@ class CmdVelMux(Module, layer=0):
 
     def _on_source(self, name: str, twist: Twist) -> None:
         """Handle incoming cmd_vel from a named source."""
+        if self._frozen:
+            return
         now = time.time()
         twist = self._sanitize_twist(twist)
         active_update: str | None = None
@@ -160,6 +176,8 @@ class CmdVelMux(Module, layer=0):
             self.driver_cmd_vel.publish(driver_twist)
 
     def _check_timeout(self, now: float | None = None) -> None:
+        if self._frozen:
+            return
         now = time.time() if now is None else now
         with self._lock:
             winner = self._select_active(now)
@@ -187,6 +205,8 @@ class CmdVelMux(Module, layer=0):
                     best_name = name
                     best_priority = src["priority"]
             return best_name
+
+    # -- health ---------------------------------------------------------
 
     def health(self) -> dict:
         now = time.time()

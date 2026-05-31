@@ -99,6 +99,7 @@ class Blueprint:
         self._wires: list[_WireSpec] = []
         self._auto_wired: bool = False
         self._global_cfg: dict[str, Any] = {}
+        self._swap_config: dict[str, Any] | None = None  # set by full_stack_blueprint
 
     # -- registration -------------------------------------------------------
 
@@ -275,12 +276,18 @@ class Blueprint:
         for mod in instances.values():
             mod.on_system_modules(dict(instances))
 
-        return SystemHandle(
+        handle = SystemHandle(
             modules=instances,
             transport=transport,
             connections=connections,
             startup_order=startup_order,
         )
+
+        # 8. Post-build swap setup (opt-in, set by full_stack_blueprint)
+        if self._swap_config:
+            handle.enable_swap(**self._swap_config)
+
+        return handle
 
     def __repr__(self) -> str:
         modules = ", ".join(e.name for e in self._entries)
@@ -615,6 +622,40 @@ class SystemHandle:
         self._startup_order = startup_order
         self._started = False
         self._failed_modules: dict[str, str] = {}
+        self.swap_manager: Any = None  # set by enable_swap()
+
+    # -- swap manager --------------------------------------------------------
+
+    def enable_swap(
+        self,
+        mux_name: str = "CmdVelMux",
+        nav_name: str = "NavigationModule",
+        driver_name: str = "ThunderDriver",
+    ) -> SystemHandle:
+        """Create and activate a SwapManager for this system.
+
+        The SwapManager stores references to the three core navigation modules
+        so backend-swap operations can reach them by name.
+
+        Args:
+            mux_name:    Name of the CmdVelMux module.
+            nav_name:    Name of the NavigationModule.
+            driver_name: Name of the driver (robot interface) module.
+
+        Returns:
+            self (fluent interface).
+        """
+        from core.swap_manager import SwapManager
+
+        mux = self._modules.get(mux_name)
+        nav = self._modules.get(nav_name)
+        self.swap_manager = SwapManager(
+            system=self,
+            mux=mux,
+            nav=nav,
+        )
+        self.swap_manager.enable()
+        return self
 
     # -- lifecycle ----------------------------------------------------------
 
