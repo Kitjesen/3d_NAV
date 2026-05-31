@@ -46,7 +46,7 @@ _PERCEPTION_DETECTOR_BACKENDS = ("yoloe", "yolo_world", "bpu", "sim_scene")
 _PERCEPTION_ENCODER_BACKENDS = ("clip", "mobileclip")
 
 
-@register("perception_detector", "yoloe", description="YOLO-E open-vocabulary instance detector")
+@register("detector", "yoloe", description="YOLO-E open-vocabulary instance detector")
 class _YOLOEDetectorProvider:
     label = "YOLOEDetector"
 
@@ -63,7 +63,7 @@ class _YOLOEDetectorProvider:
         )
 
 
-@register("perception_detector", "yolo_world", description="YOLO-World open-vocabulary detector")
+@register("detector", "yolo_world", description="YOLO-World open-vocabulary detector")
 class _YOLOWorldDetectorProvider:
     label = "YOLOWorldDetector"
 
@@ -81,7 +81,7 @@ class _YOLOWorldDetectorProvider:
         )
 
 
-@register("perception_detector", "bpu", description="D-Robotics Nash BPU detector")
+@register("detector", "bpu", description="D-Robotics Nash BPU detector")
 class _BPUDetectorProvider:
     label = "BPUDetector"
 
@@ -98,7 +98,7 @@ class _BPUDetectorProvider:
         )
 
 
-@register("perception_detector", "sim_scene", description="Simulation scene observer")
+@register("detector", "sim_scene", description="Simulation scene observer")
 class _SimSceneDetectorProvider:
     label = "SimSceneObserver"
 
@@ -113,7 +113,7 @@ class _SimSceneDetectorProvider:
         return observer
 
 
-@register("perception_encoder", "clip", description="CLIP image/text encoder")
+@register("encoder", "clip", description="CLIP image/text encoder")
 class _CLIPEncoderProvider:
     label = "CLIPEncoder"
 
@@ -124,7 +124,7 @@ class _CLIPEncoderProvider:
         return CLIPEncoder()
 
 
-@register("perception_encoder", "mobileclip", description="MobileCLIP text encoder")
+@register("encoder", "mobileclip", description="MobileCLIP text encoder")
 class _MobileCLIPEncoderProvider:
     label = "MobileCLIPEncoder"
 
@@ -219,8 +219,8 @@ class PerceptionModule(Module, layer=3):
         **kw: Any,
     ) -> None:
         super().__init__(**kw)
-        require_backend("perception_detector", detector_type, list_plugins("perception_detector"))
-        require_backend("perception_encoder", encoder_type, list_plugins("perception_encoder"))
+        require_backend("detector", detector_type, list_plugins("detector"))
+        require_backend("encoder", encoder_type, list_plugins("encoder"))
         self._detector_type = detector_type
         self._encoder_type = encoder_type
         self._detector_status = BackendStatus.configured_as(detector_type)
@@ -539,7 +539,7 @@ class PerceptionModule(Module, layer=3):
             logger.warning(
                 "Unknown detector %r. Available: %s",
                 self._detector_type,
-                list_plugins("perception_detector"),
+                list_plugins("detector"),
             )
             self._detector_status.use("unavailable", reason="backend not registered")
         except (ImportError, Exception) as e:
@@ -548,7 +548,7 @@ class PerceptionModule(Module, layer=3):
         return None
 
     def _load_detector_candidate(self, backend: str):
-        provider = get("perception_detector", backend)
+        provider = get("detector", backend)
         view = self._CandidateModuleView(self, detector_type=backend)
         det = None
         try:
@@ -594,7 +594,7 @@ class PerceptionModule(Module, layer=3):
             logger.warning(
                 "Unknown encoder %r. Available: %s",
                 self._encoder_type,
-                list_plugins("perception_encoder"),
+                list_plugins("encoder"),
             )
             self._encoder_status.use("unavailable", reason="backend not registered")
         except (ImportError, Exception) as e:
@@ -603,7 +603,7 @@ class PerceptionModule(Module, layer=3):
         return None
 
     def _load_encoder_candidate(self, backend: str):
-        provider = get("perception_encoder", backend)
+        provider = get("encoder", backend)
         view = self._CandidateModuleView(self, encoder_type=backend)
         enc = None
         try:
@@ -631,14 +631,14 @@ class PerceptionModule(Module, layer=3):
 
     def _reconfigure_detector(self, backend: str, **_config: Any) -> dict[str, Any]:
         try:
-            get("perception_detector", backend)
+            get("detector", backend)
         except KeyError:
             return {
                 "ok": False,
                 "category": "detector",
                 "requested_backend": backend,
                 "reason": "unknown_backend",
-                "available": list_plugins("perception_detector"),
+                "available": list_plugins("detector"),
             }
 
         try:
@@ -688,14 +688,14 @@ class PerceptionModule(Module, layer=3):
 
     def _reconfigure_encoder(self, backend: str, **_config: Any) -> dict[str, Any]:
         try:
-            get("perception_encoder", backend)
+            get("encoder", backend)
         except KeyError:
             return {
                 "ok": False,
                 "category": "encoder",
                 "requested_backend": backend,
                 "reason": "unknown_backend",
-                "available": list_plugins("perception_encoder"),
+                "available": list_plugins("encoder"),
             }
 
         try:

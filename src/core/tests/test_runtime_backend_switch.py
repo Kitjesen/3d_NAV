@@ -90,21 +90,21 @@ def _reset_probe_state() -> None:
         _PROBE_FAIL_LOAD[kind] = False
 
 
-@register("perception_detector", "runtime_switch_test_detector")
+@register("detector", "runtime_switch_test_detector")
 class _RuntimeSwitchDetectorProvider:
     @staticmethod
     def create(_module):
         return _RuntimeSwitchDetector()
 
 
-@register("perception_encoder", "runtime_switch_test_encoder")
+@register("encoder", "runtime_switch_test_encoder")
 class _RuntimeSwitchEncoderProvider:
     @staticmethod
     def create(_module):
         return _RuntimeSwitchEncoder()
 
 
-@register("perception_detector", "runtime_switch_lock_detector")
+@register("detector", "runtime_switch_lock_detector")
 class _RuntimeSwitchLockDetectorProvider:
     @staticmethod
     def create(module):
@@ -114,7 +114,7 @@ class _RuntimeSwitchLockDetectorProvider:
         return backend
 
 
-@register("perception_encoder", "runtime_switch_lock_encoder")
+@register("encoder", "runtime_switch_lock_encoder")
 class _RuntimeSwitchLockEncoderProvider:
     @staticmethod
     def create(module):

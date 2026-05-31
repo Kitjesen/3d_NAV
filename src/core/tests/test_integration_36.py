@@ -180,7 +180,7 @@ bp = full_stack_blueprint(robot="stub", slam_profile="none",
                           enable_native=False, enable_semantic=True, enable_gateway=True)
 system = bp.build()
 system.start()
-time.sleep(0.5)
+time.sleep(0.3)
 
 planner = system.modules["SemanticPlannerModule"]
 nav = system.modules["NavigationModule"]
@@ -190,7 +190,7 @@ conns = system.connections
 # 21
 planner.scene_graph._deliver(SceneGraph(objects=[Detection3D(id="1", label="x")],
     regions=[Region(name="r", object_ids=["1"], center=Vector3(0, 0, 0))]))
-time.sleep(0.2)
+time.sleep(0.1)
 T("21.SG delivered", planner.scene_graph.msg_count > 0)
 
 # 22
@@ -215,10 +215,10 @@ for mod in system.modules.values():
 chair = Detection3D(id="c", label="chair", confidence=0.9)
 chair.position = Vector3(8, 2, 0)
 planner.scene_graph._deliver(SceneGraph(objects=[chair]))
-time.sleep(0.3)
+time.sleep(0.15)
 prev = nav.goal_pose.msg_count
 planner.instruction._deliver("go to the chair")
-time.sleep(0.5)
+time.sleep(0.3)
 T("26.FastPath->Nav", nav.goal_pose.msg_count - prev > 0)
 
 # 27 Vector Memory
@@ -226,7 +226,7 @@ vmem2._robot_xy = (20, 10)
 vmem2._store_snapshot(["fire extinguisher", "hose"])
 prev = nav.goal_pose.msg_count
 planner.instruction._deliver("find fire extinguisher")
-time.sleep(0.5)
+time.sleep(0.3)
 T(
     "27.VectorMem->Nav",
     nav.goal_pose.msg_count - prev > 0

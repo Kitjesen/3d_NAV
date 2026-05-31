@@ -64,7 +64,10 @@ _POINT_PER_PATH_THRE  = 2     # blocked path threshold (pointPerPathThre_)
 _PATH_SCALE           = 1.0   # pathScale_ default
 _PATH_RANGE           = 3.5   # adjacentRange_ default — scan radius in metres
 _DIR_THRE             = 90.0  # degrees — max allowed direction deviation
+_DIR_WEIGHT           = 0.02  # direction penalty weight in path scoring (radians penalty factor)
 _GOAL_CLEAR_RANGE     = 0.5   # m
+_BOUNDARY_INTENSITY   = 100.0  # intensity value for hard-obstacle boundary points (matches C++ boundaryHandler)
+_OBSTACLE_INTENSITY   = 200.0  # intensity value for added-obstacle points (matches C++ addedObstaclesHandler)
 _MIN_TRACKABLE_LOCAL_PATH_XY = 0.30
 
 
@@ -282,7 +285,6 @@ def _score_paths_numpy(
                             path_penalty_list[idx] = h
 
     # Score paths into group scores
-    dir_weight   = 0.02
     omni_thre    = 5.0
     slope_weight = 0.0
 
@@ -290,7 +292,7 @@ def _score_paths_numpy(
         if not rot_dir_valid[rot_dir]:
             continue
         ang_diff = float(ang_diff_list[rot_dir])
-        dw = abs(dir_weight * ang_diff)
+        dw = abs(_DIR_WEIGHT * ang_diff)
         sqrt_sqrt_dw = math.sqrt(math.sqrt(dw))
 
         # computeRotDirW
@@ -777,14 +779,14 @@ class LocalPlannerModule(Module, layer=2):
             bpts = self._boundary_points.astype(np.float32)
             buf = np.zeros((len(bpts), 4), dtype=np.float32)
             buf[:, :min(3, bpts.shape[1])] = bpts[:, :min(3, bpts.shape[1])]
-            buf[:, 3] = 100.0
+            buf[:, 3] = _BOUNDARY_INTENSITY
             clouds.append(buf)
 
         if self._added_obstacle_points is not None and self._added_obstacle_points.shape[0] > 0:
             apts = self._added_obstacle_points.astype(np.float32)
             buf = np.zeros((len(apts), 4), dtype=np.float32)
             buf[:, :min(3, apts.shape[1])] = apts[:, :min(3, apts.shape[1])]
-            buf[:, 3] = 200.0
+            buf[:, 3] = _OBSTACLE_INTENSITY
             clouds.append(buf)
 
         if not clouds:

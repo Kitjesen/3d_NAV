@@ -22,6 +22,9 @@ from typing import Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
+_REACHABILITY_HOP_DECAY = 0.2    # decay factor per topology hop in reachability score
+_UNREACHABLE_ROOM_FACTOR = 0.3   # fallback reachability for rooms not connected via topology
+
 
 # ══════════════════════════════════════════════════════════════════
 #  房间类型→物体 语义先验知识库
@@ -497,9 +500,9 @@ class SemanticPriorEngine:
 
             reachability_factor = 1.0
             if hops > 0:
-                reachability_factor = 1.0 / (1.0 + 0.2 * hops)
+                reachability_factor = 1.0 / (1.0 + _REACHABILITY_HOP_DECAY * hops)
             elif hops < 0:
-                reachability_factor = 0.3  # not reachable via topology
+                reachability_factor = _UNREACHABLE_ROOM_FACTOR
 
             combined = rp.prior_score * reachability_factor
 

@@ -1,7 +1,7 @@
 import numpy as np
 import time
 
-from kernels import *
+from kernels import tomographyKernel, travKernel, inflationKernel
 
 
 class Tomogram(object):

@@ -76,12 +76,12 @@ class TestWaypointTracker(unittest.TestCase):
 
     def test_stuck_warn_at_half_timeout(self):
         """Not moving for >50% of timeout fires EV_STUCK_WARN once."""
-        tracker = WaypointTracker(threshold=1.0, stuck_timeout=0.2, stuck_dist=0.15)
+        tracker = WaypointTracker(threshold=1.0, stuck_timeout=0.1, stuck_dist=0.15)
         wp = np.array([10.0, 0.0, 0.0])
         pos = np.array([0.0, 0.0, 0.0])
         tracker.reset([wp], pos)
 
-        time.sleep(0.12)  # >50% of 0.2s
+        time.sleep(0.06)  # >50% of 0.1s
         status = tracker.update(pos)
         self.assertEqual(status.event, EV_STUCK_WARN)
 
@@ -91,15 +91,15 @@ class TestWaypointTracker(unittest.TestCase):
 
     def test_stuck_at_full_timeout(self):
         """Not moving for full timeout fires EV_STUCK once."""
-        tracker = WaypointTracker(threshold=1.0, stuck_timeout=0.2, stuck_dist=0.15)
+        tracker = WaypointTracker(threshold=1.0, stuck_timeout=0.1, stuck_dist=0.15)
         wp = np.array([10.0, 0.0, 0.0])
         pos = np.array([0.0, 0.0, 0.0])
         tracker.reset([wp], pos)
 
-        time.sleep(0.12)
+        time.sleep(0.06)
         tracker.update(pos)  # warn fires here
 
-        time.sleep(0.12)  # total >0.2s
+        time.sleep(0.06)  # total >0.1s
         status = tracker.update(pos)
         self.assertEqual(status.event, EV_STUCK)
 
@@ -116,12 +116,12 @@ class TestWaypointTracker(unittest.TestCase):
 
     def test_pause_resets_stuck_timer(self):
         """Pause resets stuck timer so no stuck event fires immediately after."""
-        tracker = WaypointTracker(threshold=1.0, stuck_timeout=0.2, stuck_dist=0.15)
+        tracker = WaypointTracker(threshold=1.0, stuck_timeout=0.1, stuck_dist=0.15)
         wp = np.array([10.0, 0.0, 0.0])
         pos = np.array([0.0, 0.0, 0.0])
         tracker.reset([wp], pos)
 
-        time.sleep(0.15)  # past warn threshold
+        time.sleep(0.08)  # past warn threshold
         tracker.pause()
         # Immediately after pause, no stuck event
         status = tracker.update(pos)
@@ -129,19 +129,19 @@ class TestWaypointTracker(unittest.TestCase):
 
     def test_movement_resets_stuck(self):
         """Moving >= stuck_dist resets stuck timer."""
-        tracker = WaypointTracker(threshold=1.0, stuck_timeout=0.2, stuck_dist=0.15)
+        tracker = WaypointTracker(threshold=1.0, stuck_timeout=0.1, stuck_dist=0.15)
         wp = np.array([10.0, 0.0, 0.0])
         pos = np.array([0.0, 0.0, 0.0])
         tracker.reset([wp], pos)
 
-        time.sleep(0.12)  # past 50% of timeout
+        time.sleep(0.06)  # past 50% of timeout
         # Move far enough to reset
         moved = np.array([0.2, 0.0, 0.0])
         status = tracker.update(moved)
         self.assertIsNone(status.event)
 
         # Wait again — no warn because timer was reset
-        time.sleep(0.08)
+        time.sleep(0.04)
         status = tracker.update(moved)
         self.assertIsNone(status.event)
 
@@ -1244,7 +1244,7 @@ class TestSafetyRingModule(unittest.TestCase):
         stop_cmds = []
         m.stop_cmd._add_callback(lambda v: stop_cmds.append(v))
 
-        time.sleep(0.08)  # exceed 50ms timeout
+        time.sleep(0.06)  # exceed 50ms timeout
 
         # Deliver another odom — this triggers _publish_safety which
         # checks odom age. But the odom delivery itself updates _last_odom_time.
@@ -1256,7 +1256,7 @@ class TestSafetyRingModule(unittest.TestCase):
         # But delivering localization_status calls _publish_safety which
         # will check odom timeout. However, _last_odom_time was set by
         # the first odom delivery. Let's wait and trigger via localization.
-        time.sleep(0.08)
+        time.sleep(0.06)
         m.localization_status._deliver({"state": "OK"})
 
         self.assertIn(2, stop_cmds,
@@ -1272,7 +1272,7 @@ class TestSafetyRingModule(unittest.TestCase):
         try:
             m._on_odom(self._make_odom())
             stops.clear()
-            time.sleep(0.09)
+            time.sleep(0.06)
             self.assertIn(2, stops)
         finally:
             m.stop()
@@ -1366,7 +1366,7 @@ class TestSafetyRingModule(unittest.TestCase):
         m.safety_state._add_callback(lambda s: safety_states.append(s))
         m.stop_cmd._add_callback(lambda v: stop_cmds.append(v))
 
-        time.sleep(0.08)
+        time.sleep(0.06)
         m.odometry._deliver(self._make_odom())
 
         self.assertGreater(len(safety_states), 0)
@@ -1388,7 +1388,7 @@ class TestSafetyRingModule(unittest.TestCase):
         m.safety_state._add_callback(lambda s: safety_states.append(s))
         m.stop_cmd._add_callback(lambda v: stop_cmds.append(v))
 
-        time.sleep(0.08)
+        time.sleep(0.06)
         m.odometry._deliver(self._make_odom())
 
         self.assertGreater(len(safety_states), 0)

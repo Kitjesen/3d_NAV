@@ -142,22 +142,22 @@ class _GroundingDINODetectorProvider:
 
 def _register_builtin_detector_providers() -> None:
     register(
-        "perception_detector",
+        "detector",
         "yoloe",
         description="YOLO-E open-vocabulary instance detector",
     )(_YOLOEDetectorProvider)
     register(
-        "perception_detector",
+        "detector",
         "yolo_world",
         description="YOLO-World open-vocabulary detector",
     )(_YOLOWorldDetectorProvider)
     register(
-        "perception_detector",
+        "detector",
         "bpu",
         description="D-Robotics Nash BPU detector",
     )(_BPUDetectorProvider)
     register(
-        "perception_detector",
+        "detector",
         "grounding_dino",
         description="GroundingDINO open-vocabulary detector",
     )(_GroundingDINODetectorProvider)
@@ -234,11 +234,11 @@ class DetectorModule(Module, layer=3):
         _register_builtin_detector_providers()
         name = self._detector_name.lower()
         try:
-            provider = get("perception_detector", name)
+            provider = get("detector", name)
         except KeyError:
-            available = ", ".join(list_plugins("perception_detector")) or "<none>"
+            available = ", ".join(list_plugins("detector")) or "<none>"
             raise ValueError(
-                f"Unknown perception_detector backend '{name}'. Available: {available}"
+                f"Unknown detector backend '{name}'. Available: {available}"
             ) from None
         return provider.create(self)
 

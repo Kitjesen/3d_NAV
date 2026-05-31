@@ -76,12 +76,12 @@ class _MobileCLIPEncoderProvider:
 
 def _register_builtin_encoder_providers() -> None:
     register(
-        "perception_encoder",
+        "encoder",
         "clip",
         description="CLIP image/text encoder",
     )(_CLIPEncoderProvider)
     register(
-        "perception_encoder",
+        "encoder",
         "mobileclip",
         description="MobileCLIP text encoder",
     )(_MobileCLIPEncoderProvider)
@@ -140,11 +140,11 @@ class EncoderModule(Module, layer=3):
         _register_builtin_encoder_providers()
         name = self._encoder_name.lower()
         try:
-            provider = get("perception_encoder", name)
+            provider = get("encoder", name)
         except KeyError:
-            available = ", ".join(list_plugins("perception_encoder")) or "<none>"
+            available = ", ".join(list_plugins("encoder")) or "<none>"
             raise ValueError(
-                f"Unknown perception_encoder backend '{name}'. Available: {available}"
+                f"Unknown encoder backend '{name}'. Available: {available}"
             ) from None
         return provider.create(self)
 

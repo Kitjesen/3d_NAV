@@ -53,7 +53,7 @@ class TestStubSmoke(unittest.TestCase):
         bp = _build_stub()
         system = bp.build()
         system.start()
-        time.sleep(0.2)
+        time.sleep(0.1)
         system.stop()
 
     def test_odometry_flows_to_navigation(self):
@@ -73,7 +73,7 @@ class TestStubSmoke(unittest.TestCase):
         nav.odometry.subscribe(_capture_odom)
 
         system.start()
-        time.sleep(0.5)  # stub driver publishes odom at ~10Hz
+        time.sleep(0.3)  # stub driver publishes odom at ~10Hz
         system.stop()
 
         self.assertGreater(len(odom_received), 0,
@@ -90,13 +90,13 @@ class TestStubSmoke(unittest.TestCase):
             drv.stop_signal.subscribe(lambda msg: stops.append(msg))
 
         system.start()
-        time.sleep(0.1)
+        time.sleep(0.05)
 
         # Inject a stop command
         safety = system.get_module("SafetyRingModule")
         safety.stop_cmd.publish(2)  # STOP level
 
-        time.sleep(0.1)
+        time.sleep(0.05)
         system.stop()
 
         self.assertGreater(len(stops), 0,
@@ -112,7 +112,7 @@ class TestStubSmoke(unittest.TestCase):
         nav.mission_status.subscribe(lambda s: statuses.append(s))
 
         system.start()
-        time.sleep(0.3)  # let odom arrive
+        time.sleep(0.15)  # let odom arrive
 
         from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
         goal = PoseStamped(
@@ -121,7 +121,7 @@ class TestStubSmoke(unittest.TestCase):
             ts=time.time(), frame_id="map",
         )
         nav.goal_pose._deliver(goal)
-        time.sleep(0.5)
+        time.sleep(0.3)
         system.stop()
 
         self.assertGreater(len(statuses), 0,
@@ -132,7 +132,7 @@ class TestStubSmoke(unittest.TestCase):
         bp = _build_stub()
         system = bp.build()
         system.start()
-        time.sleep(0.1)
+        time.sleep(0.05)
 
         for name, mod in system._modules.items():
             if hasattr(mod, "health"):

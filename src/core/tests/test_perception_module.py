@@ -452,27 +452,27 @@ class TestDetectorConfiguration:
         from core.registry import list_plugins
 
         assert {"yoloe", "yolo_world", "bpu", "sim_scene"} <= set(
-            list_plugins("perception_detector")
+            list_plugins("detector")
         )
-        assert {"clip", "mobileclip"} <= set(list_plugins("perception_encoder"))
+        assert {"clip", "mobileclip"} <= set(list_plugins("encoder"))
         assert {"bpu"} <= set(list_plugins("perception_tracker"))
 
     def test_unknown_perception_backend_fails_fast(self):
-        with pytest.raises(ValueError, match="Unknown perception_detector backend 'bogus'"):
+        with pytest.raises(ValueError, match="Unknown detector backend 'bogus'"):
             PerceptionModule(detector_type="bogus")
-        with pytest.raises(ValueError, match="Unknown perception_encoder backend 'bogus'"):
+        with pytest.raises(ValueError, match="Unknown encoder backend 'bogus'"):
             PerceptionModule(encoder_type="bogus")
 
     def test_constructor_accepts_registered_detector_and_encoder_plugins(self):
         from core.registry import register
 
-        @register("perception_detector", "constructor_test_detector")
+        @register("detector", "constructor_test_detector")
         class _DetectorProvider:
             @staticmethod
             def create(_module):
                 return object()
 
-        @register("perception_encoder", "constructor_test_encoder")
+        @register("encoder", "constructor_test_encoder")
         class _EncoderProvider:
             @staticmethod
             def create(_module):

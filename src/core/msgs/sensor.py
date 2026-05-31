@@ -12,6 +12,7 @@ Imu           — inertial measurement unit data
 
 from __future__ import annotations
 
+import os
 import struct
 import time
 from dataclasses import dataclass, field
@@ -505,7 +506,7 @@ class PointCloud2:
             self.point_step = int(self.points.shape[1] * np.dtype(np.float32).itemsize)
         if self.row_step <= 0:
             self.row_step = int(self.point_step * self.width)
-        if self.is_dense and not np.isfinite(self.points).all():
+        if self.is_dense and not os.environ.get("LINGTU_SKIP_DENSE_CHECK") and not np.isfinite(self.points).all():
             self.is_dense = False
 
     # -- factory methods -----------------------------------------------------

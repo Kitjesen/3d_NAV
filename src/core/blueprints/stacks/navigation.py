@@ -113,9 +113,9 @@ def navigation(
     if config.get("enable_frontier", False):
         try:
             WavefrontFrontierExplorer = stack_module(
-                "navigation",
+                "exploration",
                 "wavefront_frontier",
-                seed_group="navigation",
+                seed_group="exploration",
                 fallback="nav.frontier_explorer_module.WavefrontFrontierExplorer",
             )
             bp.add(

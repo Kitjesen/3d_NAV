@@ -85,18 +85,19 @@ def test_builtin_plugin_seed_restores_core_plugin_surfaces_after_clear():
         seed_builtin_plugins(groups=("sim_lidar",), reload_loaded=True)
         assert {"pointcloud"} <= set(list_plugins("sim_lidar"))
         assert {"tare", "supervisor"} <= set(list_plugins("exploration"))
-        assert {"default", "wavefront_frontier", "traversable_frontier", "ros2_path_bridge"} <= set(
+        assert {"default", "traversable_frontier", "ros2_path_bridge"} <= set(
             list_plugins("navigation")
         )
+        assert {"wavefront_frontier"} <= set(list_plugins("exploration"))
         assert {"scene"} <= set(list_plugins("perception"))
         assert {"pluggable"} <= set(list_plugins("encoder"))
         assert {"default", "dataset_recorder", "keyframe_exporter"} <= set(
             list_plugins("reconstruction")
         )
         assert {"yoloe", "yolo_world", "bpu", "sim_scene"} <= set(
-            list_plugins("perception_detector")
+            list_plugins("detector")
         )
-        assert {"clip", "mobileclip"} <= set(list_plugins("perception_encoder"))
+        assert {"clip", "mobileclip"} <= set(list_plugins("encoder"))
         assert {"openai", "claude", "qwen", "moonshot", "mock"} <= set(
             list_plugins("llm_client")
         )
@@ -118,7 +119,7 @@ def test_builtin_plugin_seed_can_seed_one_group_without_loading_unrelated_groups
 
         assert {"pct", "astar"} <= set(list_plugins("planner_backend"))
         assert list_plugins("driver") == []
-        assert list_plugins("perception_detector") == []
+        assert list_plugins("detector") == []
     finally:
         restore(saved)
         _restore_import_state(seed_modules, modules_before)

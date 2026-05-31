@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 UNKNOWN = -1
 FREE = 0
 OCCUPIED = 100
+_OCCUPIED_COST = 100.0  # nav_cost value for occupied cells (matches OCCUPIED=100, float for arithmetic)
 
 
 @register("map", "occupancy_grid", description="2D occupancy grid from LiDAR point cloud")
@@ -148,8 +149,8 @@ class OccupancyGridModule(Module, layer=2):
         binary[clear_mask] = False
 
         inflated = self._inflate(binary)
-        cost = (inflated.astype(np.float32) * 100.0).clip(0, 100)
-        cost[binary] = 100.0
+        cost = (inflated.astype(np.float32) * _OCCUPIED_COST).clip(0, _OCCUPIED_COST)
+        cost[binary] = _OCCUPIED_COST
         cost[clear_mask] = 0.0
         grid_int8 = cost.astype(np.int8)
         self._publish_grids(
@@ -211,10 +212,10 @@ class OccupancyGridModule(Module, layer=2):
 
         nav_cost = grid.astype(np.float32)
         if self._unknown_as_obstacle_for_costmap:
-            nav_cost[nav_cost < 0] = 100.0
+            nav_cost[nav_cost < 0] = _OCCUPIED_COST
         else:
             nav_cost[nav_cost < 0] = 0.0
-        nav_cost = nav_cost.clip(0, 100)
+        nav_cost = nav_cost.clip(0, _OCCUPIED_COST)
 
         self._publish_grids(
             occupancy_grid=grid.astype(np.int8),

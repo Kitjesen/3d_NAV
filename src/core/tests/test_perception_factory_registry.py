@@ -28,7 +28,7 @@ def test_perception_factory_uses_registered_detector_provider():
     created = object()
 
     try:
-        @register("perception_factory_detector", "fake")
+        @register("detector_factory", "fake")
         class FakeDetectorProvider:
             @staticmethod
             def create(_config):

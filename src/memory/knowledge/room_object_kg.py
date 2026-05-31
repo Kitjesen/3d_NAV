@@ -48,6 +48,8 @@ logger = logging.getLogger(__name__)
 # Laplace smoothing pseudo-count
 _SMOOTHING_ALPHA = 1.0
 _SMOOTHING_BETA = 2.0  # equivalent to 2 "phantom" visits
+_DEFAULT_COOCCUR_MIN_PROB = 0.3   # minimum co-occurrence probability for related-object retrieval
+_DEFAULT_COOCCUR_TOP_K = 10        # max objects returned per co-occurrence query
 
 
 class RoomObjectKG:
@@ -177,8 +179,8 @@ class RoomObjectKG:
     def get_cooccurring_objects(
         self,
         label: str,
-        min_prob: float = 0.3,
-        top_k: int = 10,
+        min_prob: float = _DEFAULT_COOCCUR_MIN_PROB,
+        top_k: int = _DEFAULT_COOCCUR_TOP_K,
     ) -> list[tuple[str, float]]:
         """
         Find objects that co-occur with `label` in the same room types.

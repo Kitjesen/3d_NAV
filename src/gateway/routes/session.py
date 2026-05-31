@@ -74,11 +74,24 @@ def _transition_response(
 
 
 def _body_mapping(body: Any) -> dict[str, Any]:
+    """Normalise request body to a plain dict.
+
+    Why raw dicts are accepted:
+      Pydantic models define fixed fields, but ROS2 frontends / WebSocket
+      messages send JSON with backend-variant keys (e.g. "map_name" vs.
+      "map", "slam_profile" vs. "slam_backend"). Accepting raw dicts avoids
+      per-endpoint model proliferation and keeps route handlers flexible.
+
+    Trade-off:
+      Pydantic type coercion (float, int, str trim) is bypassed at the
+      boundary. Call sites MUST manually coerce numeric fields with
+      float() / int() — see slam_relocalize (x, y, yaw) and bag_start
+      (duration) for examples.
+    """
     if hasattr(body, "model_dump"):
         return body.model_dump(exclude_none=True)
-    if isinstance(body, dict):
-        return body
-    return {}
+    assert isinstance(body, dict), f"expected dict or Pydantic model, got {type(body).__name__}"
+    return body
 
 
 def _normalize_slam_profile(profile: str) -> str:

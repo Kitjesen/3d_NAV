@@ -50,6 +50,16 @@ OCCUPIED = 100
 UNKNOWN  = -1
 FRONTIER_MAP_FRAME_ID = map_frame_id()
 
+# Frontier scoring constants
+_NOVELTY_SATURATE_DIST = 10.0     # m — novelty score saturates at this distance from visited goals
+_FRONTIER_DIST_SWEET_LOW = 3.0    # m — lower bound of distance sweet-spot for frontier scoring
+_FRONTIER_DIST_SWEET_HIGH = 8.0   # m — upper bound of distance sweet-spot for frontier scoring
+_FRONTIER_INFO_GAIN_WEIGHT = 0.30   # scoring weight: information gain (cluster size)
+_FRONTIER_NOVELTY_WEIGHT = 0.30     # scoring weight: distance from visited goals
+_FRONTIER_DIST_WEIGHT = 0.20        # scoring weight: distance sweet-spot
+_FRONTIER_SAFETY_WEIGHT = 0.15      # scoring weight: clearance from obstacles
+_FRONTIER_MOMENTUM_WEIGHT = 0.05    # scoring weight: heading alignment
+
 # 4-connectivity neighbours (row_delta, col_delta)
 _NEIGH4 = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
@@ -65,7 +75,7 @@ _NEIGH8 = [
 # Module
 # ---------------------------------------------------------------------------
 
-@register("navigation", "wavefront_frontier",
+@register("exploration", "wavefront_frontier",
           description="Wavefront frontier exploration")
 class WavefrontFrontierExplorer(Module, layer=2):
     """Autonomous exploration: BFS wavefront → frontier clusters → scored goal.
@@ -984,14 +994,12 @@ class WavefrontFrontierExplorer(Module, layer=2):
                     math.hypot(c["cx"] - vx, c["cy"] - vy)
                     for vx, vy in self._visited_goals
                 )
-                # Saturate at 10 m
-                novelty_score = min(novelty_dist / 10.0, 1.0)
+                novelty_score = min(novelty_dist / _NOVELTY_SATURATE_DIST, 1.0)
             else:
                 novelty_score = 1.0
 
-            # Distance: sweet spot 3-8 m → peak at 5.5 m
-            sweet_low, sweet_high = 3.0, 8.0
-            sweet_mid = (sweet_low + sweet_high) / 2.0
+            # Distance: sweet spot _FRONTIER_DIST_SWEET_LOW-_FRONTIER_DIST_SWEET_HIGH m
+            sweet_mid = (_FRONTIER_DIST_SWEET_LOW + _FRONTIER_DIST_SWEET_HIGH) / 2.0
             dist_score = max(0.0, 1.0 - abs(dist - sweet_mid) / sweet_mid)
 
             # Safety: approximate using distance to nearest OCCUPIED cell
@@ -1008,13 +1016,13 @@ class WavefrontFrontierExplorer(Module, layer=2):
             else:
                 momentum_score = 0.0
 
-            # Weighted sum
+            # Weighted sum (weights from module docstring)
             score = (
-                0.30 * info_gain_norm
-                + 0.30 * novelty_score
-                + 0.20 * dist_score
-                + 0.15 * safety_score
-                + 0.05 * momentum_score
+                _FRONTIER_INFO_GAIN_WEIGHT * info_gain_norm
+                + _FRONTIER_NOVELTY_WEIGHT * novelty_score
+                + _FRONTIER_DIST_WEIGHT * dist_score
+                + _FRONTIER_SAFETY_WEIGHT * safety_score
+                + _FRONTIER_MOMENTUM_WEIGHT * momentum_score
             )
 
             c["score"]          = score

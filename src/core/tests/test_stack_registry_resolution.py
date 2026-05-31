@@ -128,7 +128,7 @@ def test_navigation_stack_prefers_registered_modules_with_canonical_aliases():
         class FakeNavigation(Module, layer=5):
             pass
 
-        @register("navigation", "wavefront_frontier")
+        @register("exploration", "wavefront_frontier")
         class FakeWavefront(Module, layer=5):
             pass
 

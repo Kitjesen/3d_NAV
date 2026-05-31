@@ -4,7 +4,7 @@ import pickle
 import math
 import numpy as np
 
-from utils import *
+# utils not used in this file — transTrajGrid2Map and traj2ros available if needed later
 
 sys.path.append('../')
 from lib import a_star, ele_planner, traj_opt

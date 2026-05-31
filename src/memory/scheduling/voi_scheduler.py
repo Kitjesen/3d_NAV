@@ -28,6 +28,11 @@ from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# VoI utility-function penalty weights (see BA-HSG §3.4.4)
+_LAMBDA_TIME_PENALTY = 0.3      # weight for time delay cost in VoI utility: U(a) = ... - lambda_t * Delta_T(a)
+_LAMBDA_ENERGY_PENALTY = 0.1    # weight for energy consumption cost in VoI utility
+_LAMBDA_DISTANCE_PENALTY = 0.05 # weight for odometry distance cost in VoI utility
+
 
 class SchedulerAction(Enum):
     """VoI 调度器的高层动作。"""
@@ -66,9 +71,9 @@ class SchedulerState:
 class VoIConfig:
     """VoI 调度器可调参数。"""
     # 成本权重
-    lambda_t: float = 0.3           # 时延惩罚
-    lambda_e: float = 0.1           # 能耗惩罚
-    lambda_d: float = 0.05          # 里程惩罚
+    lambda_t: float = _LAMBDA_TIME_PENALTY     # 时延惩罚
+    lambda_e: float = _LAMBDA_ENERGY_PENALTY   # 能耗惩罚
+    lambda_d: float = _LAMBDA_DISTANCE_PENALTY # 里程惩罚
 
     # 动作成本估计 (Jetson Orin NX 实测基准)
     cost_reperceive_time: float = 3.0    # 再感知耗时 (s)

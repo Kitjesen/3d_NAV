@@ -293,7 +293,7 @@ class TestDDSTransport:
         pub = transport.create_publisher(topic)
 
         # Allow DDS discovery to complete before publishing
-        time.sleep(0.3)
+        time.sleep(0.15)
 
         pub.publish({"hello": "dds", "value": 42})
 

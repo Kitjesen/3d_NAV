@@ -15,7 +15,7 @@ from .tracker_api import TrackerAPI
 from .types import PerceptionConfig
 
 
-@register("perception_factory_detector", "yolo_world", description="YOLO-World DetectorAPI adapter")
+@register("detector_factory", "yolo_world", description="YOLO-World DetectorAPI adapter")
 class _YOLOWorldFactoryProvider:
     @staticmethod
     def create(config: PerceptionConfig | None) -> DetectorAPI:
@@ -24,7 +24,7 @@ class _YOLOWorldFactoryProvider:
         return YOLOWorldDetector(config)
 
 
-@register("perception_factory_encoder", "clip", description="CLIP EncoderAPI adapter")
+@register("encoder_factory", "clip", description="CLIP EncoderAPI adapter")
 class _CLIPFactoryProvider:
     @staticmethod
     def create(config: PerceptionConfig | None) -> EncoderAPI:
@@ -119,7 +119,7 @@ class PerceptionFactory:
             >>> detections = detector.detect(image)
         """
         try:
-            provider = get("perception_factory_detector", detector_type)
+            provider = get("detector_factory", detector_type)
             return provider.create(config)
         except KeyError:
             raise ConfigurationError(
@@ -154,7 +154,7 @@ class PerceptionFactory:
             >>> similarity = encoder.compute_similarity(image_feat, text_feat)
         """
         try:
-            provider = get("perception_factory_encoder", encoder_type)
+            provider = get("encoder_factory", encoder_type)
             return provider.create(config)
         except KeyError:
             raise ConfigurationError(
@@ -228,7 +228,7 @@ class PerceptionFactory:
         Returns:
             检测器类型列表
         """
-        return list_plugins("perception_factory_detector")
+        return list_plugins("detector_factory")
 
     @staticmethod
     def get_available_encoders() -> list:
@@ -238,7 +238,7 @@ class PerceptionFactory:
         Returns:
             编码器类型列表
         """
-        return list_plugins("perception_factory_encoder")
+        return list_plugins("encoder_factory")
 
     @staticmethod
     def get_available_trackers() -> list:

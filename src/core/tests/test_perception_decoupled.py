@@ -99,7 +99,7 @@ class TestDetectorModule(unittest.TestCase):
     def test_create_backend_uses_perception_detector_registry(self):
         seen = []
 
-        @register("perception_detector", "standalone_registry_detector")
+        @register("detector", "standalone_registry_detector")
         class _DetectorProvider:
             @staticmethod
             def create(module):
@@ -137,7 +137,7 @@ class TestEncoderModule(unittest.TestCase):
     def test_create_backend_uses_perception_encoder_registry(self):
         seen = []
 
-        @register("perception_encoder", "standalone_registry_encoder")
+        @register("encoder", "standalone_registry_encoder")
         class _EncoderProvider:
             @staticmethod
             def create(module):
