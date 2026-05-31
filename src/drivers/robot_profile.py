@@ -125,7 +125,7 @@ class ConnectionConfig:
 
 
 @dataclass
-class SensorMount:
+class MountSpec:
     """A single sensor with its extrinsics.
 
     id: Unique identifier (e.g. ``lidar_front``).
@@ -173,7 +173,7 @@ class RobotProfile:
     safety_limits: SafetyLimits = field(default_factory=SafetyLimits)
     power: PowerSpec = field(default_factory=PowerSpec)
     connection: ConnectionConfig = field(default_factory=ConnectionConfig)
-    sensors: list[SensorMount] = field(default_factory=list)
+    sensors: list[MountSpec] = field(default_factory=list)
 
     # ── composition ────────────────────────────────────────────────
 
@@ -246,10 +246,10 @@ class RobotProfile:
             control_rate_hz=driver.get("control_rate", 50.0),
         )
 
-        sensors: list[SensorMount] = []
+        sensors: list[MountSpec] = []
 
         # Lidar
-        sensors.append(SensorMount(
+        sensors.append(MountSpec(
             id="lidar_front",
             type="lidar",
             model="Livox MID-360",
@@ -272,7 +272,7 @@ class RobotProfile:
             if v is not None:
                 cam_ints[k] = v
 
-        sensors.append(SensorMount(
+        sensors.append(MountSpec(
             id="camera_front",
             type="camera",
             model="Depth Camera",
@@ -289,7 +289,7 @@ class RobotProfile:
         # GNSS
         if gnss_cfg.get("enabled", False):
             ant = gnss_cfg.get("antenna_offset", {})
-            sensors.append(SensorMount(
+            sensors.append(MountSpec(
                 id="gnss_main",
                 type="gnss",
                 model=gnss_cfg.get("model", "WTRTK-980"),
@@ -371,7 +371,7 @@ THUNDER_V3_PROFILE = RobotProfile(
     model="Dog V3",
     description="Thunder quadruped for the S100P platform (RDK X5, Nash BPU).",
     sensors=[
-        SensorMount(
+        MountSpec(
             id="lidar_front",
             type="lidar",
             model="Livox MID-360",
@@ -381,7 +381,7 @@ THUNDER_V3_PROFILE = RobotProfile(
             z=0.04412,
             intrinsics={"publish_freq": 10.0},
         ),
-        SensorMount(
+        MountSpec(
             id="camera_front",
             type="camera",
             model="Depth Camera",
@@ -396,7 +396,7 @@ THUNDER_V3_PROFILE = RobotProfile(
                 "rotate": 270,
             },
         ),
-        SensorMount(
+        MountSpec(
             id="gnss_main",
             type="gnss",
             model="WTRTK-980",
