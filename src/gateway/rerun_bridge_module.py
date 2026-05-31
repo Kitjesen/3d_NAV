@@ -143,13 +143,14 @@ class RerunBridgeModule(Module, layer=6):
         return "stopped"
 
     @skill
-    def rerun_status(self) -> dict:
+    def rerun_status(self) -> str:
         """Return Rerun status."""
-        return {
+        import json
+        return json.dumps({
             "active": self._active,
             "url": f"http://localhost:{self._web_port}" if self._active else None,
             "counts": dict(self._counts),
-        }
+        })
 
     # ── Module port callbacks ────────────────────────────────────────────
 

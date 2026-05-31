@@ -119,7 +119,7 @@ class PathFollowerModule(Module, layer=2):
         self._control_safety_stop = False
         self._control_hint_reason = ""
 
-    def setup(self):
+    def setup(self) -> None:
         self.odometry.subscribe(self._on_odom)
         self.local_path.subscribe(self._on_path)
         self.control_hint.subscribe(self._on_control_hint)
@@ -268,8 +268,8 @@ class PathFollowerModule(Module, layer=2):
         if self._node:
             try:
                 self._node.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("PathFollowerModule stop: %s", e)
             self._node = None
         self.alive.publish(False)
         super().stop()

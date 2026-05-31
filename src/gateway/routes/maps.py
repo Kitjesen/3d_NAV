@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
+import shlex
 import shutil
 import subprocess
 import time
@@ -540,13 +541,15 @@ def register_map_routes(app, gw) -> None:
         )
 
         try:
+            # NOTE: pcd_path inserted into bash -c string below; shlex.quote prevents shell injection
+            safe_pcd = shlex.quote(str(pcd_path))
             r = subprocess.run(
                 [
                     "bash",
                     "-c",
                     ros_env
                     + f"ros2 service call /nav/save_map interface/srv/SaveMaps "
-                    + f"\"{{file_path: '{pcd_path}'}}\"",
+                    + f"\"{{file_path: {safe_pcd}}}\"",
                 ],
                 capture_output=True,
                 text=True,

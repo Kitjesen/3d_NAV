@@ -375,9 +375,10 @@ class TeleopModule(Module, layer=6):
     # -- @skill methods (REPL / MCP) ----------------------------------------
 
     @skill
-    def get_teleop_status(self) -> dict:
+    def get_teleop_status(self) -> str:
         """Return current teleop status."""
-        return {
+        import json
+        return json.dumps({
             "active": self._active,
             "clients": self._clients,
             "camera_clients": self._camera_clients,
@@ -386,7 +387,7 @@ class TeleopModule(Module, layer=6):
             "last_joy_age_ms": round(
                 (time.monotonic() - self._last_joy_time) * 1000
             ) if self._last_joy_time > 0 else None,
-        }
+        })
 
     @skill
     def force_release(self) -> str:

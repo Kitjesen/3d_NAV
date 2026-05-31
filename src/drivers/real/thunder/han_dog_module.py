@@ -132,7 +132,7 @@ class ThunderDriver(Module, layer=1):
 
     # ── 生命周期 ──
 
-    def setup(self):
+    def setup(self) -> None:
         """注册端口回调。"""
         self.cmd_vel.subscribe(self._on_cmd_vel)
         self.stop_signal.subscribe(self._on_stop)

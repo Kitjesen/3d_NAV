@@ -182,7 +182,7 @@ def stub_blueprint(**config: Any) -> Blueprint:
 
     bp = Blueprint()
     bp.add(StubDogModule)
-    bp.add(NavigationModule, planner=config.get("planner", "astar"))
+    bp.add(NavigationModule, planner=config.get("planner_backend", "astar"))
     bp.add(SafetyRingModule)
 
     bp.wire("SafetyRingModule", "stop_cmd", "StubDogModule", "stop_signal")

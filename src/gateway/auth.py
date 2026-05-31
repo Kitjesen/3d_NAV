@@ -20,6 +20,15 @@ Clients send the key as:
     headers is inconvenient)
   - Cookie: ``lingtu_api_key=<key>`` (set by the login page, HTTP only)
 
+⚠️ Danger: Query parameter and Cookie auth both expose the API key to
+``/?api_key=...`` referrer leakage, browser history, and server access logs.
+Cookie auth additionally leaks via CORS preflight if the gateway allows
+``credentials: include`` from untrusted origins — the browser sends the
+cookie even on cross-origin requests when CORS is misconfigured.
+**Prefer X-API-Key header on LAN/WAN. Disable query-param auth in
+production** by not documenting /login to external users and by
+redacting ``api_key`` from access logs at the reverse proxy level.
+
 On auth failure:
   - HTTP → JSON response with 401/403
   - WebSocket → ``websocket.close`` with code 4401/4403
@@ -35,6 +44,43 @@ import os
 from urllib.parse import parse_qs
 
 logger = logging.getLogger(__name__)
+
+
+class _RedactAPIKeyFilter(logging.Filter):
+    """Logging filter that redacts ``api_key=<value>`` from all log records.
+
+    This prevents accidental leakage of the API key via log messages that
+    contain the full URL or query string.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if hasattr(record, "msg") and isinstance(record.msg, str):
+            record.msg = _redact_api_key(record.msg)
+        if hasattr(record, "args") and record.args:
+            redacted = tuple(
+                _redact_api_key(str(a)) if isinstance(a, str) else a
+                for a in record.args
+            )
+            record.args = redacted
+        return True
+
+
+logger.addFilter(_RedactAPIKeyFilter())
+
+
+def _redact_api_key(value: str) -> str:
+    """Redact the ``api_key`` query parameter from a URL or query string.
+
+    Returns the input with any ``api_key=<secret>`` replaced by
+    ``api_key=REDACTED``.  Safe to call on strings that do not contain a
+    query parameter — they pass through unchanged.
+    """
+    import re
+    return re.sub(
+        r"(?i)(api_key=)[^&\s]+",
+        r"\1REDACTED",
+        value,
+    )
 
 # Paths that never require auth
 _PUBLIC_PREFIXES = ("/docs", "/redoc", "/openapi.json", "/favicon")

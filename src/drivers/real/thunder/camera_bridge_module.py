@@ -262,12 +262,12 @@ class CameraBridgeModule(Module, layer=1):
         try:
             if executor is not None:
                 executor.remove_node(node)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("CameraBridge remove_node: %s", e)
         try:
             node.destroy_node()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("CameraBridge destroy_node: %s", e)
         if node is self._node:
             self._node = None
         if executor is self._executor:
@@ -299,8 +299,8 @@ class CameraBridgeModule(Module, layer=1):
         if self._dds_reader:
             try:
                 self._dds_reader.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("CameraBridge DDS reader stop: %s", e)
             self._dds_reader = None
         self._cleanup_ros2_node()
         super().stop()

@@ -50,7 +50,7 @@ class StubConnection(Module, layer=1):
         self._vy = 0.0
         self._wz = 0.0
 
-    def setup(self):
+    def setup(self) -> None:
         self.cmd_vel.subscribe(self._on_cmd)
         self.stop_signal.subscribe(self._on_stop)
 
@@ -101,7 +101,7 @@ def stub_blueprint(**config) -> Blueprint:
 
     bp = Blueprint()
     bp.add(StubConnection)
-    bp.add(NavigationModule, planner=config.get("planner", "astar"))
+    bp.add(NavigationModule, planner=config.get("planner_backend", "astar"))
     bp.add(SafetyRingModule)
     bp.wire("SafetyRingModule", "stop_cmd", "StubConnection", "stop_signal")
     bp.auto_wire()

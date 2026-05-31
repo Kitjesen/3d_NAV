@@ -239,7 +239,7 @@ class MujocoDriverModule(Module, layer=1):
         self._stopped = False
         self._camera_warned = False
 
-    def setup(self):
+    def setup(self) -> None:
         self.cmd_vel.subscribe(self._on_cmd_vel)
         self.stop_signal.subscribe(self._on_stop)
 

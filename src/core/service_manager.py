@@ -63,9 +63,23 @@ class ServiceManager:
             result = subprocess.run(
                 ["systemctl", "is-active", "--quiet", unit],
                 timeout=3,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
             )
-            return result.returncode == 0
-        except Exception:
+            if result.returncode == 0:
+                return True
+            # returncode != 0 is expected for inactive/missing services
+            return False
+        except subprocess.TimeoutExpired:
+            logger.warning("ServiceManager: systemctl is-active %s timed out", unit)
+            return False
+        except FileNotFoundError:
+            logger.warning("ServiceManager: systemctl not found (not a systemd system?)")
+            return False
+        except Exception as e:
+            logger.error("ServiceManager: _is_active_unit(%s) unexpected error: %s", unit, e)
             return False
 
     def _unit_exists(self, unit: str) -> bool:
@@ -78,7 +92,14 @@ class ServiceManager:
                 encoding="utf-8",
                 errors="replace",
             )
-        except Exception:
+        except subprocess.TimeoutExpired:
+            logger.warning("ServiceManager: systemctl show %s timed out", unit)
+            return False
+        except FileNotFoundError:
+            logger.warning("ServiceManager: systemctl not found (not a systemd system?)")
+            return False
+        except Exception as e:
+            logger.error("ServiceManager: _unit_exists(%s) unexpected error: %s", unit, e)
             return False
         if result.returncode != 0:
             return False

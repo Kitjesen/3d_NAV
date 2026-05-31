@@ -203,6 +203,9 @@ class WaypointTracker:
         waypoint: np.ndarray,
         threshold: float,
     ) -> bool:
+        if not np.isfinite(robot_pos).all() or not np.isfinite(waypoint).all():
+            logger.warning("Non-finite position in waypoint check, skipping")
+            return False
         if np.linalg.norm(robot_pos[:2] - waypoint[:2]) >= threshold:
             return False
         if self._z_threshold is None:
@@ -216,6 +219,9 @@ class WaypointTracker:
         return abs(robot_z - waypoint_z) <= self._z_threshold
 
     def _progress_distance(self, robot_pos: np.ndarray, last_pos: np.ndarray) -> float:
+        if not np.isfinite(robot_pos).all() or not np.isfinite(last_pos).all():
+            logger.warning("Non-finite robot position in progress check, returning inf")
+            return float('inf')
         xy_dist = float(np.linalg.norm(robot_pos[:2] - last_pos[:2]))
         if self._z_threshold is None or len(robot_pos) < 3 or len(last_pos) < 3:
             return xy_dist

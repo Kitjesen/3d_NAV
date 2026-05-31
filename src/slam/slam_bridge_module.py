@@ -724,13 +724,20 @@ class SlamBridgeModule(Module, layer=1):
             else "super_lio" if backend == "super_lio" else "slam"
         )
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["sudo", "systemctl", "restart", service],
                 capture_output=True, text=True, encoding="utf-8",
                 errors="replace", timeout=15,
                 check=False,
             )
-            logger.warning("Drift guard: %s service restarted", service)
+            if result.returncode != 0:
+                logger.warning(
+                    "Drift guard: %s restart returned %d: %s",
+                    service, result.returncode,
+                    (result.stderr or result.stdout or "").strip()[:200],
+                )
+            else:
+                logger.warning("Drift guard: %s service restarted", service)
             return True
         except Exception as e:
             logger.error("Drift guard: %s restart failed: %s", service, e)
@@ -1121,13 +1128,20 @@ class SlamBridgeModule(Module, layer=1):
                 "systemctl restart slam to clear IEKF state",
                 pcd_path)
             try:
-                subprocess.run(
+                slam_result = subprocess.run(
                     ["sudo", "systemctl", "restart", "slam"],
                     capture_output=True, text=True, encoding="utf-8",
                     errors="replace", timeout=15,
                     check=False,
                 )
-                logger.warning("Drift guard: slam service restarted")
+                if slam_result.returncode != 0:
+                    logger.warning(
+                        "Drift guard: slam restart returned %d: %s",
+                        slam_result.returncode,
+                        (slam_result.stderr or slam_result.stdout or "").strip()[:200],
+                    )
+                else:
+                    logger.warning("Drift guard: slam service restarted")
                 self._drift_bad_count = 0
                 self._drift_last_good_pos = None  # reset so first new frame becomes anchor
             except Exception as e:
@@ -1146,7 +1160,7 @@ class SlamBridgeModule(Module, layer=1):
                 "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
                 "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
             )
-            subprocess.run(
+            reloc_result = subprocess.run(
                 ["bash", "-c",
                  ros_env +
                  f"ros2 service call {TOPICS.relocalize_service} interface/srv/Relocalize "
@@ -1154,7 +1168,14 @@ class SlamBridgeModule(Module, layer=1):
                  f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\""],
                 capture_output=True, text=True, encoding="utf-8",
                 errors="replace", timeout=30)
-            logger.info("Drift guard: relocalize call completed")
+            if reloc_result.returncode != 0:
+                logger.warning(
+                    "Drift guard: relocalize returned %d: %s",
+                    reloc_result.returncode,
+                    (reloc_result.stderr or reloc_result.stdout or "").strip()[:200],
+                )
+            else:
+                logger.info("Drift guard: relocalize call completed")
             self._drift_bad_count = 0
             self._relocalization_state = "completed"
         except Exception as e:

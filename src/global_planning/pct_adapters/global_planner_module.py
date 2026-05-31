@@ -436,8 +436,8 @@ class _PCTBackend:
             )
             if np.isfinite(surface_h):
                 candidates.append((to_slice(surface_h), surface_h))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("GlobalPlanner get_surface_height failed: %s", e)
         candidates.extend((slice_idx, None) for slice_idx in range(trav.shape[0]))
 
         seen: set[int] = set()
@@ -923,6 +923,6 @@ class _AStarBackend:
                 height = float(elev[layer, row, col])
                 if np.isfinite(height):
                     return height
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("GlobalPlanner _cell_height access failed: %s", e)
         return float(getattr(self, "_slice_h0", 0.0) + layer * getattr(self, "_slice_dh", 0.5))

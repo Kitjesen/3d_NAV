@@ -136,7 +136,7 @@ class NovaDogConnection(Module, layer=1):
 
     # -- Lifecycle --
 
-    def setup(self):
+    def setup(self) -> None:
         self.cmd_vel.subscribe(self._on_cmd_vel)
         self.stop_signal.subscribe(self._on_stop)
         self.slam_odom.subscribe(self._on_slam_odom)

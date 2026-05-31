@@ -73,7 +73,7 @@ class TerrainModule(Module, layer=2):
         self._odom_z = 0.0
         self._odom_yaw = 0.0
 
-    def setup(self):
+    def setup(self) -> None:
         self.odometry.subscribe(self._on_odom)
         self.map_cloud.subscribe(self._on_cloud)
         self.map_cloud.set_policy("latest")
@@ -159,8 +159,8 @@ class TerrainModule(Module, layer=2):
         for _name, node in reversed(list(self._nodes.items())):
             try:
                 node.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("TerrainModule stop %s: %s", _name, e)
         self._nodes.clear()
         if self._core:
             self._core.clear()

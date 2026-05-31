@@ -211,7 +211,8 @@ class NavigationModule(Module, layer=5):
             stuck_dist=stuck_dist_thre,
         )
 
-        # Mission FSM state
+        # Mission FSM state (protected by _nav_lock for cross-thread access)
+        self._nav_lock = threading.Lock()
         self._state = MissionState.IDLE
         self._robot_pos = np.zeros(3)
         self._robot_yaw = 0.0
@@ -348,13 +349,25 @@ class NavigationModule(Module, layer=5):
         return float(np.linalg.norm(av[:2] - bv[:2]))
 
     def _set_state(self, state: str) -> None:
-        allowed = MissionState.TRANSITIONS.get(self._state, frozenset())
-        if state != self._state and state not in allowed:
+        # Snapshot shared state under lock for cross-thread consistency
+        with self._nav_lock:
+            _current_state = self._state
+            _replan_count = self._replan_count
+            _goal = self._goal
+            _failure_reason = self._failure_reason
+
+        allowed = MissionState.TRANSITIONS.get(_current_state, frozenset())
+        if state != _current_state and state not in allowed:
             logger.warning(
                 "NavigationModule: illegal state transition %s → %s (allowed: %s)",
-                self._state, state, sorted(allowed),
+                _current_state, state, sorted(allowed),
             )
-        self._state = state
+
+        # Write new state under lock
+        with self._nav_lock:
+            self._state = state
+
+        # Publish outside lock (I/O — should not block other state readers)
         self.planner_status.publish(state)
         current_waypoint = self._tracker.current_waypoint
         wp_index = self._safe_nonnegative_int(self._tracker.wp_index)
@@ -362,7 +375,7 @@ class NavigationModule(Module, layer=5):
         remaining_waypoints = max(0, wp_total - wp_index)
         self.mission_status.publish({
             "state": state,
-            "replan_count": self._replan_count,
+            "replan_count": _replan_count,
             "wp_index": wp_index,
             "wp_total": wp_total,
             "remaining_waypoints": remaining_waypoints,
@@ -371,9 +384,9 @@ class NavigationModule(Module, layer=5):
             "odom_frame_id": self._odom_frame_id,
             "costmap_frame_id": self._costmap_frame_id,
             "goal_frame_id": self._goal_frame_id,
-            "goal": self._point_summary(self._goal),
+            "goal": self._point_summary(_goal),
             "current_waypoint": self._point_summary(current_waypoint),
-            "distance_to_goal_m": self._distance_xy(self._robot_pos, self._goal),
+            "distance_to_goal_m": self._distance_xy(self._robot_pos, _goal),
             "active_waypoint_distance_m": self._distance_xy(
                 self._robot_pos,
                 current_waypoint,
@@ -403,13 +416,63 @@ class NavigationModule(Module, layer=5):
             "using_external_strategy_path": self._using_external_strategy_path,
             "accept_partial_goal_progress": self._accept_partial_goal_progress,
             "degeneracy": self._degen_level,
-            "failure_reason": self._failure_reason,
+            "failure_reason": _failure_reason,
             "localization_paused": self._paused_for_localization,
             "localization_recovery_motion_hold": (
                 self._localization_recovery_motion_hold
             ),
             "ts": time.time(),
         })
+
+    def _get_state(self) -> str:
+        """Thread-safe read of current mission state.
+
+        Acquires the nav lock to ensure a consistent snapshot of self._state.
+        Use this everywhere outside _set_state() to avoid cross-thread races
+        with the recovery motion thread and plan preview executor.
+        """
+        with self._nav_lock:
+            return self._state
+
+    def _set_state_locked(self, new_state: str) -> None:
+        """Thread-safe write of mission state without publish side-effects.
+
+        Only sets the internal _state field under lock. For full FSM transitions
+        (including legality checks and port publishing), use _set_state() instead.
+        """
+        with self._nav_lock:
+            self._state = new_state
+
+    def _get_goal(self) -> np.ndarray | None:
+        """Thread-safe read of current navigation goal."""
+        with self._nav_lock:
+            _g = self._goal
+            return _g.copy() if _g is not None else None
+
+    def _set_goal(self, goal: np.ndarray | None) -> None:
+        """Thread-safe write of navigation goal."""
+        with self._nav_lock:
+            self._goal = goal
+
+    def _get_replan_count(self) -> int:
+        """Thread-safe read of replan count."""
+        with self._nav_lock:
+            return self._replan_count
+
+    def _set_replan_count(self, value: int) -> None:
+        """Thread-safe write of replan count."""
+        with self._nav_lock:
+            self._replan_count = value
+
+    def _get_failure_reason(self) -> str:
+        """Thread-safe read of failure reason."""
+        with self._nav_lock:
+            return self._failure_reason
+
+    def _set_failure_reason(self, reason: str) -> None:
+        """Thread-safe write of failure reason."""
+        with self._nav_lock:
+            self._failure_reason = reason
 
     # ── Input handlers ────────────────────────────────────────────────────
 
@@ -455,14 +518,14 @@ class NavigationModule(Module, layer=5):
         self._clear_partial_goal_progress()
         self._clear_deferred_empty_path()
         self._publish_motion_stop()
-        if self._state not in (
+        if self._get_state() not in (
             MissionState.IDLE,
             MissionState.SUCCESS,
             MissionState.CANCELLED,
         ):
             self._set_state(MissionState.FAILED)
         else:
-            self._set_state(self._state)
+            self._set_state(self._get_state())
 
     def _reject_invalid_goal(
         self,
@@ -487,14 +550,14 @@ class NavigationModule(Module, layer=5):
         self._clear_partial_goal_progress()
         self._clear_deferred_empty_path()
         self._publish_motion_stop()
-        if self._state not in (
+        if self._get_state() not in (
             MissionState.IDLE,
             MissionState.SUCCESS,
             MissionState.CANCELLED,
         ):
             self._set_state(MissionState.FAILED)
         else:
-            self._set_state(self._state)
+            self._set_state(self._get_state())
 
     def _on_goal(self, goal: PoseStamped) -> None:
         frame_id = self._frame_contract.goal_frame(goal, self._planning_frame_id)
@@ -530,7 +593,7 @@ class NavigationModule(Module, layer=5):
         self._using_external_strategy_path = False
         self._goal = new_goal
         self._goal_frame_id = frame_id
-        self._replan_count = 0
+        self._set_replan_count(0)
         self._plan()
 
     def _should_ignore_goal_update(self, new_goal: np.ndarray) -> bool:
@@ -538,7 +601,7 @@ class NavigationModule(Module, layer=5):
             return True
         if self._goal is None:
             return False
-        if self._state not in (MissionState.PLANNING, MissionState.EXECUTING, MissionState.PATROLLING):
+        if self._get_state() not in (MissionState.PLANNING, MissionState.EXECUTING, MissionState.PATROLLING):
             return False
         dist = self._distance_xyz_or_xy(new_goal, self._goal)
         if dist > self._goal_update_epsilon:
@@ -642,9 +705,9 @@ class NavigationModule(Module, layer=5):
         """Pause navigation when teleop engages, resume when released."""
         if active and not self._paused_for_teleop:
             # Save current mission state so we can resume
-            if self._state in (MissionState.EXECUTING, MissionState.PATROLLING):
+            if self._get_state() in (MissionState.EXECUTING, MissionState.PATROLLING):
                 self._pre_teleop_goal = self._goal.copy() if self._goal is not None else None
-                self._pre_teleop_state = self._state
+                self._pre_teleop_state = self._get_state()
                 self._tracker.clear()
                 self._publish_motion_stop()
                 self._set_state(MissionState.IDLE)
@@ -654,7 +717,7 @@ class NavigationModule(Module, layer=5):
         elif not active and self._paused_for_teleop:
             self._paused_for_teleop = False
             if (self._pre_teleop_goal is not None
-                    and self._state == MissionState.IDLE):
+                    and self._get_state() == MissionState.IDLE):
                 if self._auto_resume_after_teleop:
                     logger.info("NavigationModule: teleop released, resuming navigation")
                     self._goal = self._pre_teleop_goal
@@ -681,7 +744,7 @@ class NavigationModule(Module, layer=5):
         self._frame_contract.report_frame_mismatch("costmap", self._costmap_frame_id)
         if self._frame_contract.is_frame_mismatch(self._costmap_frame_id, source="costmap"):
             if self._frame_contract.has_motion_artifacts(
-                self._state, self._tracker.path_length, self._goal, self._patrol_goals,
+                self._get_state(), self._tracker.path_length, self._goal, self._patrol_goals,
             ):
                 self._block_for_frame_mismatch("costmap", self._costmap_frame_id)
             return
@@ -694,7 +757,7 @@ class NavigationModule(Module, layer=5):
                 resolution=data.get("resolution", 0.2),
                 origin=data.get("origin"),
             )
-        if (self._state in (MissionState.EXECUTING, MissionState.PATROLLING,
+        if (self._get_state() in (MissionState.EXECUTING, MissionState.PATROLLING,
                             MissionState.FAILED)
                 and self._goal is not None
                 and not self._using_external_strategy_path
@@ -703,7 +766,7 @@ class NavigationModule(Module, layer=5):
             self._last_costmap_replan_time = time.time()
             self._plan()
         elif (
-            self._state == MissionState.PLANNING
+            self._get_state() == MissionState.PLANNING
             and self._deferred_empty_path_first_ts > 0.0
             and self._goal is not None
             and not self._using_external_strategy_path
@@ -733,14 +796,14 @@ class NavigationModule(Module, layer=5):
         self._clear_deferred_empty_path()
         self._failure_reason = f"cancelled: {msg}" if msg else "cancelled"
         self._publish_motion_stop()
-        if self._state in (MissionState.IDLE, MissionState.CANCELLED) \
+        if self._get_state() in (MissionState.IDLE, MissionState.CANCELLED) \
                 and not had_localization_pause:
             return
         self._clear_localization_pause_for_explicit_action(
             reason="cancel",
             clear_goal=True,
         )
-        if self._state in (MissionState.IDLE, MissionState.CANCELLED):
+        if self._get_state() in (MissionState.IDLE, MissionState.CANCELLED):
             logger.info("Mission cancelled while idle/paused: %s", msg)
             return
         self._set_state(MissionState.CANCELLED)
@@ -760,7 +823,7 @@ class NavigationModule(Module, layer=5):
         dt_m = event.get("dt_m", 0.0)
         dyaw = event.get("dyaw_deg", 0.0)
         # Only act if we have an active mission — idle robot doesn't care.
-        if self._state in (MissionState.EXECUTING, MissionState.PATROLLING) \
+        if self._get_state() in (MissionState.EXECUTING, MissionState.PATROLLING) \
                 and self._goal is not None:
             logger.warning(
                 "TF jump (Δt=%.2fm Δyaw=%.1f°) → forced replan",
@@ -778,7 +841,7 @@ class NavigationModule(Module, layer=5):
 
         if motion_hold_required:
             self._localization_recovery_motion_hold = True
-            if self._state in (MissionState.EXECUTING, MissionState.PATROLLING):
+            if self._get_state() in (MissionState.EXECUTING, MissionState.PATROLLING):
                 self._pause_for_localization(
                     reason="localization recovery requires explicit new goal"
                 )
@@ -792,7 +855,7 @@ class NavigationModule(Module, layer=5):
                 )
 
         if self._loc_state == "LOST" and prev != "LOST":
-            if self._state in (MissionState.EXECUTING, MissionState.PATROLLING):
+            if self._get_state() in (MissionState.EXECUTING, MissionState.PATROLLING):
                 self._pause_for_localization(reason="localization lost")
                 logger.warning("Navigation PAUSED: localization lost")
 
@@ -801,7 +864,7 @@ class NavigationModule(Module, layer=5):
                 self._failure_reason = (
                     "localization recovered; explicit goal required"
                 )
-                if self._state != MissionState.IDLE:
+                if self._get_state() != MissionState.IDLE:
                     self._set_state(MissionState.IDLE)
                 logger.warning(
                     "Navigation HOLD: localization recovered after automatic "
@@ -819,11 +882,11 @@ class NavigationModule(Module, layer=5):
 
     def _pause_for_localization(self, *, reason: str) -> None:
         if not self._paused_for_localization:
-            self._pre_pause_state = self._state
+            self._pre_pause_state = self._get_state()
         self._paused_for_localization = True
         self._tracker.pause()
         self._failure_reason = reason
-        if self._state != MissionState.IDLE:
+        if self._get_state() != MissionState.IDLE:
             self._set_state(MissionState.IDLE)
 
     def _clear_localization_pause_for_explicit_action(
@@ -887,7 +950,7 @@ class NavigationModule(Module, layer=5):
             reason = "normal"
         self._speed_policy_reason = reason
 
-        if self._speed_scale != prev_scale and self._state == MissionState.EXECUTING:
+        if self._speed_scale != prev_scale and self._get_state() == MissionState.EXECUTING:
             if self._speed_scale < 1.0:
                 logger.info("Navigation speed scaled to %.0f%% (%s)",
                             self._speed_scale * 100, reason)
@@ -945,7 +1008,7 @@ class NavigationModule(Module, layer=5):
                 return
             self._goal = self._patrol_goals[0]
             self._goal_frame_id = self._planning_frame_id
-            self._replan_count = 0
+            self._set_replan_count(0)
             self._set_state(MissionState.PATROLLING)
             logger.info(
                 "Patrol started: %d goals, loop=%s",
@@ -985,7 +1048,7 @@ class NavigationModule(Module, layer=5):
         self._direct_goal_fallback_status = None
         self._mission_start_time = time.time()
         self._last_costmap_replan_time = time.time()
-        self._replan_count = 0
+        self._set_replan_count(0)
 
         self._tracker.reset(path, self._robot_pos, self._robot_yaw)
         self._tracker.update(self._robot_pos, self._robot_yaw)
@@ -1043,7 +1106,7 @@ class NavigationModule(Module, layer=5):
         return anchored
 
     def _same_patrol_goals(self, goals: list[np.ndarray], *, loop: bool) -> bool:
-        if self._state not in (
+        if self._get_state() not in (
             MissionState.PLANNING,
             MissionState.EXECUTING,
             MissionState.PATROLLING,
@@ -1065,7 +1128,7 @@ class NavigationModule(Module, layer=5):
         self._frame_contract.report_frame_mismatch("odometry", self._odom_frame_id)
         if self._frame_contract.is_frame_mismatch(self._odom_frame_id, source="odometry"):
             if self._frame_contract.has_motion_artifacts(
-                self._state, self._tracker.path_length, self._goal, self._patrol_goals,
+                self._get_state(), self._tracker.path_length, self._goal, self._patrol_goals,
             ):
                 self._block_for_frame_mismatch("odometry", self._odom_frame_id)
             return
@@ -1084,7 +1147,7 @@ class NavigationModule(Module, layer=5):
         if self._paused_for_localization:
             return
 
-        if self._state not in (MissionState.EXECUTING, MissionState.PATROLLING):
+        if self._get_state() not in (MissionState.EXECUTING, MissionState.PATROLLING):
             return
 
         status = self._tracker.update(self._robot_pos, self._robot_yaw)
@@ -1123,7 +1186,7 @@ class NavigationModule(Module, layer=5):
                     "reason": partial_status.get("reason"),
                     "ts": time.time(),
                 })
-            if self._state == MissionState.PATROLLING and self._patrol_goals:
+            if self._get_state() == MissionState.PATROLLING and self._patrol_goals:
                 if self._advance_patrol():
                     return
             self._publish_motion_stop()
@@ -1144,8 +1207,8 @@ class NavigationModule(Module, layer=5):
             })
 
         elif status.event == EV_STUCK:
-            if self._replan_count < self._max_replan:
-                self._replan_count += 1
+            if self._get_replan_count() < self._max_replan:
+                self._set_replan_count(self._get_replan_count() + 1)
                 if self._using_external_strategy_path:
                     self._execute_recovery_motion(post_action="external_strategy")
                 else:
@@ -1290,7 +1353,7 @@ class NavigationModule(Module, layer=5):
                 return True
             steps = max(1, int(math.ceil(duration * step_hz)))
             for _ in range(steps):
-                if stop_event.is_set() or self._state != MissionState.EXECUTING:
+                if stop_event.is_set() or self._get_state() != MissionState.EXECUTING:
                     return False
                 self.recovery_cmd_vel.publish(Twist(
                     linear=Vector3(linear_x, 0.0, 0.0),
@@ -1315,7 +1378,8 @@ class NavigationModule(Module, layer=5):
 
         # Rotate phase — alternate direction per replan to avoid dead-lock
         if strat["rotate_duration"] > 0.0 and strat["rotate_speed"] != 0.0:
-            direction = 1.0 if self._replan_count % 2 == 1 else -1.0
+            # Thread-safe read: recovery thread vs main thread replan count updates
+            direction = 1.0 if self._get_replan_count() % 2 == 1 else -1.0
             if not _drive(0.0, strat["rotate_speed"] * direction, strat["rotate_duration"]):
                 _finish(False)
                 return
@@ -1331,7 +1395,7 @@ class NavigationModule(Module, layer=5):
     def _finish_recovery_motion(self, post_action: str, reason: str) -> None:
         if post_action == "none":
             return
-        if self._state != MissionState.EXECUTING:
+        if self._get_state() != MissionState.EXECUTING:
             return
         if post_action == "external_strategy":
             self._tracker.pause()
@@ -1339,12 +1403,12 @@ class NavigationModule(Module, layer=5):
             logger.warning(
                 "Stuck detected, recovery motion; retaining external "
                 "strategy path (%d/%d)",
-                self._replan_count,
+                self._get_replan_count(),
                 self._max_replan,
             )
             self.adapter_status.publish({
                 "event": "external_strategy_path_stuck_recovery",
-                "recovery_count": self._replan_count,
+                "recovery_count": self._get_replan_count(),
                 "max_recovery_count": self._max_replan,
                 "remaining_waypoints": max(
                     0,
@@ -1357,7 +1421,7 @@ class NavigationModule(Module, layer=5):
         if post_action == "replan":
             logger.warning(
                 "Stuck detected, recovery motion + replan (%d/%d)",
-                self._replan_count, self._max_replan,
+                self._get_replan_count(), self._max_replan,
             )
             self._plan()
 
@@ -1694,7 +1758,10 @@ class NavigationModule(Module, layer=5):
             ) from exc
 
     def _plan(self) -> None:
-        if self._goal is None:
+        # Snapshot goal under lock for cross-thread consistency
+        # (_plan is called from both the dispatch thread and recovery thread).
+        _goal = self._get_goal()
+        if _goal is None:
             self._set_state(MissionState.FAILED)
             return
 
@@ -1708,8 +1775,8 @@ class NavigationModule(Module, layer=5):
         planned_state = (
             MissionState.PATROLLING
             if self._patrol_goals
-            and self._goal is not None
-            and self._state in (
+            and _goal is not None
+            and self._get_state() in (
                 MissionState.PATROLLING,
                 MissionState.PLANNING,
                 MissionState.FAILED,
@@ -1735,7 +1802,7 @@ class NavigationModule(Module, layer=5):
             try:
                 path, _ = self._planner_svc.plan(
                     self._robot_pos,
-                    self._goal,
+                    _goal,
                     safe_goal_tolerance=self._safe_goal_tolerance,
                 )
                 self._publish_plan_report()
@@ -1855,6 +1922,9 @@ class NavigationModule(Module, layer=5):
         self._set_state(MissionState.PLANNING)
 
     def _direct_goal_path(self, reason: str = "") -> list[np.ndarray]:
+        _goal = self._get_goal()
+        if _goal is None:
+            raise RuntimeError("direct_goal_fallback called with no goal set")
         logger.warning(
             "NavigationModule: using direct-goal fallback waypoint (reason=%s)",
             reason or "planner unavailable",
@@ -1862,14 +1932,14 @@ class NavigationModule(Module, layer=5):
         self._direct_goal_fallback_status = {
             "used": True,
             "reason": reason or "planner unavailable",
-            "goal": [float(self._goal[0]), float(self._goal[1]), float(self._goal[2])],
+            "goal": [float(_goal[0]), float(_goal[1]), float(_goal[2])],
             "ts": time.time(),
         }
         self.adapter_status.publish({
             "event": "direct_goal_fallback",
             **self._direct_goal_fallback_status,
         })
-        return [self._goal.copy()]
+        return [_goal.copy()]
 
     def _should_continue_after_partial_path(self) -> bool:
         status = self._partial_path_terminal_status()
@@ -1995,7 +2065,7 @@ class NavigationModule(Module, layer=5):
             else:
                 return False
         self._goal = self._patrol_goals[self._patrol_index]
-        self._replan_count = 0
+        self._set_replan_count(0)
         logger.info(
             "Patrol advancing to goal %d/%d",
             self._patrol_index + 1, len(self._patrol_goals),
@@ -2110,11 +2180,12 @@ class NavigationModule(Module, layer=5):
         pos = {"x": round(float(self._robot_pos[0]), 3),
                "y": round(float(self._robot_pos[1]), 3),
                "yaw": round(float(self._robot_yaw), 3)}
-        goal = ({"x": round(float(self._goal[0]), 3),
-                 "y": round(float(self._goal[1]), 3)}
-                if self._goal is not None else None)
+        _status_goal = self._get_goal()
+        goal = ({"x": round(float(_status_goal[0]), 3),
+                 "y": round(float(_status_goal[1]), 3)}
+                if _status_goal is not None else None)
         return json.dumps({
-            "state": self._state,
+            "state": self._get_state(),
             "frame_id": self._planning_frame_id,
             "planning_frame_id": self._planning_frame_id,
             "odom_frame_id": self._odom_frame_id,
@@ -2123,8 +2194,8 @@ class NavigationModule(Module, layer=5):
             "goal": goal,
             "path_length": self._tracker.path_length,
             "waypoint_index": self._tracker.wp_index,
-            "replan_count": self._replan_count,
-            "failure_reason": self._failure_reason,
+            "replan_count": self._get_replan_count(),
+            "failure_reason": self._get_failure_reason(),
             "plan_safety_policy": getattr(
                 self._planner_svc,
                 "_plan_safety_policy",
@@ -2202,11 +2273,11 @@ class NavigationModule(Module, layer=5):
             ),
             "last_plan_report": self._current_plan_report(),
             "map_artifact_gate": getattr(self._planner_svc, "map_artifact_gate", {}),
-            "state": self._state,
+            "state": self._get_state(),
             "wp_index": self._tracker.wp_index,
             "wp_total": self._tracker.path_length,
-            "replan_count": self._replan_count,
-            "failure_reason": self._failure_reason,
+            "replan_count": self._get_replan_count(),
+            "failure_reason": self._get_failure_reason(),
             "replan_on_costmap_update": self._replan_on_costmap_update,
             "direct_goal_fallback": self._direct_goal_fallback_status,
             "patrol_index": self._patrol_index if self._patrol_goals else -1,

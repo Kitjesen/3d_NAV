@@ -57,7 +57,7 @@ class SLAMModule(Module, layer=1):
         self._lio_node = None
         self._pgo_node = None
 
-    def setup(self):
+    def setup(self) -> None:
         if self._backend == "fastlio2":
             self._setup_fastlio2()
         elif self._backend == "pointlio":

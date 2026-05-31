@@ -142,7 +142,7 @@ class LLMModule(Module, layer=4):
                     f"'{self._backend_name}'. Set it or use backend='mock'.")
         return None
 
-    def setup(self):
+    def setup(self) -> None:
         """Create LLM client and start async event loop."""
         self._client = self._create_client()
         self.request.subscribe(self._on_request)

@@ -126,7 +126,7 @@ class DepthVisualOdomModule(Module, layer=1):
         # Thread safety
         self._lock = threading.Lock()
 
-    def setup(self):
+    def setup(self) -> None:
         self.color_image.subscribe(self._on_color)
         self.depth_image.subscribe(self._on_depth)
         self.camera_info.subscribe(self._on_camera_info)

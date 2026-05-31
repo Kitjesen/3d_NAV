@@ -1282,6 +1282,9 @@ class WavefrontFrontierExplorer(Module, layer=2):
         res = float(meta["resolution"])
         robot = np.array([float(robot_x), float(robot_y)], dtype=float)
         target = np.array([float(target_x), float(target_y)], dtype=float)
+        if not np.isfinite(robot).all() or not np.isfinite(target).all():
+            logger.warning("Non-finite robot/target in goal selection, returning None")
+            return None
         target_vec = target - robot
         target_dist = float(np.linalg.norm(target_vec))
         if target_dist <= 1e-6:
@@ -1301,13 +1304,20 @@ class WavefrontFrontierExplorer(Module, layer=2):
         for row, col in component:
             wx, wy = self._costmap_cell_to_world(row, col, origin_x, origin_y, res)
             pos = np.array([wx, wy], dtype=float)
+            if not np.isfinite(pos).all():
+                continue
             delta = pos - robot
+            if not np.isfinite(delta).all():
+                continue
             dist_from_robot = float(np.linalg.norm(delta))
             if dist_from_robot < max(min_goal_dist, res):
                 continue
             if dist_from_robot > max_goal_dist + res:
                 continue
-            dist_to_target = float(np.linalg.norm(pos - target))
+            target_delta = pos - target
+            if not np.isfinite(target_delta).all():
+                continue
+            dist_to_target = float(np.linalg.norm(target_delta))
             if dist_to_target < min_target_standoff:
                 continue
             progress = float(np.dot(delta, direction))
@@ -1316,7 +1326,10 @@ class WavefrontFrontierExplorer(Module, layer=2):
                 fallback = (fallback_score, row, col)
             if progress <= 0.0:
                 continue
-            lateral = float(np.linalg.norm(delta - progress * direction))
+            lateral_vec = delta - progress * direction
+            if not np.isfinite(lateral_vec).all():
+                continue
+            lateral = float(np.linalg.norm(lateral_vec))
             score = dist_to_target + 0.25 * lateral - 0.1 * progress
             if best is None or score < best[0]:
                 best = (score, row, col)

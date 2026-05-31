@@ -431,7 +431,7 @@ class LocalPlannerModule(Module, layer=2):
                 "add local_planner_grid to robot_config.yaml to override"
             )
 
-    def setup(self):
+    def setup(self) -> None:
         self.odometry.subscribe(self._on_odom)
         self.terrain_map.subscribe(self._on_terrain)
         self.terrain_map.set_policy("latest")
@@ -564,8 +564,8 @@ class LocalPlannerModule(Module, layer=2):
         if self._node:
             try:
                 self._node.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("LocalPlannerModule stop: %s", e)
             self._node = None
         self._core = None
         self.alive.publish(False)

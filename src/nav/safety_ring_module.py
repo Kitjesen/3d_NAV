@@ -170,7 +170,7 @@ class SafetyRingModule(Module, layer=0):
             or self._cmd_speed > self._stall_thr
         )
 
-    def setup(self):
+    def setup(self) -> None:
         self.odometry.subscribe(self._on_odom)
         self.path.subscribe(self._on_path)
         self.cmd_vel.subscribe(self._on_cmdvel)

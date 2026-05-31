@@ -76,7 +76,7 @@ class RerunModule(Module, layer=6):
         self._last_odom_log = 0.0
         self._odom_min_interval = 0.05  # 20Hz max
 
-    def setup(self):
+    def setup(self) -> None:
         if not _RERUN_AVAILABLE:
             logger.error("Rerun not installed. Run: pip install rerun-sdk")
             return

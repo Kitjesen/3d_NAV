@@ -758,6 +758,9 @@ class GlobalPlannerService:
         seed_goals: list[np.ndarray] = [np.asarray(goal[:3], dtype=float)]
         for alt in alternate_goals or []:
             alt_arr = np.asarray(alt[:3], dtype=float)
+            if not np.isfinite(alt_arr).all():
+                logger.warning("Non-finite alternate goal, skipping")
+                continue
             if not any(np.linalg.norm(alt_arr[:2] - seed[:2]) < resolution for seed in seed_goals):
                 seed_goals.append(alt_arr)
 

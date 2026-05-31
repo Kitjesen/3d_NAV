@@ -218,7 +218,7 @@ class DetectorModule(Module, layer=3):
         self._frame_count = 0
         self._total_inference_ms = 0.0
 
-    def setup(self):
+    def setup(self) -> None:
         """Load the selected detector backend."""
         self._backend = self._create_backend()
         try:

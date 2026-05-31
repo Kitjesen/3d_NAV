@@ -233,16 +233,16 @@ class Lidar:
         if self._dds:
             try:
                 self._dds.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Lidar DDS stop: %s", e)
             self._dds = None
 
         # Stop native driver
         if self._native:
             try:
                 self._native.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Lidar native stop: %s", e)
             self._native = None
 
         self._set_state(LidarState.DISCONNECTED)

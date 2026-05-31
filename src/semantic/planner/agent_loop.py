@@ -337,12 +337,27 @@ class AgentLoop:
         ctx = self._context_fn()
         # Ensure new keys have defaults for backward-compat with older context_fn
         ctx.setdefault("camera_available", ctx.get("camera_image") is not None)
-        system_msg = AGENT_SYSTEM_PROMPT.format(**{
-            k: v for k, v in ctx.items() if k in (
-                "robot_x", "robot_y", "visible_objects",
-                "nav_status", "memory_context", "camera_available",
-            )
-        })
+        c = ctx
+        system_msg = (
+            f"You are a navigation robot assistant. You execute tasks by calling tools in sequence.\n\n"
+            f"Available information:\n"
+            f"- Current position: ({c.get('robot_x', 0.0):.1f}, {c.get('robot_y', 0.0):.1f})\n"
+            f"- Visible objects: {c.get('visible_objects', 'N/A')}\n"
+            f"- Navigation status: {c.get('nav_status', 'N/A')}\n"
+            f"- Memory context: {c.get('memory_context', 'N/A')}\n"
+            f"- Camera available: {c.get('camera_available', False)}\n\n"
+            f"Rules:\n"
+            f"- Break complex tasks into steps and execute them one at a time.\n"
+            f"- Use detect_object to check if something is visible before navigating to it.\n"
+            f"- Use query_memory for fuzzy location requests (“去上次放背包的地方”).\n"
+            f"- Use navigate_to_object for objects currently in view.\n"
+            f"- Use navigate_to for known coordinates.\n"
+            f"- Use follow_person(description) to continuously follow a specific person (e.g. “follow the person in red”); call stop_servo to cancel following.\n"
+            f"- Use describe_scene() when you need to understand what the robot currently sees.\n"
+            f"- Use assess_situation(goal) when you are unsure whether the current view is helpful.\n"
+            f"- Call done() when the task is complete.\n"
+            f"- If you cannot complete the task after several attempts, call done() with an explanation.\n"
+        )
         state.messages = [
             {"role": "system", "content": system_msg},
             {"role": "user", "content": instruction},

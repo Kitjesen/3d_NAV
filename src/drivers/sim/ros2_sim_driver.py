@@ -127,7 +127,7 @@ class ROS2SimDriverModule(Module, layer=1):
         self._cmd_vy = 0.0
         self._cmd_wz = 0.0
 
-    def setup(self):
+    def setup(self) -> None:
         self.cmd_vel.subscribe(self._on_cmd_vel)
         self.stop_signal.subscribe(self._on_stop)
 

@@ -2411,12 +2411,17 @@ class GatewayModule(Module, layer=6):
     def _build_app(self):
         try:
             from fastapi import FastAPI
+            import os
             from fastapi.middleware.cors import CORSMiddleware
             from fastapi.responses import JSONResponse
         except ImportError:
             logger.error("FastAPI not installed — run: pip install fastapi uvicorn")
             return None
 
+        cors_origins = os.environ.get(
+            "LINGTU_CORS_ORIGINS",
+            "http://localhost:5050,http://127.0.0.1:5050",
+        ).split(",")
         app = FastAPI(
             title="LingTu Gateway",
             version="2.0",
@@ -2425,7 +2430,7 @@ class GatewayModule(Module, layer=6):
         )
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=cors_origins,
             allow_methods=["*"],
             allow_headers=["*"],
         )

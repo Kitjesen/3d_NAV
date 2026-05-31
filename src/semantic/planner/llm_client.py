@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -156,7 +157,7 @@ class OpenAIClient(LLMClientBase):
                         "OpenAI API returned empty response, retrying (%d/%d)",
                         attempt + 1, self.config.max_retries,
                     )
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2 ** attempt + random.uniform(0, 0.5 * 2 ** attempt))
                     continue
                 return content
             except (KeyboardInterrupt, SystemExit):
@@ -178,14 +179,14 @@ class OpenAIClient(LLMClientBase):
                             "Rate limited (429), waiting %.1fs before retry %d/%d",
                             wait, attempt + 1, self.config.max_retries,
                         )
-                        await asyncio.sleep(wait)
+                        await asyncio.sleep(wait + random.uniform(0, 0.5 * wait))
                     elif status_code in (500, 502, 503) or (status_code is None and any(s in err_str for s in ("500", "502", "503"))):
                         wait = 2 ** attempt
                         logger.warning(
                             "Server error on attempt %d: %s, retrying in %ds",
                             attempt + 1, e, wait,
                         )
-                        await asyncio.sleep(wait)
+                        await asyncio.sleep(wait + random.uniform(0, 0.5 * wait))
                     elif "timeout" in err_lower or "timed out" in err_lower:
                         logger.warning(
                             "OpenAI timeout on attempt %d, retrying immediately",
@@ -197,7 +198,7 @@ class OpenAIClient(LLMClientBase):
                             "OpenAI API attempt %d failed (%s): %s, retrying in %ds",
                             attempt + 1, type(e).__name__, e, wait,
                         )
-                        await asyncio.sleep(wait)
+                        await asyncio.sleep(wait + random.uniform(0, 0.5 * wait))
                 else:
                     raise LLMError(f"OpenAI API failed after {attempt + 1} attempts: {e}") from e
 
@@ -278,7 +279,7 @@ class OpenAIClient(LLMClientBase):
                         "OpenAI Vision attempt %d failed (%s): %s",
                         attempt + 1, type(e).__name__, e,
                     )
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2 ** attempt + random.uniform(0, 0.5 * 2 ** attempt))
                 else:
                     raise LLMError(f"OpenAI Vision failed: {e}") from e
 
@@ -368,14 +369,14 @@ class ClaudeClient(LLMClientBase):
                             "Claude rate limited (429), waiting %.1fs before retry %d/%d",
                             wait, attempt + 1, self.config.max_retries,
                         )
-                        await asyncio.sleep(wait)
+                        await asyncio.sleep(wait + random.uniform(0, 0.5 * wait))
                     elif status_code in (500, 502, 503) or (status_code is None and any(s in err_str for s in ("500", "502", "503"))):
                         wait = 2 ** attempt
                         logger.warning(
                             "Claude server error on attempt %d: %s, retrying in %ds",
                             attempt + 1, e, wait,
                         )
-                        await asyncio.sleep(wait)
+                        await asyncio.sleep(wait + random.uniform(0, 0.5 * wait))
                     elif "timeout" in err_lower or "timed out" in err_lower:
                         logger.warning(
                             "Claude timeout on attempt %d, retrying immediately",
@@ -387,7 +388,7 @@ class ClaudeClient(LLMClientBase):
                             "Claude API attempt %d failed (%s): %s, retrying in %ds",
                             attempt + 1, type(e).__name__, e, wait,
                         )
-                        await asyncio.sleep(wait)
+                        await asyncio.sleep(wait + random.uniform(0, 0.5 * wait))
                 else:
                     raise LLMError(f"Claude API failed after {attempt + 1} attempts: {e}") from e
 
@@ -441,7 +442,7 @@ class QwenClient(LLMClientBase):
                         "Qwen timeout on attempt %d/%d, retrying...",
                         attempt + 1, self.config.max_retries,
                     )
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(1 + random.uniform(0, 0.5))
                     continue
                 raise LLMError(f"Qwen API call timed out after {self.config.timeout_sec}s") from None
             except (KeyboardInterrupt, SystemExit):
@@ -459,14 +460,14 @@ class QwenClient(LLMClientBase):
                             "Qwen rate limited (429), waiting %.1fs before retry %d/%d",
                             wait, attempt + 1, self.config.max_retries,
                         )
-                        await asyncio.sleep(wait)
+                        await asyncio.sleep(wait + random.uniform(0, 0.5 * wait))
                     elif status_code in (500, 502, 503) or (status_code is None and any(s in err_str for s in ("500", "502", "503"))):
                         wait = 2 ** attempt
                         logger.warning(
                             "Qwen server error on attempt %d: %s, retrying in %ds",
                             attempt + 1, e, wait,
                         )
-                        await asyncio.sleep(wait)
+                        await asyncio.sleep(wait + random.uniform(0, 0.5 * wait))
                     elif "timeout" in err_lower or "timed out" in err_lower:
                         logger.warning(
                             "Qwen timeout on attempt %d, retrying immediately",
@@ -478,7 +479,7 @@ class QwenClient(LLMClientBase):
                             "Qwen API attempt %d failed (%s): %s, retrying in %ds",
                             attempt + 1, type(e).__name__, e, wait,
                         )
-                        await asyncio.sleep(wait)
+                        await asyncio.sleep(wait + random.uniform(0, 0.5 * wait))
                 else:
                     raise LLMError(f"Qwen API failed after {attempt + 1} attempts: {e}") from e
 

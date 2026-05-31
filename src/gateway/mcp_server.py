@@ -411,11 +411,11 @@ class MCPServerModule(Module, layer=6):
         return json.dumps({"status": "sent", "instruction": text})
 
     @skill
-    def stop(self) -> str:
+    def emergency_stop(self) -> str:
         """Emergency stop — immediately halts all robot motion."""
         self.stop_cmd.publish(2)
         self.cmd_vel.publish(Twist())
-        return json.dumps({"status": "stopped"})
+        return json.dumps({"status": "emergency_stopped"})
 
     @skill
     def set_mode(self, mode: str) -> str:
@@ -487,14 +487,19 @@ class MCPServerModule(Module, layer=6):
         try:
             import uvicorn
             from fastapi import FastAPI
+            import os
             from fastapi.middleware.cors import CORSMiddleware
             from fastapi.responses import JSONResponse
         except ImportError:
             logger.error("FastAPI not installed — run: pip install fastapi uvicorn")
             return
 
+        cors_origins = os.environ.get(
+            "LINGTU_CORS_ORIGINS",
+            "http://localhost:5050,http://127.0.0.1:5050",
+        ).split(",")
         app = FastAPI(title="LingTu MCP Server")
-        app.add_middleware(CORSMiddleware, allow_origins=["*"],
+        app.add_middleware(CORSMiddleware, allow_origins=cors_origins,
                            allow_methods=["*"], allow_headers=["*"])
         from gateway.auth import APIKeyMiddleware
         require_key = (

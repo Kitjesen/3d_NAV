@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 import time
 from typing import Any
 
@@ -638,13 +639,15 @@ def register_operation_routes(app, gw) -> None:
             "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
         )
         try:
+            # NOTE: user-supplied map_name flows into pcd_path; shlex.quote prevents shell injection
+            safe_pcd = shlex.quote(str(pcd_path))
             r = subprocess.run(
                 [
                     "bash",
                     "-c",
                     ros_env
                     + "ros2 service call /nav/relocalize interface/srv/Relocalize "
-                    f"\"{{pcd_path: '{pcd_path}', x: {x}, y: {y}, z: 0.0, "
+                    f"\"{{pcd_path: {safe_pcd}, x: {x}, y: {y}, z: 0.0, "
                     f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\"",
                 ],
                 capture_output=True,
