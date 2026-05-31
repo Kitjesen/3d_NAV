@@ -101,8 +101,14 @@ def _write_active_same_source_tomogram(map_root):
 def test_diagnostics_plugin_catalog_exposes_registered_backends():
     from base_autonomy.modules.local_planner_module import LocalPlannerModule  # noqa: F401
     from base_autonomy.modules.path_follower_module import PathFollowerModule  # noqa: F401
-    from gateway.routes.diagnostics import build_plugin_catalog
+    from gateway.routes.diagnostics import build_plugin_catalog, clear_diagnostics_cache
     from semantic.planner.semantic_planner.llm_client import MockLLMClient  # noqa: F401
+    # ^ Cross-layer: gateway test imports from semantic/ for registry setup.
+    #   Acceptable: test needs to register a semantic backend in the global
+    #   registry so build_plugin_catalog() can detect it.  No production
+    #   dependency — the import is for side-effect registration only.
+
+    clear_diagnostics_cache()
 
     payload = build_plugin_catalog()
 
@@ -121,6 +127,9 @@ def test_diagnostics_plugin_catalog_exposes_registered_backends():
 
 def test_diagnostics_plugin_catalog_route():
     from gateway.gateway_module import GatewayModule
+    from gateway.routes.diagnostics import clear_diagnostics_cache
+
+    clear_diagnostics_cache()
 
     gateway = GatewayModule()
     payload = asyncio.run(_endpoint(gateway, "/api/v1/diagnostics/plugins")())
@@ -131,6 +140,9 @@ def test_diagnostics_plugin_catalog_route():
 
 def test_diagnostics_plugin_catalog_route_exposes_active_backend_status():
     from gateway.gateway_module import GatewayModule
+    from gateway.routes.diagnostics import clear_diagnostics_cache
+
+    clear_diagnostics_cache()
 
     class FakeLocalPlanner:
         def health(self):
@@ -2643,6 +2655,10 @@ def test_runtime_dataflow_exposes_traversable_frontier_candidates_read_only(
         RuntimeDataflowTopicDetailResponse,
     )
     from nav.traversable_frontier_module import TraversableFrontierModule
+    # ^ Cross-layer: gateway test imports from nav/ for runtime dataflow testing.
+    #   Acceptable: test needs a concrete nav module to exercise the
+    #   RuntimeDataflow endpoint with real module state.  Gateway tests
+    #   serve as integration tests for the full stack through the HTTP layer.
 
     monkeypatch.setenv("LINGTU_RUNTIME_CONTRACT", "real_s100p")
 

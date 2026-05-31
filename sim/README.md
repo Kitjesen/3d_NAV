@@ -33,6 +33,13 @@ The system has three layers:
 
 Worlds, robots, and bridges are independent — any world can host any robot, and either bridge connects to navigation.
 
+Default product runtime contract: `enable_native=False` keeps motion ownership
+inside LingTu Modules. PCT/A* produce global plans in `NavigationModule`, then
+`LocalPlannerModule` (`nanobind`) feeds `PathFollowerModule` (`nav_core`), which
+publishes through `CmdVelMux` to the selected simulation driver. The ROS2 C++
+`localPlanner`/`pathFollower` bridge remains a native gate/legacy experiment,
+not the default product runtime.
+
 ## 3. Scenes
 
 Four pre-built environments are provided, each targeting different navigation challenges:
@@ -208,11 +215,12 @@ PYTHONPATH=src:. python sim/scripts/routecheck_preflight_gate.py \
 
 PYTHONPATH=src:. python sim/scripts/server_sim_closure.py \
   --preset g4_server_full_sim \
-  --json-out artifacts/server_sim_closure_summary_all.json \
+  --required-only \
+  --json-out artifacts/server_sim_closure_summary_g4_current.json \
   --strict
 ```
 
-The summary is an evidence aggregator. It does not launch missing gates on its
+The summary is an evidence aggregator. The aggregator does not launch missing gates on its
 own; run the command shown in each failed gate before treating the closure as
 complete. A passing full summary must report `ok=true`,
 `simulation_only=true`, `real_robot_motion=false`,
@@ -390,7 +398,8 @@ PYTHONPATH=src:. python sim/scripts/multifloor_nav_validation.py \
 To validate simulated motion through the module ports, add `--bridge-loop`.
 This moves only the MuJoCo robot. It still must report
 `real_robot_motion=false` and `cmd_vel_sent_to_hardware=false`.
-The default local planner backend is `simple`; use
+Within `multifloor_nav_validation.py`, the default local planner backend is
+`simple`; use
 `--local-planner-backend nanobind --require-production-local-planner` when the
 native local planner has been built and the report must fail on simple fallback.
 
@@ -825,9 +834,9 @@ messages in the bag.
 | `external_scenes/` | Optional external/license-constrained scene placeholders |
 | `meshes/` | Legacy mesh path; keep until references are fully audited |
 | `launch/` | ROS2 launch files |
-| `maps/` | Saved simulation maps |
+| `maps/` | Reserved empty placeholder for future simulation map fixtures |
 | `output/` | Local generated outputs; reproducible evidence should prefer `artifacts/` |
-| `configs/` | Simulation configuration files |
+| `configs/` | Reserved empty placeholder for future simulation configuration fixtures |
 
 ## 11. Dependencies
 

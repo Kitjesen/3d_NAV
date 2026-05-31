@@ -18,9 +18,11 @@ from typing import Any
 
 from core import In, Module, Out
 from core.msgs.nav import Odometry
+from core.registry import register
 from core.yaml_helpers import load_yaml, save_yaml
 
 
+@register("safety", "geofence", description="Geofence boundary monitor")
 class GeofenceManagerModule(Module, layer=6):
     """Geofence management module (hive Module).
 

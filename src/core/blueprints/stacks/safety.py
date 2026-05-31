@@ -3,22 +3,36 @@
 from __future__ import annotations
 
 from core.blueprint import Blueprint
+from core.blueprints.stacks._registry import optional_stack_module, stack_module
 
 
 def safety() -> Blueprint:
     """Safety reflex + geofence boundary enforcement + cmd_vel arbitration."""
     bp = Blueprint()
 
-    from nav.safety_ring_module import SafetyRingModule
+    SafetyRingModule = stack_module(
+        "safety",
+        "ring",
+        seed_group="safety",
+        fallback="nav.safety_ring_module.SafetyRingModule",
+    )
     bp.add(SafetyRingModule)
 
-    from nav.cmd_vel_mux_module import CmdVelMux
+    CmdVelMux = stack_module(
+        "safety",
+        "cmd_vel_mux",
+        seed_group="safety",
+        fallback="nav.cmd_vel_mux_module.CmdVelMux",
+    )
     bp.add(CmdVelMux)
 
-    try:
-        from nav.services.nav_services.geofence_manager_module import GeofenceManagerModule
+    GeofenceManagerModule = optional_stack_module(
+        "safety",
+        "geofence",
+        seed_group="safety",
+        fallback="nav.services.nav_services.geofence_manager_module.GeofenceManagerModule",
+    )
+    if GeofenceManagerModule is not None:
         bp.add(GeofenceManagerModule)
-    except ImportError:
-        pass
 
     return bp

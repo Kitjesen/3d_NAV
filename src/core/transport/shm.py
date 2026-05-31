@@ -23,6 +23,21 @@ from .abc import Publisher, Subscriber, TopicConfig, TransportABC
 
 logger = logging.getLogger(__name__)
 
+# Module-level event registry for cross-thread notification (same-process).
+# Both SHMPublisher and SHMSubscriber access the same event via shm_name.
+# The publisher sets the event after writing new data; the subscriber waits
+# on the event instead of busy-wait polling.  This eliminates CPU-burning
+# time.sleep() in the subscriber loop while keeping sub-2ms latency.
+# For cross-process scenarios the timeout acts as a safety-net fallback.
+_EVENT_REGISTRY: dict[str, threading.Event] = {}
+
+
+def _get_notify_event(shm_name: str) -> threading.Event:
+    if shm_name not in _EVENT_REGISTRY:
+        _EVENT_REGISTRY[shm_name] = threading.Event()
+    return _EVENT_REGISTRY[shm_name]
+
+
 # Control block: [seq:8bytes][timestamp:8bytes][data_len:8bytes] = 24 bytes
 CTRL_SIZE = 24
 DEFAULT_BUF_SIZE = 4 * 1024 * 1024  # 4MB (enough for 1080p RGB)
@@ -42,6 +57,7 @@ class SHMPublisher(Publisher):
         self._total_size = CTRL_SIZE + buf_size
         self._shm_name = _shm_name(topic.name)
         self._seq = 0
+        self._event = _get_notify_event(self._shm_name)
 
         # Create or attach shared memory
         try:
@@ -84,6 +100,7 @@ class SHMPublisher(Publisher):
         buf[CTRL_SIZE : CTRL_SIZE + data_len] = data
         struct.pack_into("<QdQ", buf, 0, complete_seq, ts, data_len)
         self._seq = complete_seq
+        self._event.set()  # Notify subscribers: new data available
 
     def close(self) -> None:
         try:
@@ -105,6 +122,7 @@ class SHMSubscriber(Subscriber):
         self._running = False
         self._thread: threading.Thread | None = None
         self._shm: pyshm.SharedMemory | None = None
+        self._event = _get_notify_event(self._shm_name)
 
     def start(self) -> None:
         """Start polling thread. Always starts — retries SHM attach in poll loop."""
@@ -129,7 +147,8 @@ class SHMSubscriber(Subscriber):
         while self._running:
             if not self._try_attach():
                 # Publisher hasn't created the region yet — wait and retry
-                time.sleep(0.1)
+                self._event.wait(timeout=0.1)
+                self._event.clear()
                 continue
             buf = self._shm.buf
             seq, ts, data_len = struct.unpack_from("<QdQ", buf, 0)
@@ -137,14 +156,21 @@ class SHMSubscriber(Subscriber):
                 data = bytes(buf[CTRL_SIZE : CTRL_SIZE + data_len])
                 seq2, ts2, data_len2 = struct.unpack_from("<QdQ", buf, 0)
                 if seq2 != seq or ts2 != ts or data_len2 != data_len or seq2 % 2 != 0:
-                    time.sleep(self._poll_interval)
+                    # Inconsistent read — wait and retry
+                    self._event.wait(timeout=self._poll_interval)
+                    self._event.clear()
                     continue
                 self._last_seq = seq2
                 try:
                     self._callback(data, ts2)
                 except Exception as e:
                     logger.error(f"[SHM-Sub] callback error: {e}")
-            time.sleep(self._poll_interval)
+            # Wait for publisher notification instead of busy-wait polling.
+            # The publisher sets self._event after writing new data to SHM.
+            # The timeout is a safety net for the narrow lost-wakeup race
+            # between event.set() and event.clear() — worst-case ~2ms lag.
+            self._event.wait(timeout=self._poll_interval)
+            self._event.clear()
 
     def close(self) -> None:
         self._running = False

@@ -288,7 +288,7 @@ def _tomogram(
 
     mark_free(0, lower | stair, floors[0])
     top_slice = n_slices - 1
-    mark_free(top_slice, upper | stair, top_slice * slice_dh * 0.9)
+    mark_free(top_slice, upper | stair, float(floors[-1]))
     for slice_idx in range(1, top_slice):
         height = slice_idx * slice_dh
         mark_free(slice_idx, stair, height)
@@ -446,22 +446,21 @@ def build_multifloor_assets(
             },
         },
         extra_metadata={
-                "schema_version": 1,
-                "name": "multifloor_stairs",
-                "source": "synthetic_sim_geometry",
-                "scene_xml": str(scene_xml),
-                "tomogram": str(tomogram_path),
-                "map_pcd": str(map_pcd),
-                "start": list(start),
-                "goal": list(goal),
-                "floors": list(floors),
-                "resolution": resolution,
-                "origin": list(origin),
-                "shape_xy": list(shape_xy),
-                "slice_dh": slice_dh,
-                "inflation_m": inflation,
-                "transitions": [asdict(t) for t in floor_transitions()],
-                "obstacles": [asdict(box) for box in multifloor_boxes()],
+            "name": "multifloor_stairs",
+            "source": "synthetic_sim_geometry",
+            "scene_xml": str(scene_xml),
+            "tomogram": str(tomogram_path),
+            "map_pcd": str(map_pcd),
+            "start": list(start),
+            "goal": list(goal),
+            "floors": list(floors),
+            "resolution": resolution,
+            "origin": list(origin),
+            "shape_xy": list(shape_xy),
+            "slice_dh": slice_dh,
+            "inflation_m": inflation,
+            "transitions": [asdict(t) for t in floor_transitions()],
+            "obstacles": [asdict(box) for box in multifloor_boxes()],
         },
     )
     metadata.write_text(

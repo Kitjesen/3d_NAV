@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 LIDAR_RAW_FRAME_ID = real_lidar_frame_id()
 
 
+@register("lidar", "mid360", description="Livox MID-360 LiDAR driver")
 @register("driver", "lidar_mid360", description="Livox MID-360 LiDAR driver")
 class LidarModule(Module, layer=1):
     """Livox MID-360 driver as a Module in the Blueprint system.

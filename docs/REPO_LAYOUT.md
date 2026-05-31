@@ -52,7 +52,7 @@ brain/lingtu/
 │   ├── apply_calibration.py  # One-click apply → robot_config.yaml + SLAM configs
 │   ├── verify.py          # One-click verify (sanity checks + projection chain)
 │   └── README.md          # Full SOP with command-line examples
-├── launch/                # ROS2 launch — ONLY algorithm-bridge launches now
+├── launch/                # ROS2 launch — algorithm bridges plus Gazebo simulation scaffold
 │   ├── _robot_config.py
 │   └── profiles/          # SLAM/planner profiles consumed by NativeModule subprocesses
 │       ├── slam_fastlio2.launch.py
@@ -101,6 +101,9 @@ unit; SLAM and other C++ subsystems are managed via `NativeModule` (see
 | Which modules a profile pulls in | `cli/profiles_data.py` + `src/core/blueprints/full_stack.py` |
 | All cross-stack wires | `src/core/blueprints/full_stack.py` |
 | Which backends are registered for a category | `src/core/registry.py` plus the `@register(...)` calls in each Module file |
+| Simulation folder boundaries | `sim/README.md` (engine/worlds/assets/robots/scripts plus bridge/sensors/datasets, validation/evaluation) |
+| Server-side simulation evidence | `artifacts/server_sim_closure/` generated reports plus `artifacts/server_sim_closure_summary_g4_current.json` |
+| Root Gazebo simulation scaffold | `launch/gazebo_simulation.launch.py` (kept at root because ROS-native launchers reference it directly) |
 | Robot physical parameters | `config/robot_config.yaml` (single source of truth) |
 | Calibration SOP | `calibration/README.md` |
 | Operations CLI on the robot | `scripts/lingtu` + `docs/archive/AGENTS.md` |

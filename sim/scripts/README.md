@@ -60,3 +60,14 @@
 
 - `algorithm_dataflow_summary.py` — 算法数据流摘要（被 `test_algorithm_dataflow_summary` 引用）
 - `rosbag_slam_bridge_replay.py` — rosbag → SLAM bridge 回放
+
+## Stable index additions
+
+- `full_sim_validation.py` - compatibility wrapper for the full simulation
+  validation gate; canonical G4 closure aggregation is
+  `server_sim_closure.py`.
+- `cmu_unity_lingtu_stack.py` - CMU Unity LingTu stack helper for controlled
+  simulation experiments; not the default product runtime.
+- `_run_legkilo_test.sh` / `run_legkilo_test.sh` - legacy/manual dataset helper
+  scripts. They may source ROS/install spaces, start SLAM dataset processes, or
+  clean up external processes; do not include them in the G4 server closure.

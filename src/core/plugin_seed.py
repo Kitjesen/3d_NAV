@@ -44,6 +44,8 @@ BUILTIN_PLUGIN_MODULES: Mapping[str, tuple[str, ...]] = {
     ),
     "safety": (
         "nav.safety_ring_module",
+        "nav.cmd_vel_mux_module",
+        "nav.services.nav_services.geofence_manager_module",
     ),
     "planner_backend": (
         "global_planning.pct_adapters.src.global_planner_module",
@@ -107,6 +109,26 @@ BUILTIN_PLUGIN_MODULES: Mapping[str, tuple[str, ...]] = {
 }
 
 
+DEFAULT_BUILTIN_PLUGIN_GROUPS: tuple[str, ...] = (
+    "device",
+    "driver",
+    "lidar",
+    "camera",
+    "teleop",
+    "map",
+    "safety",
+    "planner_backend",
+    "navigation",
+    "autonomy",
+    "slam",
+    "exploration",
+    "perception",
+    "semantic",
+    "llm",
+    "memory",
+)
+
+
 def seed_builtin_plugins(
     groups: Iterable[str] | None = None,
     *,
@@ -116,7 +138,9 @@ def seed_builtin_plugins(
     """Import built-in plugin modules so their ``@register`` decorators run.
 
     Args:
-        groups: Logical seed groups to import. ``None`` imports all groups.
+        groups: Logical seed groups to import. ``None`` imports the safe core
+            default groups. Optional runtime surfaces such as Gateway, WebRTC,
+            and visualization must be seeded explicitly.
         reload_loaded: Re-run decorators for already imported modules. This is
             mainly useful after tests call ``core.registry.clear()``.
         strict: Re-raise import errors instead of recording them.
@@ -124,7 +148,7 @@ def seed_builtin_plugins(
     Returns:
         ``{"loaded": {group: [module, ...]}, "failed": {group: ["mod: err"]}}``.
     """
-    requested = tuple(groups) if groups is not None else tuple(BUILTIN_PLUGIN_MODULES)
+    requested = tuple(groups) if groups is not None else DEFAULT_BUILTIN_PLUGIN_GROUPS
     unknown = [group for group in requested if group not in BUILTIN_PLUGIN_MODULES]
     if unknown:
         available = ", ".join(sorted(BUILTIN_PLUGIN_MODULES))

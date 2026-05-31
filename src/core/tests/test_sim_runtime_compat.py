@@ -1636,9 +1636,22 @@ def test_sim_boundary_indexes_document_stable_contracts():
     repo_root = Path(__file__).resolve().parents[3]
     readme_text = (repo_root / "sim" / "README.md").read_text(encoding="utf-8")
     repo_layout = (repo_root / "docs" / "REPO_LAYOUT.md").read_text(encoding="utf-8")
+    plan_text = (
+        repo_root
+        / "docs"
+        / "superpowers"
+        / "plans"
+        / "2026-05-31-sim-folder-modularization-goals.md"
+    ).read_text(encoding="utf-8")
     scripts_index = (repo_root / "sim" / "scripts" / "README.md").read_text(
         encoding="utf-8"
     )
+    engine_index = (repo_root / "sim" / "engine" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    closure_index = (
+        repo_root / "artifacts" / "server_sim_closure" / "README.md"
+    ).read_text(encoding="utf-8")
     sim_root = Path(__file__).resolve().parents[3] / "sim"
     expected = {
         "bridge": [
@@ -1674,8 +1687,35 @@ def test_sim_boundary_indexes_document_stable_contracts():
         assert f"`{directory}`" in readme_text
     assert "assets, scenes, scripts" not in repo_layout
     assert "worlds, assets, robots, scripts, validation/evaluation" in repo_layout
+    assert "sim/README.md" in repo_layout
+    assert "bridge/sensors/datasets" in repo_layout
     assert "legacy Go1 demos" in scripts_index
     assert "sim/robots/go1_playground/" in scripts_index
+    assert "Add boundary README later" not in plan_text
+    assert "Boundary README added" in plan_text
+    assert "default product runtime" in readme_text
+    assert "enable_native=False" in readme_text
+    assert "LocalPlannerModule" in readme_text
+    assert "PathFollowerModule" in readme_text
+    assert "CmdVelMux" in readme_text
+    assert "native gate/legacy experiment" in readme_text
+    assert "`maps/` | Reserved empty placeholder" in readme_text
+    assert "`configs/` | Reserved empty placeholder" in readme_text
+    assert "artifacts/server_sim_closure_summary_g4_current.json" in readme_text
+    assert "aggregator does not launch missing gates" in readme_text
+    assert "full_sim_validation.py" in scripts_index
+    assert "cmu_unity_lingtu_stack.py" in scripts_index
+    assert "_run_legkilo_test.sh" in scripts_index
+    assert "legacy/manual dataset helper" in scripts_index
+    assert "canonical simulation runtime core" in engine_index
+    assert "lingtu.py sim" in engine_index
+    assert "real_robot_motion=false" in engine_index
+    assert "generated evidence root" in closure_index
+    assert "24h freshness" in closure_index
+    assert "artifacts/server_sim_closure_summary_g4_current.json" in closure_index
+    assert "host_requirements" in closure_index
+    assert "Linux/ROS 2/MuJoCo/PCT-native checks" in closure_index
+    assert "cmd_vel_sent_to_hardware=false" in closure_index
 
 
 def test_mujoco_driver_prefers_brainstem_policy_and_resolves_repo_relative_paths(monkeypatch, tmp_path):

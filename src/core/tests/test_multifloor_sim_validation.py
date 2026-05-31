@@ -7,10 +7,12 @@ import pytest
 
 from global_planning.PCT_planner_runnable.runtime import prepare_tomogram_for_pct
 from sim.engine.scenarios.multifloor_assets import build_multifloor_assets
+import sim.scripts.multifloor_nav_validation as multifloor_nav_validation
 from sim.scripts.multifloor_nav_validation import (
     ROUTE_CASES,
     _native_pct_gate,
     _frontier_probe_costmap,
+    _pct_runtime_evidence,
     _nav_path_from_points,
     _odom_at_path_start,
     _path_initial_yaw,
@@ -123,6 +125,8 @@ def test_frontier_navigation_closed_loop_probe_reveals_map_and_replays_tracking(
         assert item["ok"] is True
         assert item["goal"]["frontier"]
         assert item["goal"]["navigation"]
+        assert item["goal"]["safe_goal_tolerance"] == pytest.approx(1.2)
+        assert item["goal"]["safe"]
         assert len(item["path"]) >= 2
         assert item["path_validation"]["ok"] is True
         assert item["command_flow"]["ok"] is True
@@ -268,6 +272,40 @@ def test_multifloor_same_floor_astar_drives_memory_only_command_flow(tmp_path):
     assert command_flow["seen"]["mux_cmd"] >= 1
 
 
+def test_multifloor_upper_floor_astar_reaches_requested_goal(tmp_path):
+    case = ROUTE_CASES["upper_floor"]
+    assets = build_multifloor_assets(tmp_path, start=case.start, goal=case.goal)
+    plan = run_route_planner(
+        planner="astar",
+        route=case.route_mode,
+        tomogram=assets.tomogram,
+        start=case.start,
+        goal=case.goal,
+        downsample_dist=0.5,
+    )
+
+    assert plan["feasible"] is True
+    assert plan["error"] is None
+    assert plan["safe_goal_distance_m"] == pytest.approx(0.0)
+    assert plan["z_min"] >= 2.0
+    assert plan["z_max"] == pytest.approx(2.5)
+    assert plan["last"][:2] == pytest.approx(list(case.goal[:2]))
+
+    report = run_route_case(
+        case=case,
+        output_dir=tmp_path / "upper_case",
+        planners=["astar"],
+        downsample_dist=0.5,
+        skip_mujoco=True,
+    )
+    assert report["passed"] is True
+    assert report["planning"][0]["path_validation"]["ok"] is True
+    assert report["command_flow"]["ok"] is True
+    assert report["command_flow"]["cmd_vel_sent_to_hardware"] is False
+    assert report["tracking_replay"]["ok"] is True
+    assert report["tracking_replay"]["cmd_vel_sent_to_hardware"] is False
+
+
 def test_pct_missing_runtime_or_tomogram_is_blocked_not_passed(tmp_path):
     plan = run_global_planner(
         planner="pct",
@@ -292,6 +330,127 @@ def test_pct_missing_runtime_or_tomogram_is_blocked_not_passed(tmp_path):
     assert gate["ok"] is False
     assert gate["status"] == "blocked"
     assert gate["blocked"] is True
+
+
+def test_pct_runtime_evidence_exposes_host_blocker_details(monkeypatch):
+    def fake_inspect_pct_runtime(_root):
+        return {
+            "ok": False,
+            "canonical_arch": "x86_64",
+            "python_tag": "cpython-313",
+            "known_good_python_tag": "cpython-310",
+            "python_abi_matches_known_good": False,
+            "platform_system": "Windows",
+            "os_name": "nt",
+            "native_binary_format": "linux_elf",
+            "host_platform_supported": False,
+            "host_platform_blocker": "linux_elf extensions are not runnable on Windows",
+            "candidate_diagnostics": [{"path": "pct.cpython-310-aarch64-linux-gnu.so"}],
+            "recommended_build_command": "bash scripts/build_pct.sh",
+        }
+
+    monkeypatch.setattr(
+        multifloor_nav_validation,
+        "inspect_pct_runtime",
+        fake_inspect_pct_runtime,
+    )
+
+    evidence = _pct_runtime_evidence()
+
+    assert evidence["ok"] is False
+    assert evidence["platform_system"] == "Windows"
+    assert evidence["host_platform_supported"] is False
+    assert evidence["known_good_python_tag"] == "cpython-310"
+    assert evidence["python_abi_matches_known_good"] is False
+    assert evidence["native_binary_format"] == "linux_elf"
+    assert evidence["candidate_diagnostics"][0]["path"].endswith(".so")
+    assert evidence["recommended_build_command"] == "bash scripts/build_pct.sh"
+
+
+def test_partial_global_plan_is_kept_for_diagnostics_but_not_feasible(monkeypatch, tmp_path):
+    class FakeBackend:
+        available = True
+
+    class FakeGlobalPlannerService:
+        def __init__(self, **_: object) -> None:
+            self._backend = FakeBackend()
+            self.last_plan_report = {
+                "reached_goal": False,
+                "safe_goal": [1.0, 0.0, 0.0],
+            }
+
+        def setup(self) -> None:
+            return None
+
+        def plan(self, *_: object, **__: object) -> tuple[list[np.ndarray], float]:
+            return [np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0])], 4.2
+
+    monkeypatch.setattr(
+        "sim.scripts.multifloor_nav_validation.GlobalPlannerService",
+        FakeGlobalPlannerService,
+    )
+
+    tomogram = tmp_path / "diagnostic.tomogram"
+    tomogram.write_bytes(b"diagnostic")
+
+    plan = run_global_planner(
+        planner="astar",
+        tomogram=tomogram,
+        start=(0.0, 0.0, 0.0),
+        goal=(2.0, 0.0, 0.0),
+        downsample_dist=0.5,
+    )
+
+    assert plan["reached_goal"] is False
+    assert plan["feasible"] is False
+    assert plan["ok"] is False
+    assert plan["status"] == "fail"
+    assert plan["path"] == [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
+    assert plan["error"] == "planner returned partial path without reaching goal"
+
+
+def test_far_projected_safe_goal_is_not_counted_as_requested_goal(monkeypatch, tmp_path):
+    class FakeBackend:
+        available = True
+
+    class FakeGlobalPlannerService:
+        def __init__(self, **_: object) -> None:
+            self._backend = FakeBackend()
+            self.last_plan_report = {
+                "reached_goal": True,
+                "safe_goal": [1.0, 0.0, 0.0],
+            }
+
+        def setup(self) -> None:
+            return None
+
+        def plan(self, *_: object, **__: object) -> tuple[list[np.ndarray], float]:
+            return [np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0])], 4.2
+
+    monkeypatch.setattr(
+        "sim.scripts.multifloor_nav_validation.GlobalPlannerService",
+        FakeGlobalPlannerService,
+    )
+
+    tomogram = tmp_path / "diagnostic.tomogram"
+    tomogram.write_bytes(b"diagnostic")
+
+    plan = run_global_planner(
+        planner="astar",
+        tomogram=tomogram,
+        start=(0.0, 0.0, 0.0),
+        goal=(3.0, 0.0, 0.0),
+        downsample_dist=0.5,
+        safe_goal_tolerance=0.0,
+    )
+
+    assert plan["backend_reached_goal"] is True
+    assert plan["reached_goal"] is False
+    assert plan["feasible"] is False
+    assert plan["ok"] is False
+    assert plan["status"] == "fail"
+    assert plan["safe_goal_distance_m"] == pytest.approx(2.0)
+    assert plan["error"] == "planner safe goal is too far from requested goal"
 
 
 def test_multifloor_astar_matrix_covers_lower_floor_routes(tmp_path):

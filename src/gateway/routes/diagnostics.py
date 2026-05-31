@@ -26,6 +26,29 @@ from gateway.schemas import RoutecheckLatestResponse
 from gateway.schemas import RuntimeContractResponse
 
 
+# Simple TTL cache for expensive diagnostic builders.
+# Cache key: function name; cache value: (timestamp, result).
+# TTL is 5 seconds — diagnostics are read-only and stale-by-seconds is acceptable.
+_CACHE: dict[str, tuple[float, Any]] = {}
+_CACHE_TTL = 5.0
+
+
+def _cached(key: str, factory, ttl: float = _CACHE_TTL):
+    now = time.time()
+    if key in _CACHE:
+        ts, result = _CACHE[key]
+        if now - ts < ttl:
+            return result
+    result = factory()
+    _CACHE[key] = (now, result)
+    return result
+
+
+def clear_diagnostics_cache() -> None:
+    """Clear the diagnostics TTL cache.  Used in tests for isolation."""
+    _CACHE.clear()
+
+
 ALGORITHM_BENCHMARK_SCHEMA_VERSION = "lingtu.algorithm_benchmark_latest.v1"
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[3]
 ALGORITHM_PRODUCT_PROFILES: dict[str, dict[str, Any]] = {
@@ -149,6 +172,10 @@ def _command_snapshot(gw: Any) -> dict[str, Any]:
 
 def build_plugin_catalog() -> dict[str, Any]:
     """Read-only view of registered plugin categories and provider metadata."""
+    return _cached("build_plugin_catalog", _build_plugin_catalog_impl)
+
+
+def _build_plugin_catalog_impl() -> dict[str, Any]:
     from core.registry import get_metadata, list_categories, list_plugins
 
     categories: dict[str, list[dict[str, Any]]] = {}
@@ -216,6 +243,10 @@ def _collect_backend_statuses(
 
 def build_active_backend_status(gw: Any) -> dict[str, Any]:
     """Read-only view of configured/effective backends from live module health."""
+    return _cached("build_active_backend_status", lambda: _build_active_backend_status_impl(gw))
+
+
+def _build_active_backend_status_impl(gw: Any) -> dict[str, Any]:
     modules: dict[str, Any] = {}
     for name, module in (getattr(gw, "_all_modules", None) or {}).items():
         try:

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import URLError
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from core.runtime_interface import REAL_RUNTIME_CONTRACT, TOPICS
@@ -16,6 +18,7 @@ from core.runtime_interface import REAL_RUNTIME_CONTRACT, TOPICS
 
 GATEWAY_RUNTIME_ACCEPTANCE_SCHEMA_VERSION = "lingtu.gateway_runtime_acceptance.v1"
 DEFAULT_GATEWAY_URL = "http://127.0.0.1:5050"
+IN_PROCESS_STUB_RUNTIME_CONTRACT = "in_process_stub"
 ACCEPTANCE_MODES = ("non_motion", "simulation", "field")
 MAX_LIVE_STALE_MS = 2000.0
 HARDWARE_COMMAND_SINK = "hardware_driver_after_cmd_vel_mux"
@@ -1066,10 +1069,28 @@ def evaluate_gateway_runtime_acceptance(
         "routecheck_latest": routecheck_latest,
         "algorithm_benchmark_latest": algorithm_benchmark_latest,
     }
+    top_level_simulation_only = (
+        runtime_mode.get("simulation_only")
+        if runtime_mode.get("simulation_only") is not None
+        else mode == "simulation"
+    )
+    top_level_real_robot_motion = (
+        real_runtime_evidence.get("real_robot_motion") is True
+        if mode == "field"
+        else False
+    )
+    top_level_cmd_vel_sent_to_hardware = (
+        real_runtime_evidence.get("cmd_vel_sent_to_hardware") is True
+        if mode == "field"
+        else False
+    )
     return {
         "schema_version": GATEWAY_RUNTIME_ACCEPTANCE_SCHEMA_VERSION,
         "ok": not blockers,
         "mode": mode,
+        "simulation_only": top_level_simulation_only,
+        "real_robot_motion": top_level_real_robot_motion,
+        "cmd_vel_sent_to_hardware": top_level_cmd_vel_sent_to_hardware,
         "target_result": (
             "Gateway-only product runtime acceptance; ROS2 topic inspection is not required."
         ),
@@ -1140,6 +1161,66 @@ def collect_gateway_runtime_snapshots(
     return snapshots
 
 
+@contextmanager
+def _temporary_env(overrides: Mapping[str, str]):
+    previous: dict[str, str | None] = {
+        key: os.environ.get(key) for key in overrides
+    }
+    try:
+        for key, value in overrides.items():
+            os.environ[key] = value
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _is_default_local_gateway_url(gateway_url: str) -> bool:
+    parsed = urlparse(gateway_url)
+    host = (parsed.hostname or "").lower()
+    return (
+        parsed.scheme in {"http", "https"}
+        and host in {"127.0.0.1", "localhost", "::1"}
+        and parsed.port == 5050
+    )
+
+
+def _all_required_gateway_fetches_failed(
+    snapshots: Mapping[str, Any],
+) -> bool:
+    for name in REQUIRED_GATEWAY_SNAPSHOTS:
+        snapshot = _mapping(snapshots.get(name))
+        if not snapshot.get("_fetch_error"):
+            return False
+        if snapshot.get("_http_status") is not None:
+            return False
+    return True
+
+
+def _collect_in_process_stub_gateway_snapshots() -> dict[str, dict[str, Any]]:
+    """Build non-motion Gateway snapshots without starting uvicorn or drivers."""
+
+    env = {
+        "LINGTU_BLACKBOX_ENABLED": "0",
+        "LINGTU_PROFILE": "stub",
+        "LINGTU_ENDPOINT": "in_process_gateway_stub",
+        "LINGTU_DATA_SOURCE": IN_PROCESS_STUB_RUNTIME_CONTRACT,
+        "LINGTU_RUNTIME_CONTRACT": IN_PROCESS_STUB_RUNTIME_CONTRACT,
+        "LINGTU_SIMULATION_ONLY": "1",
+    }
+    with _temporary_env(env):
+        from gateway.gateway_module import GatewayModule
+        from gateway.routes.diagnostics import _gateway_acceptance_snapshots
+
+        gateway = GatewayModule(host="127.0.0.1", port=0)
+        gateway.setup()
+        gateway.on_system_modules({"GatewayModule": gateway})
+        return _gateway_acceptance_snapshots(gateway)
+
+
 def collect_gateway_runtime_acceptance(
     *,
     gateway_url: str = DEFAULT_GATEWAY_URL,
@@ -1152,8 +1233,17 @@ def collect_gateway_runtime_acceptance(
         gateway_url=gateway_url,
         timeout_sec=timeout_sec,
     )
+    snapshot_source = "gateway_http"
+    if (
+        mode == "non_motion"
+        and _is_default_local_gateway_url(gateway_url)
+        and _all_required_gateway_fetches_failed(snapshots)
+    ):
+        snapshots = _collect_in_process_stub_gateway_snapshots()
+        snapshot_source = "in_process_stub"
     payload = evaluate_gateway_runtime_acceptance(snapshots, mode=mode)
     payload["gateway_url"] = gateway_url
+    payload["snapshot_source"] = snapshot_source
     return payload
 
 

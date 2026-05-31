@@ -10,6 +10,8 @@ from typing import Any
 
 import numpy as np
 
+from core.same_source_map_artifacts import build_saved_map_metadata, sha256_file
+
 
 @dataclass(frozen=True)
 class TerrainBox:
@@ -683,61 +685,90 @@ def build_large_terrain_assets(
     )
 
     scene_xml.write_text(_scene_xml(start, goal), encoding="utf-8")
+    tomogram_payload = _tomogram(
+        resolution=resolution,
+        origin=tomogram_origin,
+        shape_xy=shape_xy,
+        slice_dh=slice_dh,
+        obstacle_thr=obstacle_thr,
+        inflation=inflation,
+        map_frame_origin_world_xy=map_frame_origin_world_xy,
+    )
     with tomogram_path.open("wb") as fh:
-        pickle.dump(
-            _tomogram(
-                resolution=resolution,
-                origin=tomogram_origin,
-                shape_xy=shape_xy,
-                slice_dh=slice_dh,
-                obstacle_thr=obstacle_thr,
-                inflation=inflation,
-                map_frame_origin_world_xy=map_frame_origin_world_xy,
-            ),
-            fh,
-            protocol=pickle.HIGHEST_PROTOCOL,
-        )
+        pickle.dump(tomogram_payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
     _write_ascii_pcd(map_pcd, map_frame_origin_world_xy=map_frame_origin_world_xy)
-    metadata.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "name": "large_terrain_field",
-                "source": "synthetic_sim_geometry",
-                "scene_xml": str(scene_xml),
-                "tomogram": str(tomogram_path),
-                "map_pcd": str(map_pcd),
-                "start": list(start),
-                "goal": list(goal),
-                "map_frame": map_frame,
-                "map_frame_origin_world_xy": list(map_frame_origin_world_xy),
-                "resolution": resolution,
-                "origin": list(tomogram_origin),
-                "world_origin": list(origin),
-                "shape_xy": list(shape_xy),
-                "slice_dh": slice_dh,
-                "inflation_m": inflation,
-                "obstacle_thr": obstacle_thr,
-                "obstacles": [asdict(box) for box in large_terrain_boxes()],
-                "map_frame_obstacles": [
-                    asdict(_map_frame_box(box, map_frame_origin_world_xy))
-                    for box in large_terrain_boxes()
-                ],
-                "terrain_zones": [asdict(zone) for zone in large_terrain_zones()],
-                "map_frame_terrain_zones": [
-                    asdict(_map_frame_zone(zone, map_frame_origin_world_xy))
-                    for zone in large_terrain_zones()
-                ],
-                "routes": [asdict(route) for route in routes],
-                "map_frame_routes": [
-                    asdict(_map_frame_route(route, map_frame_origin_world_xy))
-                    for route in routes
-                ],
-            },
-            indent=2,
-            sort_keys=True,
+    map_sha = sha256_file(map_pcd)
+    tomogram_sha = sha256_file(tomogram_path)
+    point_count = int(
+        len(
+            sample_large_terrain_map_points(
+                map_frame_origin_world_xy=map_frame_origin_world_xy
+            )
         )
-        + "\n",
+    )
+    metadata_payload = build_saved_map_metadata(
+        source_profile="large_terrain_synthetic_assets",
+        data_source="synthetic_large_terrain_geometry",
+        slam_source="synthetic_large_terrain_map_cloud",
+        localization_source="synthetic_large_terrain_ground_truth",
+        mapping_source="synthetic_large_terrain_geometry_to_map_pcd_and_tomogram",
+        frame_id="map",
+        artifacts={
+            "map_pcd": {
+                "path": str(map_pcd),
+                "sha256": map_sha,
+                "source_profile": "large_terrain_synthetic_assets",
+                "data_source": "synthetic_large_terrain_geometry",
+                "slam_source": "synthetic_large_terrain_map_cloud",
+                "frame_id": "map",
+                "point_count": point_count,
+            },
+            "tomogram": {
+                "path": str(tomogram_path),
+                "sha256": tomogram_sha,
+                "source_map_sha256": map_sha,
+                "source_profile": "large_terrain_synthetic_assets",
+                "data_source": "synthetic_large_terrain_geometry",
+                "frame_id": "map",
+                "shape": list(np.asarray(tomogram_payload["data"]).shape),
+            },
+        },
+        extra_metadata={
+            "name": "large_terrain_field",
+            "source": "synthetic_sim_geometry",
+            "scene_xml": str(scene_xml),
+            "tomogram": str(tomogram_path),
+            "map_pcd": str(map_pcd),
+            "start": list(start),
+            "goal": list(goal),
+            "map_frame": map_frame,
+            "map_frame_origin_world_xy": list(map_frame_origin_world_xy),
+            "resolution": resolution,
+            "origin": list(tomogram_origin),
+            "world_origin": list(origin),
+            "shape_xy": list(shape_xy),
+            "slice_dh": slice_dh,
+            "inflation_m": inflation,
+            "obstacle_thr": obstacle_thr,
+            "obstacles": [asdict(box) for box in large_terrain_boxes()],
+            "map_frame_obstacles": [
+                asdict(_map_frame_box(box, map_frame_origin_world_xy))
+                for box in large_terrain_boxes()
+            ],
+            "terrain_zones": [asdict(zone) for zone in large_terrain_zones()],
+            "map_frame_terrain_zones": [
+                asdict(_map_frame_zone(zone, map_frame_origin_world_xy))
+                for zone in large_terrain_zones()
+            ],
+            "routes": [asdict(route) for route in routes],
+            "map_frame_routes": [
+                asdict(_map_frame_route(route, map_frame_origin_world_xy))
+                for route in routes
+            ],
+        },
+    )
+    metadata.write_text(
+        json.dumps(metadata_payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return LargeTerrainAssets(

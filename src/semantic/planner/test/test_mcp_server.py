@@ -44,6 +44,12 @@ from core.msgs.nav import Odometry
 from core.msgs.semantic import SafetyState, SceneGraph
 from core.stream import In, Out
 from gateway.mcp_server import MCPServerModule
+# ^ Cross-layer: semantic test imports from gateway/.
+#   Acceptable: MCPServerModule is a framework-level module (L6 Interface)
+#   with no dependency on semantic internals.  This test only uses core
+#   framework types and fake modules — no semantic-specific imports.
+#   Architecturally this test belongs in gateway/tests/ but lives here
+#   for historical reasons.  No circular dependency is created.
 
 # ---------------------------------------------------------------------------
 # Helpers

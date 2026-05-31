@@ -54,6 +54,7 @@ def test_builtin_plugin_seed_restores_core_plugin_surfaces_after_clear():
             list_plugins("driver")
         )
         assert {"lidar_mid360"} <= set(list_plugins("driver"))
+        assert {"mid360"} <= set(list_plugins("lidar"))
         assert {
             "occupancy_grid",
             "voxel",
@@ -100,6 +101,36 @@ def test_builtin_plugin_seed_can_seed_one_group_without_loading_unrelated_groups
         assert {"pct", "astar"} <= set(list_plugins("planner_backend"))
         assert list_plugins("driver") == []
         assert list_plugins("perception_detector") == []
+    finally:
+        restore(saved)
+        _restore_import_state(seed_modules, modules_before)
+
+
+def test_builtin_plugin_seed_default_groups_skip_optional_runtime_surfaces():
+    from core.plugin_seed import (
+        BUILTIN_PLUGIN_MODULES,
+        DEFAULT_BUILTIN_PLUGIN_GROUPS,
+        seed_builtin_plugins,
+    )
+
+    saved = snapshot()
+    seed_modules = {module for modules in BUILTIN_PLUGIN_MODULES.values() for module in modules}
+    modules_before = set(sys.modules)
+    try:
+        clear()
+
+        seed_builtin_plugins(reload_loaded=True)
+
+        assert "driver" in DEFAULT_BUILTIN_PLUGIN_GROUPS
+        assert "planner_backend" in DEFAULT_BUILTIN_PLUGIN_GROUPS
+        assert "gateway" not in DEFAULT_BUILTIN_PLUGIN_GROUPS
+        assert "visualization" not in DEFAULT_BUILTIN_PLUGIN_GROUPS
+        assert "webrtc" not in DEFAULT_BUILTIN_PLUGIN_GROUPS
+        assert {"stub", "thunder"} <= set(list_plugins("driver"))
+        assert {"pct", "astar"} <= set(list_plugins("planner_backend"))
+        assert {"ring", "cmd_vel_mux", "geofence"} <= set(list_plugins("safety"))
+        assert list_plugins("gateway") == []
+        assert list_plugins("webrtc") == []
     finally:
         restore(saved)
         _restore_import_state(seed_modules, modules_before)

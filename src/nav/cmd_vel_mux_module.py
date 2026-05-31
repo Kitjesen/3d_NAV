@@ -30,6 +30,7 @@ import time
 
 from core.module import Module
 from core.msgs.geometry import Twist
+from core.registry import register
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ _DEFAULT_PRIORITIES: dict[str, int] = {
 }
 
 
+@register("safety", "cmd_vel_mux", description="Priority-based cmd_vel arbitration")
 class CmdVelMux(Module, layer=0):
     """Priority-based cmd_vel multiplexer.
 

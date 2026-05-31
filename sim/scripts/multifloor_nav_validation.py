@@ -122,7 +122,7 @@ def _tomogram_sha256(path: Path) -> str:
 def _pct_runtime_evidence() -> dict[str, Any]:
     try:
         info = inspect_pct_runtime(ROOT)
-        return {
+        evidence = {
             "ok": bool(info.get("ok")),
             "canonical_arch": info.get("canonical_arch"),
             "python_tag": info.get("python_tag"),
@@ -131,6 +131,20 @@ def _pct_runtime_evidence() -> dict[str, Any]:
             "shared_missing": info.get("shared_missing", []),
             "error": info.get("error", ""),
         }
+        for key in (
+            "known_good_python_tag",
+            "python_abi_matches_known_good",
+            "platform_system",
+            "os_name",
+            "native_binary_format",
+            "host_platform_supported",
+            "host_platform_blocker",
+            "candidate_diagnostics",
+            "recommended_build_command",
+        ):
+            if key in info:
+                evidence[key] = info[key]
+        return evidence
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
@@ -575,6 +589,7 @@ def run_global_planner(
     start: tuple[float, float, float],
     goal: tuple[float, float, float],
     downsample_dist: float,
+    safe_goal_tolerance: float = 0.0,
 ) -> dict[str, Any]:
     t0 = time.time()
     svc: GlobalPlannerService | None = None
@@ -592,18 +607,55 @@ def run_global_planner(
         path, plan_ms = svc.plan(
             np.asarray(start, dtype=float),
             np.asarray(goal, dtype=float),
-            safe_goal_tolerance=0.0,
+            safe_goal_tolerance=safe_goal_tolerance,
         )
+        plan_report = svc.last_plan_report
         pts = _path_points(path)
         arr = np.asarray(pts, dtype=np.float64)
         distance = float(np.sum(np.linalg.norm(np.diff(arr, axis=0), axis=1))) if len(arr) > 1 else 0.0
+        backend_reached_goal_raw = plan_report.get("reached_goal", True)
+        backend_reached_goal = (
+            bool(backend_reached_goal_raw)
+            if backend_reached_goal_raw is not None
+            else True
+        )
+        safe_goal = plan_report.get("safe_goal") or (pts[-1] if pts else None)
+        safe_goal_distance_m: float | None = None
+        if safe_goal is not None:
+            try:
+                safe_goal_xy = np.asarray(safe_goal[:2], dtype=np.float64)
+                requested_goal_xy = np.asarray(goal[:2], dtype=np.float64)
+                safe_goal_distance_m = float(np.linalg.norm(safe_goal_xy - requested_goal_xy))
+            except Exception:
+                safe_goal_distance_m = None
+        projection_limit_m = max(0.35, float(safe_goal_tolerance))
+        goal_projection_within_tolerance = (
+            safe_goal_distance_m is None or safe_goal_distance_m <= projection_limit_m
+        )
+        reached_goal = bool(backend_reached_goal and goal_projection_within_tolerance)
+        feasible = bool(pts) and reached_goal
+        backend_available = bool(getattr(backend, "available", True))
+        error = None
+        if not pts:
+            error = "planner returned empty path"
+        elif not backend_reached_goal:
+            error = "planner returned partial path without reaching goal"
+        elif not goal_projection_within_tolerance:
+            error = "planner safe goal is too far from requested goal"
+        status = _planner_status(
+            planner=planner,
+            feasible=feasible,
+            backend_available=backend_available,
+            native_runtime=native_runtime,
+            error=error or "",
+        )
         return {
             "planner": planner,
-            "status": "pass",
-            "blocked": False,
-            "ok": True,
-            "feasible": True,
-            "backend_available": bool(getattr(backend, "available", True)),
+            "status": status,
+            "blocked": status == "blocked",
+            "ok": feasible,
+            "feasible": feasible,
+            "backend_available": backend_available,
             "backend_class": backend.__class__.__name__ if backend is not None else None,
             "native_runtime": native_runtime,
             "native_backend_used": planner == "pct" and bool(getattr(backend, "available", False)),
@@ -614,6 +666,17 @@ def run_global_planner(
                 if planner == "pct"
                 else "ground_floor_dev_sim_astar"
             ),
+            "safe_goal_tolerance": float(safe_goal_tolerance),
+            "safe_goal": safe_goal,
+            "safe_goal_distance_m": (
+                round(float(safe_goal_distance_m), 4)
+                if safe_goal_distance_m is not None
+                else None
+            ),
+            "safe_goal_projection_limit_m": round(float(projection_limit_m), 4),
+            "goal_projection_within_tolerance": goal_projection_within_tolerance,
+            "backend_reached_goal": backend_reached_goal,
+            "reached_goal": reached_goal,
             "count": len(pts),
             "distance_m": round(distance, 4),
             "plan_ms": round(float(plan_ms), 3),
@@ -625,7 +688,7 @@ def run_global_planner(
             "first": pts[0] if pts else None,
             "last": pts[-1] if pts else None,
             "path": pts,
-            "error": None,
+            "error": error,
         }
     except Exception as exc:
         error = str(exc)
@@ -655,6 +718,13 @@ def run_global_planner(
                 if planner == "pct"
                 else "ground_floor_dev_sim_astar"
             ),
+            "safe_goal_tolerance": float(safe_goal_tolerance),
+            "safe_goal": None,
+            "safe_goal_distance_m": None,
+            "safe_goal_projection_limit_m": round(float(max(0.35, safe_goal_tolerance)), 4),
+            "goal_projection_within_tolerance": False,
+            "backend_reached_goal": False,
+            "reached_goal": False,
             "count": 0,
             "distance_m": 0.0,
             "wall_ms": round((time.time() - t0) * 1000.0, 3),
@@ -1711,6 +1781,7 @@ def _plan_to_frontier_goal(
                 start=start,
                 goal=goal,
                 downsample_dist=downsample_dist,
+                safe_goal_tolerance=1.2,
             )
         plan["frontier_goal"] = list(raw_goal)
         plan["navigation_goal"] = list(goal)
@@ -1835,6 +1906,8 @@ def run_frontier_navigation_closed_loop_probe(
                     "goal": {
                         "frontier": frontier_goal,
                         "navigation": plan.get("navigation_goal"),
+                        "safe": plan.get("safe_goal"),
+                        "safe_goal_tolerance": plan.get("safe_goal_tolerance"),
                         "projected_to_traversable": plan.get("goal_projected_to_traversable", False),
                     },
                     "path": path,

@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 
 from core.blueprint import Blueprint
+from core.blueprints.stacks._registry import stack_module
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +38,20 @@ def lidar(ip: str | None = None, enabled: bool = True) -> Blueprint:
         return bp
 
     try:
-        from drivers.real.lidar import LidarModule
-        kw = {}
-        if ip:
-            kw["ip"] = ip
-        bp.add(LidarModule, **kw)
-        logger.info("LiDAR stack: LidarModule added (ip=%s)", ip or "config default")
+        LidarModule = stack_module(
+            "lidar",
+            "mid360",
+            seed_group="lidar",
+            fallback="drivers.real.lidar.LidarModule",
+        )
     except ImportError as e:
         logger.warning("LiDAR stack: LidarModule not available: %s", e)
+        return bp
+
+    kw = {}
+    if ip:
+        kw["ip"] = ip
+    bp.add(LidarModule, **kw)
+    logger.info("LiDAR stack: LidarModule added (ip=%s)", ip or "config default")
 
     return bp

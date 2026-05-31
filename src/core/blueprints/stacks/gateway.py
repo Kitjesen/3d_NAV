@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from core.blueprint import Blueprint
+from core.blueprints.stacks._registry import optional_stack_module, stack_module
 
 logger = logging.getLogger(__name__)
 
@@ -30,39 +31,61 @@ def gateway(
     bp = Blueprint()
 
     try:
-        from gateway.gateway_module import GatewayModule
+        GatewayModule = stack_module(
+            "gateway",
+            "fastapi",
+            seed_group="gateway",
+            fallback="gateway.gateway_module.GatewayModule",
+        )
         bp.add(GatewayModule, port=port)
     except ImportError:
         logger.warning("GatewayModule not available")
 
-    try:
-        from gateway.mcp_server import MCPServerModule
+    MCPServerModule = optional_stack_module(
+        "mcp",
+        "server",
+        seed_group="gateway",
+        fallback="gateway.mcp_server.MCPServerModule",
+    )
+    if MCPServerModule is not None:
         bp.add(MCPServerModule, port=mcp_port)
-    except ImportError:
+    else:
         logger.warning("MCPServerModule not available")
 
     if enable_teleop:
-        try:
-            from drivers.teleop_module import TeleopModule
+        TeleopModule = optional_stack_module(
+            "teleop",
+            "default",
+            seed_group="teleop",
+            fallback="drivers.teleop_module.TeleopModule",
+        )
+        if TeleopModule is not None:
             bp.add(TeleopModule, port=port)  # informational — same port as Gateway
-        except ImportError:
-            pass
-
         # WebRTC module: shares the camera stream with TeleopModule but
         # encodes it as H.264 and speaks SDP on /api/v1/webrtc/offer for
         # ~100 ms glass-to-glass latency.  Imports are wrapped because
         # aiortc is an optional dependency on development machines.
-        try:
-            from webrtc.webrtc_stream_module import WebRTCStreamModule
+        WebRTCStreamModule = optional_stack_module(
+            "webrtc",
+            "aiortc",
+            seed_group="webrtc",
+            fallback="webrtc.webrtc_stream_module.WebRTCStreamModule",
+        )
+        if WebRTCStreamModule is not None:
             bp.add(WebRTCStreamModule)
-        except ImportError:
+        else:
             logger.info("WebRTCStreamModule unavailable (aiortc not installed)")
 
     if enable_rerun:
-        try:
-            from gateway.rerun_bridge_module import RerunBridgeModule
+        RerunBridgeModule = optional_stack_module(
+            "visualization",
+            "rerun",
+            seed_group="visualization",
+            fallback="gateway.rerun_bridge_module.RerunBridgeModule",
+        )
+        if RerunBridgeModule is not None:
             bp.add(RerunBridgeModule, web_port=rerun_port)
-        except ImportError:
+        else:
             logger.warning("RerunBridgeModule not available")
 
     return bp

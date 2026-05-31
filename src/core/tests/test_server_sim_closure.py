@@ -88,6 +88,8 @@ def test_readme_full_closure_command_uses_g4_server_full_sim_preset():
     )[1].split("```", 1)[0]
 
     assert "--preset g4_server_full_sim" in command_section
+    assert "--required-only" in command_section
+    assert "--run-missing" not in command_section
 
 
 def test_g4_summary_required_gate_sequence_preserves_core_order(tmp_path: Path, monkeypatch):
@@ -1381,6 +1383,10 @@ def test_server_sim_closure_native_pct_command_loads_ros_python_environment():
     assert "/opt/ros/humble/local/lib/python3.10/dist-packages" in spec.command
     assert "sim/scripts/launch_mujoco_fastlio2_live.sh pct-moving-obstacle-video" in spec.command
     assert (
+        "artifacts/server_sim_closure/native_pct_mujoco/report.*.server.json"
+        in spec.default_patterns
+    )
+    assert (
         "LINGTU_MUJOCO_LIVE_PCT_SOURCE_REPORT=artifacts/server_sim_closure/large_terrain/report.json"
         in spec.command
     )
@@ -1479,6 +1485,8 @@ def test_server_sim_closure_saved_map_relocalize_command_uses_runtime_gate():
     assert "--scan-time-profile map_metadata" in spec.command
     assert "server_sim_closure/saved_map_relocalize_runtime/report.json" in spec.command
     assert "--strict" in spec.command
+    assert any("MuJoCo/Fast-LIO live feed" in item for item in spec.host_requirements)
+    assert any("localizer runtime" in item for item in spec.host_requirements)
 
 
 def test_server_sim_closure_pct_saved_map_navigation_command_uses_composed_gate():
@@ -1818,6 +1826,39 @@ def test_server_sim_closure_rejects_weak_multifloor_exploration_report(tmp_path:
     assert "cross_floor floor-graph composition not verified" in gaps
 
 
+def test_server_sim_closure_multifloor_surfaces_pct_runtime_blocker(tmp_path: Path):
+    weak = _complete_multifloor_report()
+    weak["passed"] = False
+    weak["production_local_planner_verified"] = False
+    weak["native_pct_gate_passed_count"] = 0
+    weak["native_pct_blocked_count"] = 4
+    for case in weak["cases"]:
+        case["passed"] = False
+        case["native_pct_gate"] = {
+            "ok": False,
+            "status": "blocked",
+            "runtime": {
+                "ok": False,
+                "error": "No runnable PCT native modules for arch=x86_64 python=py313",
+            },
+        }
+    report_path = _write_json(tmp_path / "multifloor_pct_runtime_missing.json", weak)
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"multifloor_exploration": report_path},
+        required={"multifloor_exploration"},
+    )
+
+    gate = summary["gates"]["multifloor_exploration"]
+    assert "PCT native runtime unavailable" in gate["blockers"]
+    assert "environment_runtime" in summary["algorithm_validation"]["gate_categories"][
+        "multifloor_exploration"
+    ]
+    action = summary["algorithm_validation"]["next_actions"][0]
+    assert action["gate"] == "multifloor_exploration"
+    assert action["category"] == "environment_runtime"
+
+
 def test_server_sim_closure_rejects_weak_gateway_dry_run_report(tmp_path: Path):
     weak = _write_json(
         tmp_path / "gateway_weak.json",
@@ -2006,7 +2047,17 @@ def test_server_sim_closure_summary_lists_missing_required_commands(
     assert [item["name"] for item in summary["missing_required_commands"]] == [
         "large_terrain"
     ]
-    assert "large_terrain_nav_validation.py" in summary["missing_required_commands"][0]["command"]
+    command = summary["missing_required_commands"][0]
+    assert "large_terrain_nav_validation.py" in command["command"]
+    assert command["expected_report_path"] == (
+        "artifacts/server_sim_closure/large_terrain/report.json"
+    )
+    assert "artifacts/large_terrain_nav_validation*/report.json" in command["accepted_patterns"]
+    assert any("PCT native extension modules" in item for item in command["host_requirements"])
+    assert any("CPython 3.10" in item for item in command["host_requirements"])
+    assert summary["gates"]["large_terrain"]["host_requirements"] == command["host_requirements"]
+    assert summary["gates"]["large_terrain"]["expected_report_path"] == command["expected_report_path"]
+    assert summary["host_requirements"]["large_terrain"] == command["host_requirements"]
 
 
 def test_server_sim_closure_run_missing_executes_missing_required_gate(
@@ -4484,10 +4535,52 @@ def test_server_sim_closure_next_actions_separate_runtime_blocker_from_missing_r
     assert actions["large_terrain"]["action_type"] == "fix_runtime_then_rerun"
     assert "PCT native runtime unavailable" in actions["large_terrain"]["blockers"]
     assert "large_terrain_nav_validation.py" in actions["large_terrain"]["command"]
+    assert any(
+        "PCT native extension modules" in item
+        for item in actions["large_terrain"]["host_requirements"]
+    )
+    assert actions["large_terrain"]["expected_report_path"] == (
+        "artifacts/server_sim_closure/large_terrain/report.json"
+    )
+    assert "artifacts/large_terrain_nav_validation*/report.json" in actions["large_terrain"][
+        "accepted_patterns"
+    ]
     assert actions["fastlio2_dynamic_inspection"]["category"] == "artifact_contract"
     assert actions["fastlio2_dynamic_inspection"]["action_type"] == "generate_missing_report"
     assert "launch_mujoco_fastlio2_live.sh" in actions["fastlio2_dynamic_inspection"]["command"]
+    assert actions["fastlio2_dynamic_inspection"]["expected_report_path"].startswith(
+        "artifacts/server_sim_closure/mujoco_fastlio2_live"
+    )
+    assert any(
+        "inspection" in pattern
+        for pattern in actions["fastlio2_dynamic_inspection"]["accepted_patterns"]
+    )
+    assert any(
+        "ROS 2 Humble" in item
+        for item in actions["fastlio2_dynamic_inspection"]["host_requirements"]
+    )
+    assert any(
+        "MuJoCo EGL" in item
+        for item in actions["fastlio2_dynamic_inspection"]["host_requirements"]
+    )
     assert summary["algorithm_validation"]["next_actions"] == summary["next_actions"]
+
+
+def test_server_sim_closure_saved_map_relocalize_next_action_lists_localizer_host():
+    summary = server_sim_closure.summarize(
+        report_overrides={},
+        required={"saved_map_relocalize"},
+        include_optional=False,
+    )
+
+    action = summary["next_actions"][0]
+    assert action["gate"] == "saved_map_relocalize"
+    assert action["expected_report_path"] == (
+        "artifacts/server_sim_closure/saved_map_relocalize_runtime/report.json"
+    )
+    assert any("MuJoCo/Fast-LIO live feed" in item for item in action["host_requirements"])
+    assert any("localizer runtime" in item for item in action["host_requirements"])
+    assert summary["host_requirements"]["saved_map_relocalize"] == action["host_requirements"]
 
 
 def test_server_sim_closure_fastlio2_dynamic_inspection_command_uses_pct_contract():

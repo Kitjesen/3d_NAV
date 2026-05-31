@@ -27,6 +27,35 @@ LIVE_NAV_MAP_TOPIC = "/nav/map_cloud"
 DEFAULT_REQUIRED_MAX_REPORT_AGE_S = 24.0 * 60.0 * 60.0
 DEFAULT_FRESHNESS_REQUIRED_GATES = frozenset(G4_SERVER_FULL_SIM_REQUIRED_GATES)
 
+LOCAL_NON_MOTION_HOST_REQUIREMENTS = (
+    "local Python runtime only",
+    "must preserve simulation_only=true, real_robot_motion=false, cmd_vel_sent_to_hardware=false",
+)
+PCT_NATIVE_HOST_REQUIREMENTS = (
+    "Linux host or S100P/aarch64 runtime with PCT native extension modules matching the host architecture",
+    "Python ABI matching the built PCT modules; the current checked-good bundled host ABI is CPython 3.10",
+    "PCT shared libraries available next to the extension modules or through LINGTU_PCT_LIB_DIR",
+)
+ROS2_MUJOCO_PCT_HOST_REQUIREMENTS = (
+    *PCT_NATIVE_HOST_REQUIREMENTS,
+    "ROS 2 Humble environment sourced",
+    "MuJoCo EGL/headless rendering available",
+    "isolated simulation domain with no physical robot drivers or hardware command publishers",
+)
+ROS2_MUJOCO_LOCALIZATION_HOST_REQUIREMENTS = (
+    "ROS 2 Humble environment sourced",
+    "MuJoCo/Fast-LIO live feed available in an isolated simulation domain",
+    "localizer runtime available (ros2 run localizer localizer_node)",
+    "generated saved-map assets available",
+    "no physical robot drivers or hardware command publishers",
+)
+ROS2_GAZEBO_HOST_REQUIREMENTS = (
+    "ROS 2 Humble environment sourced",
+    "Gazebo/Ignition runtime available",
+    "isolated ROS_DOMAIN_ID and Gazebo partition",
+    "no physical robot drivers or hardware command publishers",
+)
+
 
 @dataclass(frozen=True)
 class GateSpec:
@@ -35,6 +64,8 @@ class GateSpec:
     default_patterns: tuple[str, ...]
     command: str
     evaluator: Callable[[dict[str, Any]], tuple[bool, list[str], dict[str, Any]]]
+    host_requirements: tuple[str, ...] = ()
+    expected_report_path: str = ""
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -2209,14 +2240,27 @@ def _eval_multifloor_exploration(report: dict[str, Any]) -> tuple[bool, list[str
     cases = list(report.get("cases") or [])
     if len(cases) < len(required_routes):
         blockers.append("case_count is lower than required route count")
+    native_pct_runtime_blocked = int(report.get("native_pct_blocked_count") or 0) > 0
     for case in cases:
         route = str(case.get("route") or "")
         if case.get("passed") is not True:
             blockers.append(f"{route or 'unknown'} case did not pass")
         if (case.get("lidar_localization") or {}).get("ok") is not True:
             blockers.append(f"{route or 'unknown'} lidar_localization failed")
-        if (case.get("native_pct_gate") or {}).get("ok") is not True:
+        native_gate = case.get("native_pct_gate") or {}
+        if native_gate.get("ok") is not True:
             blockers.append(f"{route or 'unknown'} native_pct_gate failed")
+        runtime = native_gate.get("runtime") or native_gate.get("native_runtime") or {}
+        runtime_error = str(runtime.get("error") or native_gate.get("reason") or "").lower()
+        if (
+            native_gate.get("status") == "blocked"
+            and (
+                runtime.get("ok") is False
+                or "no runnable pct native modules" in runtime_error
+                or "pct planner unavailable" in runtime_error
+            )
+        ):
+            native_pct_runtime_blocked = True
         if (case.get("command_flow") or {}).get("ok") is not True:
             blockers.append(f"{route or 'unknown'} command_flow failed")
         if (case.get("tracking_replay") or {}).get("ok") is not True:
@@ -2232,6 +2276,8 @@ def _eval_multifloor_exploration(report: dict[str, Any]) -> tuple[bool, list[str
             blockers.append("cross_floor floor-graph composition not verified")
         if int(gate.get("native_pct_feasible_segments") or 0) < 2:
             blockers.append("cross_floor does not have two feasible native PCT segments")
+    if native_pct_runtime_blocked and "PCT native runtime unavailable" not in blockers:
+        blockers.append("PCT native runtime unavailable")
 
     return not blockers, blockers, {
         "case_count": len(cases),
@@ -2241,6 +2287,8 @@ def _eval_multifloor_exploration(report: dict[str, Any]) -> tuple[bool, list[str
         "frontier_loop_enabled": report.get("frontier_loop_enabled"),
         "frontier_rounds": len(rounds),
         "native_pct_gate_passed_count": report.get("native_pct_gate_passed_count"),
+        "native_pct_blocked_count": report.get("native_pct_blocked_count"),
+        "native_pct_runtime_blocked": native_pct_runtime_blocked,
         "validation_level": report.get("validation_level"),
     }
 
@@ -2257,6 +2305,7 @@ GATES: tuple[GateSpec, ...] = (
         "--acceptance-mode non_motion "
         "--json-out artifacts/server_sim_closure/gateway_runtime_acceptance/report.json",
         _eval_gateway_runtime_acceptance,
+        host_requirements=LOCAL_NON_MOTION_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "multifloor_exploration",
@@ -2271,6 +2320,7 @@ GATES: tuple[GateSpec, ...] = (
         "--output-dir artifacts/server_sim_closure/multifloor_exploration "
         "--json-out artifacts/server_sim_closure/multifloor_exploration/report.json --strict",
         _eval_multifloor_exploration,
+        host_requirements=(*LOCAL_NON_MOTION_HOST_REQUIREMENTS, *PCT_NATIVE_HOST_REQUIREMENTS),
     ),
     GateSpec(
         "large_terrain",
@@ -2281,12 +2331,14 @@ GATES: tuple[GateSpec, ...] = (
         ),
         "PYTHONPATH=src:. python3 sim/scripts/large_terrain_nav_validation.py --output-dir artifacts/server_sim_closure/large_terrain --planners pct,astar --json-out artifacts/server_sim_closure/large_terrain/report.json",
         _eval_large_terrain,
+        host_requirements=(*LOCAL_NON_MOTION_HOST_REQUIREMENTS, *PCT_NATIVE_HOST_REQUIREMENTS),
     ),
     GateSpec(
         "native_pct_mujoco",
         "Native PCT route through ROS2 localPlanner/pathFollower into MuJoCo kinematic motion",
         (
             "artifacts/server_sim_closure/native_pct_mujoco/report.json",
+            "artifacts/server_sim_closure/native_pct_mujoco/report.*.server.json",
             "artifacts/server_sim_closure/mujoco_fastlio2_live/pct-moving-obstacle-*/report.json",
             "artifacts/native_pct_mujoco_gate*/report.json",
             "artifacts/native_pct_large_terrain*/report.json",
@@ -2303,6 +2355,7 @@ GATES: tuple[GateSpec, ...] = (
         "LINGTU_MUJOCO_LIVE_PCT_CLOSURE=0 "
         "bash sim/scripts/launch_mujoco_fastlio2_live.sh pct-moving-obstacle-video'",
         _eval_native_pct_mujoco,
+        host_requirements=ROS2_MUJOCO_PCT_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "dynamic_obstacle_local_planner",
@@ -2315,6 +2368,7 @@ GATES: tuple[GateSpec, ...] = (
         "--backend nanobind "
         "--json-out artifacts/server_sim_closure/dynamic_obstacle_local_planner/report.json",
         _eval_dynamic_obstacle_local_planner,
+        host_requirements=LOCAL_NON_MOTION_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "fastlio2_live",
@@ -2330,6 +2384,7 @@ GATES: tuple[GateSpec, ...] = (
         "LINGTU_MUJOCO_LIVE_RUN_DIR=artifacts/server_sim_closure/mujoco_fastlio2_live "
         "bash sim/scripts/launch_mujoco_fastlio2_live.sh gate",
         _eval_fastlio2_live,
+        host_requirements=ROS2_MUJOCO_PCT_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "fastlio2_dynamic_inspection",
@@ -2354,6 +2409,7 @@ GATES: tuple[GateSpec, ...] = (
         "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
         "bash sim/scripts/launch_mujoco_fastlio2_live.sh inspection-moving-obstacle-video'",
         _eval_fastlio2_dynamic_inspection,
+        host_requirements=ROS2_MUJOCO_PCT_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "moving_obstacle_sweep",
@@ -2378,6 +2434,7 @@ GATES: tuple[GateSpec, ...] = (
         "--required-scan-time-profile physical_rolling --require-video-file "
         "--json-out artifacts/server_sim_closure/moving_obstacle_sweep/report.json --strict'",
         _eval_moving_obstacle_sweep,
+        host_requirements=ROS2_MUJOCO_PCT_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "large_loop_closure",
@@ -2410,6 +2467,7 @@ GATES: tuple[GateSpec, ...] = (
         "--required-scan-time-profile physical_rolling --require-video-file "
         "--json-out artifacts/server_sim_closure/large_loop_closure/report.json --strict'",
         _eval_large_loop_closure,
+        host_requirements=ROS2_MUJOCO_PCT_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "mujoco_tare_exploration",
@@ -2431,6 +2489,7 @@ GATES: tuple[GateSpec, ...] = (
         "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
         "bash sim/scripts/launch_mujoco_fastlio2_live.sh tare'",
         _eval_fastlio2_live,
+        host_requirements=ROS2_MUJOCO_PCT_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "policy_nav",
@@ -2450,6 +2509,7 @@ GATES: tuple[GateSpec, ...] = (
         "--min-nav-motion 0.35 --nav-max-angular-z 0.15 "
         "--json-out artifacts/server_sim_closure/policy_nav/report.json",
         _eval_policy_nav,
+        host_requirements=LOCAL_NON_MOTION_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "gateway_dry_run",
@@ -2457,6 +2517,7 @@ GATES: tuple[GateSpec, ...] = (
         ("artifacts/gateway_goal_dry_run*/report.json", "artifacts/server_sim_closure/gateway_dry_run/report.json"),
         "PYTHONPATH=src:. python3 sim/scripts/gateway_goal_dry_run_gate.py --json-out artifacts/server_sim_closure/gateway_dry_run/report.json --strict",
         _eval_gateway_dry_run,
+        host_requirements=LOCAL_NON_MOTION_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "routecheck_preflight",
@@ -2470,6 +2531,7 @@ GATES: tuple[GateSpec, ...] = (
         "--map server_sim_demo --goal-x 1.0 --goal-y 0.0 --goal-yaw 0.0 "
         "--json-out artifacts/server_sim_closure/routecheck/summary.json --strict",
         _eval_routecheck_preflight,
+        host_requirements=LOCAL_NON_MOTION_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "gazebo_runtime",
@@ -2498,6 +2560,7 @@ GATES: tuple[GateSpec, ...] = (
         "--json-out artifacts/server_sim_closure/gazebo_runtime_explore/report_grid_astar_odomfoot.json "
         "--launch-log artifacts/server_sim_closure/gazebo_runtime_explore/launch_grid_astar_odomfoot.log'",
         _eval_gazebo_runtime,
+        host_requirements=ROS2_GAZEBO_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "cmu_unity_sim",
@@ -2509,6 +2572,7 @@ GATES: tuple[GateSpec, ...] = (
         "PYTHONPATH=src:. python3 sim/scripts/cmu_unity_sim_gate.py "
         "--json-out artifacts/server_sim_closure/cmu_unity_sim/report.json --strict",
         _eval_cmu_unity_sim,
+        host_requirements=LOCAL_NON_MOTION_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "cmu_unity_runtime",
@@ -2526,6 +2590,7 @@ GATES: tuple[GateSpec, ...] = (
         "python3 sim/scripts/cmu_unity_runtime_gate.py "
         "--json-out artifacts/server_sim_closure/cmu_unity_runtime/report.json --strict'",
         _eval_cmu_unity_runtime,
+        host_requirements=ROS2_GAZEBO_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "cmu_unity_pct_strict",
@@ -2562,6 +2627,7 @@ GATES: tuple[GateSpec, ...] = (
         "/opt/ros/humble/lib/python3.10/site-packages:$PYTHONPATH "
         "sim/scripts/launch_cmu_unity_lingtu_runtime.sh start --gate --rviz'",
         _eval_cmu_unity_pct_strict,
+        host_requirements=ROS2_GAZEBO_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "saved_map_relocalize",
@@ -2580,6 +2646,7 @@ GATES: tuple[GateSpec, ...] = (
         "--localizer-refine-score-thresh 0.35 "
         "--json-out artifacts/server_sim_closure/saved_map_relocalize_runtime/report.json --strict",
         _eval_saved_map_relocalize,
+        host_requirements=ROS2_MUJOCO_LOCALIZATION_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "bbs3d_kidnapped_relocalize",
@@ -2600,6 +2667,7 @@ GATES: tuple[GateSpec, ...] = (
         "--run-dir artifacts/server_sim_closure/bbs3d_kidnapped_relocalize "
         "--json-out artifacts/server_sim_closure/bbs3d_kidnapped_relocalize/report.json --strict",
         _eval_saved_map_relocalize,
+        host_requirements=ROS2_MUJOCO_LOCALIZATION_HOST_REQUIREMENTS,
     ),
     GateSpec(
         "pct_saved_map_navigation",
@@ -2617,6 +2685,7 @@ GATES: tuple[GateSpec, ...] = (
         "/usr/bin/python3 sim/scripts/pct_saved_map_navigation_gate.py "
         "--json-out artifacts/server_sim_closure/pct_saved_map_navigation/report.json --strict'",
         _eval_pct_saved_map_navigation,
+        host_requirements=ROS2_MUJOCO_PCT_HOST_REQUIREMENTS,
     ),
 )
 
@@ -2708,6 +2777,21 @@ def _ordered_gate_names(names: set[str]) -> list[str]:
     return ordered
 
 
+def _expected_report_path(spec: GateSpec) -> str:
+    if spec.expected_report_path:
+        return spec.expected_report_path
+    return spec.default_patterns[0] if spec.default_patterns else ""
+
+
+def _host_requirements_for_gates(names: set[str]) -> dict[str, list[str]]:
+    specs = {spec.name: spec for spec in GATES}
+    return {
+        name: list(specs[name].host_requirements)
+        for name in _ordered_gate_names(names)
+        if name in specs
+    }
+
+
 def _missing_required_commands(
     gates: dict[str, Any],
     missing_or_failed: list[str],
@@ -2725,7 +2809,10 @@ def _missing_required_commands(
                 "description": spec.description,
                 "status": gate.get("status", "missing"),
                 "path": gate.get("path", ""),
+                "expected_report_path": _expected_report_path(spec),
+                "accepted_patterns": list(spec.default_patterns),
                 "command": spec.command,
+                "host_requirements": list(spec.host_requirements),
             }
         )
     return commands
@@ -3012,6 +3099,9 @@ def _next_actions(
                 "blockers": list(gate.get("blockers") or ["not verified"]),
                 "command": gate.get("command", ""),
                 "report_path": gate.get("path", ""),
+                "expected_report_path": gate.get("expected_report_path", ""),
+                "accepted_patterns": list(gate.get("accepted_patterns") or []),
+                "host_requirements": list(gate.get("host_requirements") or []),
             }
         )
     return actions
@@ -3092,7 +3182,10 @@ def summarize(
                 "status": "missing",
                 "blockers": ["report missing"],
                 "path": "",
+                "expected_report_path": _expected_report_path(spec),
+                "accepted_patterns": list(spec.default_patterns),
                 "command": spec.command,
+                "host_requirements": list(spec.host_requirements),
                 "is_fresh": False,
             }
             continue
@@ -3104,7 +3197,10 @@ def summarize(
                 "status": "missing",
                 "blockers": [f"report missing: {path}"],
                 "path": str(path),
+                "expected_report_path": _expected_report_path(spec),
+                "accepted_patterns": list(spec.default_patterns),
                 "command": spec.command,
+                "host_requirements": list(spec.host_requirements),
                 "is_fresh": False,
             }
             continue
@@ -3133,7 +3229,10 @@ def summarize(
                 "report_timestamp": report_timestamp,
                 "max_report_age_s": spec_max_report_age_s,
                 "is_fresh": not freshness_blockers,
+                "expected_report_path": _expected_report_path(spec),
+                "accepted_patterns": list(spec.default_patterns),
                 "command": spec.command,
+                "host_requirements": list(spec.host_requirements),
                 "evidence": evidence,
             }
         except Exception as exc:
@@ -3148,7 +3247,10 @@ def summarize(
                 "report_age_s": round(report_age_s, 3),
                 "max_report_age_s": spec_max_report_age_s,
                 "is_fresh": not freshness_blockers,
+                "expected_report_path": _expected_report_path(spec),
+                "accepted_patterns": list(spec.default_patterns),
                 "command": spec.command,
+                "host_requirements": list(spec.host_requirements),
             }
 
     missing_or_failed = [
@@ -3178,6 +3280,7 @@ def summarize(
         "max_report_age_s": max_report_age_s,
         "required": sorted(required_names),
         "required_gate_sequence": _ordered_gate_names(required_names),
+        "host_requirements": _host_requirements_for_gates(required_names),
         "verified": verified,
         "missing_or_failed": missing_or_failed,
         "missing_required_commands": _missing_required_commands(gates, missing_or_failed),

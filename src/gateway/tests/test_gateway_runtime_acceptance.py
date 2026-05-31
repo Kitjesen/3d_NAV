@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -337,10 +339,121 @@ def test_gateway_runtime_acceptance_passes_non_motion_without_ros2_topic():
     assert "live field samples absent" in payload["advisories"][0]
 
 
+def test_gateway_runtime_acceptance_non_motion_exposes_top_level_sim_safety_flags():
+    from core.gateway_runtime_acceptance import evaluate_gateway_runtime_acceptance
+
+    payload = evaluate_gateway_runtime_acceptance(
+        _snapshots(mode="simulation"),
+        mode="non_motion",
+    )
+
+    assert payload["ok"] is True
+    assert payload["simulation_only"] is True
+    assert payload["real_robot_motion"] is False
+    assert payload["cmd_vel_sent_to_hardware"] is False
+
+
 def test_gateway_runtime_acceptance_fetches_client_readiness_snapshot():
     from core.gateway_runtime_acceptance import GATEWAY_ACCEPTANCE_ENDPOINTS
 
     assert GATEWAY_ACCEPTANCE_ENDPOINTS["readiness"] == "/api/v1/readiness"
+
+
+def test_gateway_runtime_acceptance_non_motion_uses_local_stub_when_gateway_is_down(
+    monkeypatch,
+):
+    import core.gateway_runtime_acceptance as acceptance_mod
+
+    def _offline_fetch(base_url, name, path, timeout_sec):
+        return acceptance_mod.GatewayFetchResult(
+            name=name,
+            path=path,
+            ok=False,
+            status=None,
+            payload={"_fetch_error": "connection refused"},
+            error="connection refused",
+        )
+
+    monkeypatch.setattr(acceptance_mod, "_fetch_json", _offline_fetch)
+
+    payload = acceptance_mod.collect_gateway_runtime_acceptance(
+        gateway_url=acceptance_mod.DEFAULT_GATEWAY_URL,
+        timeout_sec=0.01,
+        mode="non_motion",
+    )
+
+    assert payload["ok"] is True
+    assert payload["mode"] == "non_motion"
+    assert payload["runtime_contract"] == "in_process_stub"
+    assert payload["snapshot_source"] == "in_process_stub"
+    assert payload["simulation_only"] is True
+    assert payload["real_robot_motion"] is False
+    assert payload["cmd_vel_sent_to_hardware"] is False
+    assert payload["ros2_topic_required"] is False
+    assert payload["checks"]["gateway_contract"]["ok"] is True
+    assert payload["checks"]["readiness"]["non_motion_safe"] is True
+
+
+def test_gateway_runtime_acceptance_field_does_not_use_local_stub_when_gateway_is_down(
+    monkeypatch,
+):
+    import core.gateway_runtime_acceptance as acceptance_mod
+
+    def _offline_fetch(base_url, name, path, timeout_sec):
+        return acceptance_mod.GatewayFetchResult(
+            name=name,
+            path=path,
+            ok=False,
+            status=None,
+            payload={"_fetch_error": "connection refused"},
+            error="connection refused",
+        )
+
+    monkeypatch.setattr(acceptance_mod, "_fetch_json", _offline_fetch)
+
+    payload = acceptance_mod.collect_gateway_runtime_acceptance(
+        gateway_url=acceptance_mod.DEFAULT_GATEWAY_URL,
+        timeout_sec=0.01,
+        mode="field",
+    )
+
+    assert payload["ok"] is False
+    assert payload.get("snapshot_source") != "in_process_stub"
+    assert "gateway endpoint unavailable: capabilities" in "\n".join(
+        payload["blockers"]
+    )
+
+
+def test_gateway_runtime_acceptance_in_process_stub_stays_non_motion(monkeypatch):
+    import core.gateway_runtime_acceptance as acceptance_mod
+    from core.utils.blackbox_recorder import BlackBoxRecorder
+    from gateway.gateway_module import GatewayModule
+
+    start_calls = []
+    blackbox_env = []
+
+    def _fail_start(self):
+        start_calls.append("start")
+        raise AssertionError("in-process fallback must not start GatewayModule")
+
+    def _fake_blackbox_from_env(cls):
+        blackbox_env.append(os.environ.get("LINGTU_BLACKBOX_ENABLED"))
+        return SimpleNamespace(record=lambda *args, **kwargs: None)
+
+    monkeypatch.setattr(GatewayModule, "start", _fail_start)
+    monkeypatch.setattr(BlackBoxRecorder, "from_env", classmethod(_fake_blackbox_from_env))
+    monkeypatch.setenv("LINGTU_BLACKBOX_ENABLED", "1")
+
+    snapshots = acceptance_mod._collect_in_process_stub_gateway_snapshots()
+
+    ports_out = snapshots["runtime_dataflow"]["module_ports"]["GatewayModule"][
+        "ports_out"
+    ]
+    for port_name in ("goal_pose", "cmd_vel", "stop_cmd", "instruction"):
+        assert ports_out[port_name]["msg_count"] == 0
+    assert start_calls == []
+    assert blackbox_env == ["0"]
+    assert os.environ["LINGTU_BLACKBOX_ENABLED"] == "1"
 
 
 def test_gateway_runtime_acceptance_field_requires_live_samples():
