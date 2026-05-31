@@ -15,7 +15,7 @@ LingTu (鐏甸€? is an autonomous navigation system for quadruped robots in ou
 
 ```bash
 # Framework tests (no ROS2 needed, runs on any machine)
-python -m pytest src/core/tests/ -q       # 1226 tests
+python -m pytest src/core/tests/ -q       # 2049 tests
 
 # CLI with interactive REPL (profile-based, recommended)
 python lingtu.py                          # interactive profile selector
@@ -104,26 +104,20 @@ Full definitions in `cli/profiles_data.py` (14 named profiles + 7 robot presets 
 
 | Profile | Robot Preset | SLAM | Semantic | Use Case |
 |---------|-------------|------|----------|----------|
-| `stub` | stub | none | no | Framework testing |
-| `dev` | stub | none | yes | Semantic pipeline dev |
-| `map` | s100p | fastlio2 | no | Build new map via SLAM |
-| `nav` | s100p | bridge | yes | Navigate using saved map (PCT) |
+| `map` | s100p | fastlio2 | no | Build a new map of the environment |
+| `nav` | s100p | bridge | yes | Navigate using a saved map (PCT) |
 | `explore` | s100p | fastlio2 | yes | Wavefront frontier exploration |
 | `tare_explore` | s100p | fastlio2 | yes | CMU TARE hierarchical exploration |
+| `super_lio` | s100p | super_lio | yes | Evaluate Super-LIO external LIO backend |
+| `super_lio_relocation` | s100p | super_lio_relocation | yes | Super-LIO relocation against saved map |
 | `sim` | sim | bridge | yes | MuJoCo full simulation |
 | `sim_mujoco_live` | sim_gazebo | none | no | MuJoCo raw MID-360 + Fast-LIO live sim |
 | `sim_gazebo` | sim_gazebo | none | yes | Gazebo/GZ ROS-native simulation |
 | `sim_industrial` | sim_gazebo | none | yes | Engineering industrial-yard simulation |
 | `sim_cmu_tare` | sim_gazebo | none | no | CMU Unity + external TARE simulation |
 | `sim_nav` | stub | none | no | Pure-Python nav sim (no ROS2/C++) |
-| `super_lio` | s100p | super_lio | yes | Evaluate Super-LIO backend |
-| `super_lio_relocation` | s100p | super_lio_relocation | yes | Super-LIO relocation against saved map |
-| `s100p` | thunder | localizer | yes | Real robot navigation (alias) |
-| `thunder` | thunder | localizer | yes | Direct thunder robot control |
-| `navigate` | thunder | localizer | yes | Alias for s100p |
-| `ros2` | sim_ros2 | bridge | yes | ROS2 simulation |
-| `sim_gazebo` | sim_gazebo | none | yes | Gazebo sim (repeated as standalone) |
-| `explore` | thunder | fastlio2 | yes | yes | Exploration (no map) |
+| `dev` | stub | none | yes | Semantic pipeline dev |
+| `stub` | stub | none | no | Framework testing |
 
 ### Backpressure Policies
 
@@ -148,13 +142,16 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 |-----------|------|
 | `core/` | Framework: Module, Blueprint, Transport, NativeModule, Registry, stacks/, utils, msgs, tests (948) |
 | `nav/` | NavigationModule, SafetyRing, CmdVelMux, GlobalPlannerService, WaypointTracker, OccupancyGrid, ESDF, ElevationMap |
-| `semantic/` | perception/ (Detector+Encoder), planner/ (SemanticPlanner+LLM+VisualServo+AgentLoop), reconstruction/ |
+| `semantic/` | perception/ (Detector+Encoder), planner/ (SemanticPlanner+LLM+VisualServo+AgentLoop), reconstruction/ (flattened — one-level subdirs, no nested modules/) |
 | `memory/` | SemanticMapper, EpisodicMemory, TaggedLocations, VectorMemory, RoomObjectKG, TopologySemGraph |
 | `drivers/` | thunder/ (ThunderDriver + CameraBridge), sim/ (stub, MuJoCo, ROS2), TeleopModule |
 | `gateway/` | GatewayModule (FastAPI HTTP/WS/SSE), MCPServerModule (MCP tools) |
 | `base_autonomy/` | TerrainModule + LocalPlannerModule + PathFollowerModule (C++ nanobind backends) |
 | `slam/` | SLAMModule (Fast-LIO2/Point-LIO/Localizer), SlamBridgeModule, C++ SLAM nodes |
 | `global_planning/` | pct_planner (C++ ele_planner.so) + _AStarBackend / _PCTBackend (via Registry) |
+| `exploration/` | TARE exploration (ExplorationSupervisorModule, TareExplorerModule, ROS2 bridge) |
+| `webrtc/` | WebRTC video streaming (WebRTCStreamModule) |
+| `legacy/` | Retired code from pre-v1.7 refactor: old gateway, thunder driver, pct_planner, semantic, scripts |
 
 Note: `calibration/` and `sim/` live at repo root (not under `src/`). See [Sensor Calibration](#sensor-calibration-calibration) section. For `sim/`, see the `sim/engine/` documentation below.
 
@@ -190,6 +187,9 @@ Note: `calibration/` and `sim/` live at repo root (not under `src/`). See [Senso
 | `scripts/lingtu` | **Unified Operations CLI** (status/watch/map/nav/svc/log/health) |
 | `scripts/build_dufomap.sh` | Idempotent aarch64 build of DUFOMap (apt + patch + cmake) |
 | `scripts/dufomap_offline_test.py` | Standalone validator: run DUFOMap on existing map, print stats |
+| `src/nav/services/frame_contract.py` | Central frame-id definitions + integrity checks for all coordinate frames |
+| `src/nav/ros2_waypoint_bridge_module.py` | ROS2 WaypointBridge: accepts /nav/goal goals from external ROS2 nodes |
+| `src/gateway/templates/map_viewer.html` | Embedded client-side map viewer served by GatewayModule |
 | `config/robot_config.yaml` | Robot physical parameters (single source of truth) |
 | `config/dufomap.toml` | Lingtu-tuned DUFOMap config (Livox Mid-360 thresholds) |
 | `docs/05-specialized/dynamic_obstacle_removal.md` | DUFOMap Phase 2 design + roadmap |
@@ -199,13 +199,13 @@ Note: `calibration/` and `sim/` live at repo root (not under `src/`). See [Senso
 
 ```bash
 # Framework tests (primary, no ROS2 needed)
-python -m pytest src/core/tests/ -q                    # 1226 tests, ~5s
+python -m pytest src/core/tests/ -q                    # 2049 tests, ~45s
 
 # Fast tests (no ROS2, no sim, no slow — skip heavy markers)
 python -m pytest src/core/tests/ src/nav/tests/ src/gateway/tests/ src/memory/tests/ -q -m "not slow and not ros2 and not sim"
 
 # Simulation tests (MuJoCo/Gazebo contract validation, no robot needed)
-python -m pytest sim/tests/ -q                         # ~20 scenario-level tests
+python -m pytest sim/tests/ -q                         # 509 scenario-level tests
 
 # C++ nav_core tests (standalone, no ROS2)
 cd src/nav/core && mkdir -p build && cd build
@@ -525,56 +525,6 @@ lidar:
 | `src/core/utils/calibration_check.py` | 杩愯鏃舵爣瀹氬弬鏁版牎楠?(鍚姩鏃惰皟鐢? |
 | `config/robot_config.yaml` | 鏍囧畾鍙傛暟鏈€缁堝綊瀹?(single source of truth) |
 
-## Sensor Calibration (`calibration/`)
-
-鍑哄巶鏍囧畾宸ュ叿绠憋紝瑕嗙洊 S100P 鍏ㄩ儴浼犳劅鍣ㄣ€傛爣瀹氱粨鏋滅粺涓€鍐欏叆 `config/robot_config.yaml`銆?
-
-### 鏍囧畾娴佺▼ (SOP)
-
-| Step | 鍐呭 | 宸ュ叿 | 鏃堕棿 |
-|------|------|------|------|
-| 1 | 鐩告満鍐呭弬 (妫嬬洏鏍?9脳6) | `calibration/camera/calibrate_intrinsic.py` (OpenCV) | ~5 min |
-| 2 | IMU 鍣０ (Allan Variance) | `calibration/imu/allan_variance_ros2/` (Autoliv) | ~2-3 hr |
-| 3 | LiDAR-IMU 澶栧弬 (8 瀛楄繍鍔? | `calibration/lidar_imu/LiDAR_IMU_Init/` (HKU-MARS) | ~2 min |
-| 4 | 鐩告満-LiDAR 澶栧弬 (target-less) | `calibration/camera_lidar/direct_visual_lidar_calibration/` (koide3) | ~10 min |
-| 5 | 涓€閿簲鐢?| `calibration/apply_calibration.py` 鈫?robot_config.yaml + SLAM configs | 绉掔骇 |
-| 6 | 涓€閿獙璇?| `calibration/verify.py` (鐒﹁窛/鐣稿彉/鏃嬭浆/鎶曞奖閾?sanity check) | 绉掔骇 |
-
-### 鏍囧畾鍙傛暟杈撳嚭
-
-```yaml
-# config/robot_config.yaml
-camera:
-  fx, fy, cx, cy              # Step 1 鐩告満鍐呭弬
-  dist_k1..k3, dist_p1..p2    # Step 1 鐣稿彉绯绘暟
-  position_x/y/z              # Step 4 鐩告満-LiDAR 澶栧弬
-  roll, pitch, yaw            # Step 4 鏃嬭浆
-
-lidar:
-  offset_x/y/z                # Step 3 LiDAR-IMU 澶栧弬 (t_il)
-  roll, pitch, yaw            # Step 3 鏃嬭浆 (r_il)
-```
-
-`apply_calibration.py` 鍚屾椂鍚屾鍒?`src/slam/fastlio2/config/lio.yaml` 鍜?`config/pointlio.yaml` (na, ng, nba, nbg, r_il, t_il)銆?
-
-### 杩愯鏃舵牎楠?
-
-`src/core/utils/calibration_check.py` 鍦?`full_stack_blueprint()` 鍚姩鏃舵牎楠屾爣瀹氬弬鏁帮細
-- FAIL 绾?(濡傜劍璺濅负 0銆佹棆杞煩闃甸潪姝ｄ氦) 鈫?闃绘鍚姩
-- WARN 绾?(濡傜暩鍙樼郴鏁板叏闆? 鈫?鏃ュ織璀﹀憡锛屼笉闃绘柇
-
-### 鍏抽敭鏂囦欢
-
-| File | Purpose |
-|------|---------|
-| `calibration/README.md` | 瀹屾暣 SOP 鏂囨。 (鍚懡浠よ绀轰緥) |
-| `calibration/apply_calibration.py` | 灏?4 绫绘爣瀹氱粨鏋滃啓鍏?robot_config + SLAM 閰嶇疆 |
-| `calibration/verify.py` | 涓€閿獙璇? 鍙傛暟鑼冨洿 + 鎶曞奖閾?+ 璺ㄩ厤缃竴鑷存€?|
-| `calibration/camera/calibrate_intrinsic.py` | 鐩告満鍐呭弬 (capture/calibrate/verify 涓夊悎涓€) |
-| `calibration/lidar_imu/ros2_adapter/` | ROS2鈫扲OS1 bridge 閫傞厤灞?(rosbag 鍥炴斁) |
-| `src/core/utils/calibration_check.py` | 杩愯鏃舵爣瀹氬弬鏁版牎楠?(鍚姩鏃惰皟鐢? |
-| `config/robot_config.yaml` | 鏍囧畾鍙傛暟鏈€缁堝綊瀹?(single source of truth) |
-
 ## Code Style
 
 - **C++**: Google style (`.clang-format`, 2-space indent, 100 col)
@@ -588,5 +538,5 @@ lidar:
 - S100P has no CUDA 鈥?Open3D GPU features unavailable, use C++ terrain_analysis instead
 - Kimi API key may expire 鈥?Slow Path unavailable without valid LLM key
 - ChromaDB optional 鈥?VectorMemoryModule falls back to numpy brute-force search
-- Framework tests (1226) are mock-based 鈥?real hardware integration tests need S100P
+- Framework tests (2049) are mock-based 鈥?real hardware integration tests need S100P
 - C++ test_validation 6 tests fail under `-ffast-math` (NaN/Inf IEEE compliance) 鈥?expected

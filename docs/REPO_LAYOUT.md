@@ -27,21 +27,79 @@ brain/lingtu/
 │   │   │       ├── memory.py
 │   │   │       ├── planner.py
 │   │   │       ├── navigation.py
-│   │   │       ├── exploration.py     # tare | none (wavefront removed 2026-04-25)
+│   │   │       ├── exploration.py  # tare | none (wavefront removed 2026-04-25)
 │   │   │       ├── safety.py
 │   │   │       └── gateway.py
 │   │   └── tests/                # ~1000+ framework tests, no ROS2 needed
 │   ├── nav/               # NavigationModule, SafetyRing, CmdVelMux, OccupancyGrid, ESDF, …
-│   ├── semantic/          # perception/ + planner/ + reconstruction/
+│   │   ├── services/      # frame_contract, geofence, map_manager, patrol, task_scheduler
+│   │   ├── ros2_waypoint_bridge_module.py  # Extracted ROS2 waypoint bridge
+│   │   ├── ros2_grid_bridge_module.py
+│   │   ├── ros2_path_bridge_module.py
+│   │   └── …
+│   ├── semantic/          # Flat perception/ + planner/ + reconstruction/ layout
+│   │   ├── perception/    # api/, impl/, srv/, storage/, tests/
+│   │   ├── planner/       # AgentLoop, GoalResolver, VisualServo, tests/, resource/
+│   │   └── reconstruction/  # server/ + tests/
 │   ├── memory/            # SemanticMapper, EpisodicMemory, Tagged, VectorMemory, KG
 │   ├── drivers/           # thunder/ (gRPC), sim/ (stub, MuJoCo, ROS2), TeleopModule
+│   │   ├── real/          # Real-robot camera drivers
+│   │   ├── gnss/          # GNSS receiver driver
+│   │   ├── livox_ros_driver2/  # Livox MID-360 hardware driver
+│   │   └── tests/         # Driver spec tests
 │   ├── gateway/           # GatewayModule (FastAPI), MCPServerModule
 │   ├── webrtc/            # Optional WebRTC camera stream module (aiortc)
+│   │   └── tests/         # test_webrtc_module.py
 │   ├── base_autonomy/     # C++ terrain + local planner + path follower (nanobind)
-│   ├── global_planning/   # PCT planner (C++ ele_planner.so) + Python adapters
+│   │   └── tests/         # test_autonomy_modules.py
+│   ├── global_planning/   # PCT planner — all snake_case
+│   │   ├── pct_planner/           # C++ ele_planner.so + tomography
+│   │   ├── pct_adapters/          # Python adaptation layer + tests/
+│   │   └── pct_planner_runnable/  # Run wrapper
 │   ├── slam/              # Fast-LIO2, Point-LIO, PGO, Localizer, GNSS bridge
-│   ├── exploration/       # tare_planner submodule + supervisor + Python TAREExplorerModule
-│   └── reconstruction/    # 3D reconstruction
+│   │   └── launch/        # Merged launchers: fastlio2, pointlio, localizer, pgo, hba, genz_icp
+│   ├── exploration/       # TARE exploration
+│   │   ├── tare_planner/          # C++ TARE submodule
+│   │   ├── tests/                 # test_exploration_modules.py
+│   │   ├── tare_explorer_module.py
+│   │   ├── tare_ros2_bridge_module.py  # ROS2 extraction
+│   │   └── exploration_supervisor_module.py
+│   ├── reconstruction/    # 3D reconstruction
+│   └── legacy/            # Consolidation of 5 legacy dirs (gateway, pct_planner, scripts, semantic, thunder)
+│
+├── sim/                   # Simulation: engine, worlds, assets, robots, scripts, validation, evaluation
+│   ├── engine/            # Sim engine core
+│   │   ├── core/          # engine.py, robot.py, sensor.py, world.py
+│   │   ├── mujoco/        # MuJoCo runtime
+│   │   ├── bridge/        # ROS2/Gazebo/Unity adapters (cmu_unity, gazebo_bridge, …)
+│   │   ├── scenarios/     # Scenario definitions
+│   │   └── worlds/        # World definitions
+│   ├── worlds/            # Scene XML/SDF organized by simulator
+│   │   ├── mujoco/        # .xml scene files (building, factory, office, industrial, …)
+│   │   └── gazebo/        # .sdf scene files (demo_room, empty, industrial_park)
+│   ├── bridge/            # Sim bridge (CMU Unity Lingtu adapter)
+│   ├── tests/             # 19 sim integration tests (dataflow, mujoco, relocalize, …)
+│   ├── planning/          # Planning simulation (e2e_nav_test, factory_demo, …)
+│   ├── experiments/       # Experiment runners + configs (ablation, habitat, eval, …)
+│   ├── evaluation/        # Evaluation framework
+│   │   └── slam/          # SLAM evaluation
+│   ├── validation/        # Full-system validation suite
+│   ├── following/         # Person following sim tests
+│   │   ├── person/
+│   │   ├── perception/
+│   │   ├── controller/
+│   │   └── metrics/
+│   ├── datasets/          # Avia, legkilo, …
+│   ├── sensors/           # Simulated sensors (Livox MID-360, WTRTK980)
+│   ├── scripts/           # E2E tests, benchmarks, dataflow
+│   ├── configs/           # Sim configuration files
+│   ├── assets/            # Sim assets (meshes, textures)
+│   ├── robots/            # Robot URDF/MJCF definitions
+│   ├── maps/              # Sim map files
+│   ├── output/            # Sim output artifacts
+│   ├── semantic/          # Semantic sim helpers
+│   ├── external_scenes/   # Imported external scenes
+│   └── launch/            # Sim launch scripts
 │
 ├── config/                # YAML / DDS / robot params (devices.yaml, robot_config.yaml, …)
 ├── calibration/           # Sensor calibration toolbox (camera, IMU, LiDAR, camera-LiDAR)
@@ -52,19 +110,23 @@ brain/lingtu/
 │   ├── apply_calibration.py  # One-click apply → robot_config.yaml + SLAM configs
 │   ├── verify.py          # One-click verify (sanity checks + projection chain)
 │   └── README.md          # Full SOP with command-line examples
-├── launch/                # ROS2 launch — algorithm bridges plus Gazebo simulation scaffold
+├── launch/                # ROS2 launch — profiles + Gazebo simulation scaffold
 │   ├── _robot_config.py
-│   └── profiles/          # SLAM/planner profiles consumed by NativeModule subprocesses
-│       ├── slam_fastlio2.launch.py
-│       ├── slam_pointlio.launch.py
-│       ├── slam_stub.launch.py
-│       ├── localizer_icp.launch.py
-│       ├── planner_pct.launch.py
-│       ├── planner_pct_py.launch.py
-│       ├── planner_far.launch.py
-│       └── planner_stub.launch.py
-├── sim/                   # Simulation engine, worlds, assets, robots, scripts, validation/evaluation
-├── tests/                 # Integration + planning tests (some need ROS2)
+│   ├── profiles/          # SLAM/planner profiles consumed by NativeModule subprocesses
+│   │   ├── slam_fastlio2.launch.py
+│   │   ├── slam_pointlio.launch.py
+│   │   ├── slam_stub.launch.py
+│   │   ├── localizer_icp.launch.py
+│   │   ├── planner_pct.launch.py
+│   │   ├── planner_pct_py.launch.py
+│   │   ├── planner_far.launch.py
+│   │   └── planner_stub.launch.py
+│   └── gazebo_simulation.launch.py  # Root Gazebo simulation scaffold
+├── tests/                 # Remaining integration + planning tests (some need ROS2)
+│   ├── benchmark/         # Performance benchmarks
+│   ├── e2e/               # End-to-end tests
+│   ├── integration/       # Integration tests
+│   └── scripts/           # Script-based tests
 ├── tools/                 # Robot-side helpers (dashboards, BPU export, diagnostics)
 ├── scripts/               # Build helpers, deploy, ota, proto, lingtu CLI shell wrapper
 │   ├── build/             # ROS workspace build helpers, fetch_ortools, build_tare, …
@@ -101,7 +163,7 @@ unit; SLAM and other C++ subsystems are managed via `NativeModule` (see
 | Which modules a profile pulls in | `cli/profiles_data.py` + `src/core/blueprints/full_stack.py` |
 | All cross-stack wires | `src/core/blueprints/full_stack.py` |
 | Which backends are registered for a category | `src/core/registry.py` plus the `@register(...)` calls in each Module file |
-| Simulation folder boundaries | `sim/README.md` (engine/worlds/assets/robots/scripts plus bridge/sensors/datasets, validation/evaluation) |
+| Simulation folder boundaries | `sim/README.md` (engine/core bridge scenarios worlds, mujoco runtime, gazebo SDF scenes, datasets/sensors/scripts, validation/evaluation, following/) |
 | Server-side simulation evidence | `artifacts/server_sim_closure/` generated reports plus `artifacts/server_sim_closure_summary_g4_current.json` |
 | Root Gazebo simulation scaffold | `launch/gazebo_simulation.launch.py` (kept at root because ROS-native launchers reference it directly) |
 | Robot physical parameters | `config/robot_config.yaml` (single source of truth) |

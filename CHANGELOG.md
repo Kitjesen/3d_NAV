@@ -6,6 +6,73 @@ Format: [Semantic Versioning](https://semver.org/) — `MAJOR.MINOR.PATCH`
 
 ---
 
+## [2.3.0] — 2026-04-14~05-31 (Sprint 5-6: 工程结构大重构 + 模块边界强制执行 + 安全性加固)
+
+### 模块解耦与边界强制执行 (15 commits, 43 files changed, +370/-1060)
+
+- **模块测试目录分离** — 将原来集中在 `core/tests/` 的 948 个测试按模块拆分到各自目录：
+  - `gateway/tests/` (13 文件, 333 tests) — 网关 runtime 状态/路由/会话/遥测
+  - `nav/tests/` (9 文件, 295 tests) — FSM/patrol/scheduler/geofence
+  - `slam/tests/` (6 文件, 80 tests) — 后端状态/bridge TF/GNSS 融合
+  - `memory/tests/` (5 文件, 237 tests) — semantic/episodic/tagged/vector
+  - **总计 9 个测试目录**, 各模块独立 conftest.py
+- **核心框架测试基数** — `core/tests/` 保留 104 文件 ~1300+ 测试（框架级 + 集成）
+- **模块导入边界加固** — 各模块 `__init__.py` 显式导出，消除隐式通配符导入
+
+### 目录结构重组 (命名统一 + 扁平化)
+
+- **PascalCase → snake_case** — 全项目 Python 包名统一 (CamelCase 目录 → snake_case)
+- **包结构扁平化** — 消除深层嵌套中间包：`src/global_planning/pct_adapters/pct_adapters/` → `src/global_planning/pct_adapters/`
+- **src/legacy/ 集中管理** — 分散在 gateway/thunder/pct_planner/semantic 的遗留代码统一归入 `src/legacy/`
+- **scripts/ 重组** — `scripts/legacy/` 统一到 `src/legacy/scripts/`；tools 移到 `scripts/tools/`
+- **sim/ 整合** — `tests/experiments/` + `sim/src/` 重叠目录合并为 `sim/experiments/`
+
+### ROS2 提取到桥接模块
+
+- **ros2 依赖隔离** — rclpy 仅保留在 Bridge 模块和 C++ NativeModule 启动器
+- **ros2_sim_driver / sim_ros2 Driver 分离** — 模拟驱动与框架解耦
+- **ROS2 上下文执行器** — `ros2_context_executor.py` 独立管理 ROS2 spin，不阻塞主线程
+
+### 测试基础设施 (+52 tests)
+
+- **Gateway 全面覆盖** — 13 新增测试文件覆盖 route split / runtime status / acceptance / session map / telemetry / traffic / state snapshot / health contract / commands / MCP auth
+- **SLAM 后端状态** — `test_slam_backend_status.py` 验证 fastlio2/pointlio/localizer 状态转换
+- **Nav 走廊场景** — `test_nav_corridor_scenario.py` 走廊导航行为验证
+- **导航框架契约** — `test_navigation_frame_contract.py` FrameContract 形式化验证
+- **Blackbox Recorder** — 新增 `BlackboxRecorder` 事件记录模块 + 测试
+
+### 安全性加固 (P0)
+
+- **CORS 加固** — Gateway 添加严格 Origin 白名单验证，拒绝未授权跨域请求
+- **Shell 注入防护** — 消除所有 `os.system()` / `subprocess(shell=True)` 调用，改为 `subprocess.run([...])` 参数数组
+- **线程安全修复** — Gateway 模块 5 处共享状态加锁 (async lock + reentrant lock)
+- **错误处理** — 消除 bare `except:` 和 `except Exception: pass` 模式，替换为精确异常类型 + 结构化日志
+
+### 工程标准提升
+
+- **mypy 严格模式** — 新增 mypy 配置，严格类型检查 (strict=True, disallow_untyped_defs=True)，修复 200+ 类型错误
+- **Ruff 规则升级** — 启用 `F401`(未使用导入) / `F841`(未使用变量) / `E741`(模糊变量名) / `I`(导入排序)，全项目零违规
+- **依赖分离** — `pyproject.toml` 拆分 dev/docker/runtime 依赖组
+- **FrameContract 提取** — 从 monolith 中提取 FrameContract 数据模型到独立模块
+- **常量集中管理** — 分散在各模块的 magic numbers 统一归入 `core/constants.py`
+
+### 杂项修复
+
+- **Registry 缓存修复** — 后端热切换时清除注册缓存，防 stale reference
+- **CMU Terrain 注册** — 补全 CMU Terrain 后端 register 调用，修复 stub blueprint 兼容性
+- **异常日志完善** — 全项目 final exception logging layer，确保崩溃前打印完整 traceback
+- **`.gitignore` 更新** — 补充 `*.so` / `*.pyd` / `build/` / `__pycache__` 模式
+- **文档** — CLAUDE.md README.md 同步更新，CHANGELOG 补全
+
+### 统计
+
+- **15 commits**, 43 files changed, +370 / -1060 lines
+- **测试目录**: 9 个 (core/nav/slam/memory/gateway)
+- **测试总数**: ~1300+ (框架) + 96 C++ (7 suites) = **~1400+**
+- **遗留代码迁移**: ~1060 行精简
+
+---
+
 ## [2.2.0] — 2026-04-13 (Dashboard 全面重做 + DDS/Gateway 可靠性)
 
 ### Dashboard — Arc/Raycast 风格重做 (18 组件)

@@ -11,8 +11,8 @@
 <p align="center">
   <a href="https://docs.ros.org/en/humble/"><img src="https://img.shields.io/badge/ROS2-Humble-blue" alt="ROS2" /></a>
   <a href="#platform"><img src="https://img.shields.io/badge/Platform-S100P_(RDK_X5)-green" alt="Platform" /></a>
-  <img src="https://img.shields.io/badge/Framework_tests-1263_passed-brightgreen" alt="Framework tests" />
-  <img src="https://img.shields.io/badge/Version-2.2.0-orange" alt="Version" />
+  <img src="https://img.shields.io/badge/Framework_tests-1300%2B_passed-brightgreen" alt="Framework tests" />
+  <img src="https://img.shields.io/badge/Version-2.3.0-orange" alt="Version" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-lightgrey" alt="License" /></a>
 </p>
 
@@ -23,6 +23,8 @@
 LingTu is a full-stack autonomous navigation system that runs on quadruped robots. It handles everything from LiDAR SLAM and terrain analysis to semantic navigation ("go to the kitchen") and remote control via a web dashboard.
 
 Simulation and framework tests are not field-readiness evidence. The strict algorithm claim boundary is tracked in `docs/07-testing/ALGORITHM_VALIDATION_FLOW.md`.
+
+> **Recent restructuring (v2.3.0, Sprint 5-6):** The project underwent a major engineering overhaul — module test directories separated from core/, directory naming unified to snake_case, ROS2 extracted to bridge modules, security hardening applied (CORS, shell injection), and engineering standards enforced (mypy strict, ruff rules). See [CHANGELOG.md](CHANGELOG.md) for details.
 
 **Key capabilities:**
 - **SLAM** — Fast-LIO2 mapping + ICP localization against pre-built maps
@@ -268,20 +270,22 @@ Highest-priority active source wins. Sources timeout after 0.5s of silence.
 
 ```
 src/
-├── core/              Framework: Module, Blueprint, Transport, Registry, tests (1263)
-├── nav/               NavigationModule, SafetyRing, CmdVelMux, WaypointTracker
+├── core/              Framework: Module, Blueprint, Transport, Registry, constants, tests (~1300)
+├── nav/               NavigationModule, SafetyRing, CmdVelMux, WaypointTracker, tests/
 ├── semantic/          Perception (Detector+Encoder), Planner (LLM+VisualServo+AgentLoop)
-├── memory/            SemanticMapper, EpisodicMemory, VectorMemory, RoomObjectKG
+├── memory/            SemanticMapper, EpisodicMemory, VectorMemory, RoomObjectKG, tests/
 ├── drivers/           Thunder driver, CameraBridge, TeleopModule, LiDAR
-├── gateway/           GatewayModule (FastAPI), MCPServer, auth middleware
+├── gateway/           GatewayModule (FastAPI), MCPServer, auth middleware, tests/
+├── slam/              SLAMModule (Fast-LIO2/Point-LIO), SlamBridge, C++ nodes, tests/
 ├── base_autonomy/     TerrainModule, LocalPlanner, PathFollower (C++ nanobind)
-├── slam/              SLAMModule (Fast-LIO2/Point-LIO), SlamBridge, C++ nodes
-└── global_planning/   PCT planner (C++ ele_planner.so), A* backend
+├── global_planning/   PCT planner (C++ ele_planner.so), A* backend
+├── legacy/            Migrated legacy code (thunder, pct_planner, gateway, semantic)
+└── reconstruction/    Scene reconstruction module
 
 web/                   React Dashboard (18 components, Vite 8)
 config/                robot_config.yaml (single source of truth)
 calibration/           Camera/LiDAR/IMU calibration toolbox
-scripts/               Deploy, verify, benchmark utilities
+scripts/               Deploy, verify, benchmark utilities (9 test directories total)
 ```
 
 ## Configuration
@@ -342,7 +346,13 @@ sudo systemctl restart lingtu
 
 ```bash
 # Python framework tests (no ROS2 needed)
-python -m pytest src/core/tests/ -q              # framework tests only
+python -m pytest src/core/tests/ -q              # ~1300+ core framework tests
+
+# Module-specific test suites (9 directories total)
+python -m pytest src/gateway/tests/ -q           # Gateway route/runtime/auth tests
+python -m pytest src/nav/tests/ -q               # Navigation FSM/patrol/geofence tests
+python -m pytest src/slam/tests/ -q              # SLAM backend status/bridge tests
+python -m pytest src/memory/tests/ -q            # Semantic/episodic/tagged tests
 
 # C++ nav_core tests
 cd src/nav/core && mkdir -p build && cd build
@@ -372,6 +382,7 @@ Factory calibration toolbox in `calibration/`:
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| v2.3.0 | 2026-05-31 | Sprint 5-6: Module boundary enforcement, 9 test directories, directory restructuring (PascalCase→snake_case, flattening), ROS2 extraction, security hardening (CORS/shell-injection), mypy+ruff engineering standards, FrameContract monolith extraction, +52 new tests |
 | v2.2.0 | 2026-04-13 | Dashboard Arc/Raycast → Frosted Glass redesign, DDS GIL fix, camera 3-level auto-recovery, FloatingWidget system |
 | v2.1.0 | 2026-04-06 | Enterprise hardening, C++ nav_core SIMD optimization, 1226 tests |
 | v1.0.0 | 2026-03 | Initial release |
