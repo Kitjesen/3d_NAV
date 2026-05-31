@@ -18,7 +18,7 @@ import logging
 import struct
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 
@@ -49,6 +49,7 @@ ROS2_SIM_CAMERA_FRAME_ID = FRAMES.camera
 
 
 @register("driver", "sim_ros2", description="ROS2 bridge driver for MuJoCo simulation")
+@register("driver_protocol", "ros2_bridge", description="ROS2 bridge simulation driver")
 class ROS2SimDriverModule(Module, layer=1):
     """Bridges ROS2 topics from mujoco_ros2_bridge to Module ports.
 
@@ -76,6 +77,7 @@ class ROS2SimDriverModule(Module, layer=1):
     camera_info: Out[CameraIntrinsics]
     goal_pose: Out[PoseStamped]
     alive: Out[bool]
+    robot_state: Out[dict]
 
     def __init__(
         self,
@@ -161,10 +163,11 @@ class ROS2SimDriverModule(Module, layer=1):
             node = Node(self._node_name)
             executor = get_shared_executor()
             executor.add_node(node)
-            odom_group = MutuallyExclusiveCallbackGroup() if MutuallyExclusiveCallbackGroup else None
-            cloud_group = MutuallyExclusiveCallbackGroup() if MutuallyExclusiveCallbackGroup else None
-            camera_group = MutuallyExclusiveCallbackGroup() if MutuallyExclusiveCallbackGroup else None
-            control_group = MutuallyExclusiveCallbackGroup() if MutuallyExclusiveCallbackGroup else None
+            group = (
+                MutuallyExclusiveCallbackGroup() if MutuallyExclusiveCallbackGroup
+                else None
+            )
+            odom_group = cloud_group = camera_group = control_group = group
 
             # Always-on subscribers (low bandwidth)
             self._create_subscription(
@@ -229,6 +232,7 @@ class ROS2SimDriverModule(Module, layer=1):
 
         self._running = True
         self.alive.publish(True)
+        self._publish_robot_state()
         logger.info("ROS2SimDriverModule: callbacks handled by shared ROS2 executor")
 
     def stop(self):
@@ -238,6 +242,7 @@ class ROS2SimDriverModule(Module, layer=1):
         self._cloud_worker_thread = None
         self._cleanup_ros2_node()
         self.alive.publish(False)
+        self._publish_robot_state()
         super().stop()
 
     def _cleanup_ros2_node(self, node=None, executor=None) -> None:
@@ -511,7 +516,6 @@ class ROS2SimDriverModule(Module, layer=1):
         if self._pub_cmd_vel is None or self._node is None:
             return
         try:
-            from builtin_interfaces.msg import Time as ROS2Time
             from geometry_msgs.msg import TwistStamped
 
             msg = TwistStamped()
@@ -528,6 +532,21 @@ class ROS2SimDriverModule(Module, layer=1):
             self._pub_cmd_vel.publish(msg)
         except Exception as e:
             logger.warning("ROS2SimDriverModule: cmd_vel publish error: %s", e)
+
+    # -- Robot state ---------------------------------------------------------
+
+    def _publish_robot_state(self) -> None:
+        """Publish ROS2 sim operational state."""
+        self.robot_state.publish({
+            "standing": True,
+            "enabled": True,
+            "emergency": False,
+            "connected": True,
+            "battery_voltage": 0.0,
+            "battery_soc": 0.0,
+            "current_gait": "trot",
+            "timestamp": time.time(),
+        })
 
     # -- Health --------------------------------------------------------------
 

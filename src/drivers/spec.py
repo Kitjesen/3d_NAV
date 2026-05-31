@@ -30,18 +30,47 @@ thunder) satisfies only MotionDriver and delegates sensors to separate
 camera-bridge / lidar modules.
 """
 
-from __future__ import annotations
-
+from dataclasses import dataclass
 from typing import Any, Protocol, get_origin, runtime_checkable
 
 from core.stream import In, Out
+
+# ── RobotState ────────────────────────────────────────────────────────────
+
+
+@dataclass
+class RobotState:
+    """Canonical snapshot of robot hardware state.
+
+    Every motion driver is expected to publish this on its ``robot_state``
+    output port at the control rate (typically 50 Hz).
+
+    Attributes:
+        standing:       True when the robot is standing (not sitting/crouching).
+        enabled:        True when the motor driver is enabled (motors powered).
+        emergency:      True when emergency stop is active.
+        battery_soc:      State of charge (0.0 – 1.0).
+        battery_voltage:  Current battery pack voltage (V).
+        timestamp:        Unix timestamp (seconds since epoch) of this reading.
+    """
+
+    standing: bool = False
+    enabled: bool = False
+    emergency: bool = False
+    battery_soc: float = 0.0
+    battery_voltage: float = 0.0
+    timestamp: float = 0.0
+
 
 # ── Declarative port contract ─────────────────────────────────────────────
 
 #: Required input ports every driver backend must declare.
 REQUIRED_INPUTS: frozenset[str] = frozenset({"cmd_vel", "stop_signal"})
 #: Required output ports every driver backend must declare.
-REQUIRED_OUTPUTS: frozenset[str] = frozenset({"odometry"})
+REQUIRED_OUTPUTS: frozenset[str] = frozenset({"odometry", "robot_state"})
+
+#: Optional output ports — capabilities a driver *may* expose.
+OPTIONAL_OUTPUTS: frozenset[str] = frozenset({"imu_raw"})
 
 #: A camera source must expose one color stream plus depth + intrinsics.
 CAMERA_COLOR_OUTPUTS: frozenset[str] = frozenset({"camera_image", "color_image"})

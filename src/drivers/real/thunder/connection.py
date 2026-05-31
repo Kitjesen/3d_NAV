@@ -35,7 +35,7 @@ import os
 import sys
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 try:
     from core.module import Module
@@ -63,7 +63,13 @@ NOVA_DOG_ODOM_FRAME_ID = odom_frame_id()
 NOVA_DOG_BODY_FRAME_ID = body_frame_id()
 
 
-@register("driver", "nova_dog", priority=10, platforms={"aarch64"}, description="NOVA quadruped via brainstem gRPC")
+@register("driver", "nova_dog", priority=10, platforms={"aarch64"},
+          description="NOVA quadruped via brainstem gRPC")
+# Deliberately NOT registering as "driver_protocol" — ThunderDriver in
+# han_dog_module.py is the canonical grpc_brainstem implementation.
+# This deprecated module only carries @register("driver", "nova_dog") for
+# backward compatibility with legacy blueprints.
+# See han_dog_module.py for the canonical @register("driver_protocol", "grpc_brainstem").
 class NovaDogConnection(Module, layer=1):
     """Quadruped robot gRPC bridge module.
 

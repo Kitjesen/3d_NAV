@@ -21,7 +21,7 @@ import logging
 import math
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 from core.module import Module
 from core.msgs.geometry import Quaternion, Twist, Vector3
@@ -35,7 +35,10 @@ THUNDER_ODOM_FRAME_ID = odom_frame_id()
 THUNDER_BODY_FRAME_ID = body_frame_id()
 
 
-@register("driver", "thunder", priority=10, platforms={"aarch64"}, description="Thunder quadruped via brainstem gRPC")
+@register("driver", "thunder", priority=10, platforms={"aarch64"},
+          description="Thunder quadruped via brainstem gRPC")
+@register("driver_protocol", "grpc_brainstem", priority=10, platforms={"aarch64"},
+          description="Brainstem gRPC protocol for Thunder quadruped")
 class ThunderDriver(Module, layer=1):
     """Thunder quadruped robot driver.
 
@@ -49,6 +52,7 @@ class ThunderDriver(Module, layer=1):
     slam_odom: In[Odometry]
     odometry: Out[Odometry]
     alive: Out[bool]
+    robot_state: Out[dict]
 
     def __init__(
         self,
@@ -89,6 +93,10 @@ class ThunderDriver(Module, layer=1):
         self._standing = False
         self._enabled = False
         self._shutdown = False
+        self._emergency_stop = False
+        self._battery_voltage = 0.0   # TODO: read from brainstem battery stream
+        self._battery_soc = 0.0       # TODO: read from brainstem battery stream
+        self._gait_type = "unknown"   # TODO: track gait type from brainstem
 
         # gRPC (在 asyncio 线程初始化)
         self._channel = None
@@ -158,6 +166,7 @@ class ThunderDriver(Module, layer=1):
             "HanDogModule started → %s:%d (max_lin=%.1f, max_ang=%.1f)",
             self._dog_host, self._dog_port, self._max_linear, self._max_angular,
         )
+        self._publish_robot_state()
 
     def stop(self):
         """安全关机：零速 → 坐下 → 断开。"""
@@ -181,6 +190,7 @@ class ThunderDriver(Module, layer=1):
                 pass
         self._loop = None
         self.alive.publish(False)
+        self._publish_robot_state()
         super().stop()
 
     # ── 端口回调 ──
@@ -202,6 +212,8 @@ class ThunderDriver(Module, layer=1):
                 walk = self._twist_to_walk(self._cmd_vx, self._cmd_vy, self._cmd_wz)
             asyncio.run_coroutine_threadsafe(
                 self._send_walk(walk), self._loop)
+
+        self._publish_robot_state()
 
     def _on_stop(self, level: int):
         """收到停止信号。"""
@@ -236,7 +248,7 @@ class ThunderDriver(Module, layer=1):
 
     def _publish_odometry(self):
         """IMU 姿态 + cmd_vel 位置积分 → Odometry 消息。"""
-        from core.msgs.geometry import Pose, PoseStamped
+        from core.msgs.geometry import Pose
 
         now = time.time()
         with self._cmd_lock:
@@ -275,6 +287,25 @@ class ThunderDriver(Module, layer=1):
             child_frame_id=THUNDER_BODY_FRAME_ID,
         )
         self.odometry.publish(odom)
+
+    # ── 机器人状态发布 ──
+
+    def _build_robot_state(self) -> dict:
+        """Assemble operational robot state from internal fields."""
+        return {
+            "standing": self._standing,
+            "enabled": self._enabled,
+            "emergency": self._emergency_stop or (not self._connected),
+            "connected": self._connected,
+            "battery_voltage": self._battery_voltage,
+            "battery_soc": self._battery_soc,
+            "current_gait": self._gait_type,
+            "timestamp": time.time(),
+        }
+
+    def _publish_robot_state(self):
+        """Build and publish the current robot state to the robot_state port."""
+        self.robot_state.publish(self._build_robot_state())
 
     # ── 看门狗 ──
 
@@ -343,6 +374,7 @@ class ThunderDriver(Module, layer=1):
                     await self._stub.Enable(dog_msg.Empty())
                     self._enabled = True
                     logger.info("Dog motors ENABLED")
+                    self._publish_robot_state()
                 except Exception as e:
                     logger.error("Enable failed: %s", e)
 
@@ -352,6 +384,7 @@ class ThunderDriver(Module, layer=1):
                         await self._stub.StandUp(dog_msg.Empty())
                         self._standing = True
                         logger.info("Dog STANDING UP")
+                        self._publish_robot_state()
                         break
                     except Exception as e:
                         logger.error("StandUp attempt %d/3 failed: %s", attempt, e)
@@ -397,6 +430,7 @@ class ThunderDriver(Module, layer=1):
             await self._stub.SitDown(dog_msg.Empty())
             self._standing = False
             logger.info("Dog SITTING DOWN")
+            self._publish_robot_state()
         except Exception as e:
             logger.error("SitDown failed: %s", e)
 
@@ -406,7 +440,10 @@ class ThunderDriver(Module, layer=1):
             await self._send_walk_zero()
             await self._stub.SitDown(dog_msg.Empty())
             await self._stub.Disable(dog_msg.Empty())
+            self._enabled = False
+            self._standing = False
             logger.info("Safe shutdown complete")
+            self._publish_robot_state()
         except Exception:
             pass
 

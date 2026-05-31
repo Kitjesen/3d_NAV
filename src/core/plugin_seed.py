@@ -28,6 +28,15 @@ BUILTIN_PLUGIN_MODULES: Mapping[str, tuple[str, ...]] = {
         "drivers.sim.mujoco_driver_module",
         "drivers.sim.ros2_sim_driver",
     ),
+    # Co-located with "driver": each module above also carries a
+    # @register("driver_protocol", ...) decorator for protocol-based lookup.
+    "driver_protocol": (
+        "core.blueprints.stub",
+        "drivers.real.thunder.han_dog_module",
+        "drivers.real.thunder.connection",
+        "drivers.sim.mujoco_driver_module",
+        "drivers.sim.ros2_sim_driver",
+    ),
     "lidar": (
         "drivers.real.lidar.lidar_module",
     ),

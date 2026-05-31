@@ -38,6 +38,7 @@ STUB_BODY_FRAME_ID = runtime_body_frame_id()
 
 
 @register("driver", "stub", priority=0, description="Fake driver for CI/testing, no hardware")
+@register("driver_protocol", "stub", priority=0, description="Stub driver for CI/testing, no hardware")
 class StubDogModule(Module, layer=1):
     """Stub driver for CI/testing.  No hardware.  Publishes fake odometry.
 
@@ -53,6 +54,7 @@ class StubDogModule(Module, layer=1):
     stop_signal: In[int]
     odometry: Out[Odometry]
     alive: Out[bool]
+    robot_state: Out[dict]
     # Camera / perception placeholders — declared for wire compatibility,
     # never published by the stub driver.
     camera_image: Out[Image]
@@ -93,6 +95,7 @@ class StubDogModule(Module, layer=1):
         self._running = True
         self.alive.publish(True)
         self._publish_initial_odom()
+        self._publish_robot_state()
         # Periodic odom loop (like a real robot)
         self._odom_thread = threading.Thread(target=self._odom_loop, daemon=True)
         self._odom_thread.start()
@@ -102,6 +105,7 @@ class StubDogModule(Module, layer=1):
         if self._odom_thread:
             self._odom_thread.join(timeout=1.0)
         self.alive.publish(False)
+        self._publish_robot_state()
         super().stop()
 
     def _publish_initial_odom(self) -> None:
@@ -164,6 +168,21 @@ class StubDogModule(Module, layer=1):
             self._vy = 0.0
             self._wz = 0.0
             self._stopped = True
+
+    # -- Robot state --------------------------------------------------
+
+    def _publish_robot_state(self) -> None:
+        """Publish stub operational state."""
+        self.robot_state.publish({
+            "standing": True,
+            "enabled": True,
+            "emergency": False,
+            "connected": True,
+            "battery_voltage": 0.0,
+            "battery_soc": 0.0,
+            "current_gait": "none",
+            "timestamp": time.time(),
+        })
 
     # -- Health --------------------------------------------------------
 

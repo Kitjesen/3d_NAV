@@ -23,12 +23,12 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 
 from core.module import Module
-from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat, PointCloud2
 from core.registry import register
@@ -168,6 +168,7 @@ WORLDS = {
 
 
 @register("driver", "sim_mujoco", description="MuJoCo sim driver (in-process, dimos-style)")
+@register("driver_protocol", "mujoco_inproc", description="MuJoCo in-process simulation driver")
 class MujocoDriverModule(Module, layer=1):
     """MuJoCo simulation running inside the Module framework.
 
@@ -187,6 +188,7 @@ class MujocoDriverModule(Module, layer=1):
     depth_image: Out[Image]
     camera_info: Out[CameraIntrinsics]
     alive: Out[bool]
+    robot_state: Out[dict]
 
     def __init__(
         self,
@@ -272,7 +274,11 @@ class MujocoDriverModule(Module, layer=1):
             if self._max_angular_vel is not None:
                 robot_cfg.max_angular_vel = float(self._max_angular_vel)
             scene_start = _scene_placeholder_start(world_path)
-            start_pos = scene_start if scene_start is not None and _is_default_start_pos(self._start_pos) else list(self._start_pos)
+            start_pos = (
+                scene_start if scene_start is not None
+                and _is_default_start_pos(self._start_pos)
+                else list(self._start_pos)
+            )
             robot_cfg.init_position = [float(v) for v in start_pos[:3]]
             if self._drive_mode == "policy" and self._policy_path:
                 robot_cfg.policy_onnx = self._policy_path
@@ -335,6 +341,7 @@ class MujocoDriverModule(Module, layer=1):
             target=self._sim_loop, name="mujoco_sim", daemon=True)
         self._sim_thread.start()
         self.alive.publish(True)
+        self._publish_robot_state()
         logger.info("MujocoDriverModule: sim loop started at %.0f Hz", self._sim_rate)
 
     def stop(self):
@@ -346,6 +353,7 @@ class MujocoDriverModule(Module, layer=1):
             self._engine.close()
             self._engine = None
         self.alive.publish(False)
+        self._publish_robot_state()
         super().stop()
 
     def _on_cmd_vel(self, twist: Twist):
@@ -487,6 +495,21 @@ class MujocoDriverModule(Module, layer=1):
                 time.sleep(sleep_time)
 
         logger.info("MujocoDriverModule: sim loop ended after %d steps", step_count)
+
+    # -- Robot state --------------------------------------------------
+
+    def _publish_robot_state(self) -> None:
+        """Publish sim operational state."""
+        self.robot_state.publish({
+            "standing": True,
+            "enabled": True,
+            "emergency": False,
+            "connected": True,
+            "battery_voltage": 0.0,
+            "battery_soc": 0.0,
+            "current_gait": "trot",
+            "timestamp": time.time(),
+        })
 
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
