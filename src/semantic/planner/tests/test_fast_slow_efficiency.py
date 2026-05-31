@@ -26,8 +26,8 @@ from typing import Tuple
 import numpy as np
 import pytest
 
-from semantic.planner.semantic_planner.goal_resolver import GoalResolver
-from semantic.planner.semantic_planner.llm_client import LLMConfig
+from semantic.planner.goal_resolver import GoalResolver
+from semantic.planner.llm_client import LLMConfig
 
 # ============================================================
 #  场景生成工具

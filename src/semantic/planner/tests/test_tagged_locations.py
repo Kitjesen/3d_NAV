@@ -11,7 +11,7 @@ import tempfile
 
 import pytest
 
-from semantic.planner.semantic_planner.tagged_locations import TaggedLocationStore
+from semantic.planner.tagged_locations import TaggedLocationStore
 
 # ---------------------------------------------------------------------------
 # 基本增删查测试

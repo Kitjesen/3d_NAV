@@ -17,8 +17,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from memory.spatial.topology_graph import TopologySemGraph
-from semantic.perception.semantic_perception.geometry_extractor import GeometryExtractor
-from semantic.perception.semantic_perception.hybrid_planner import HybridPlanner, compare_planners
+from semantic.perception.geometry_extractor import GeometryExtractor
+from semantic.perception.hybrid_planner import HybridPlanner, compare_planners
 
 
 def create_test_environment():

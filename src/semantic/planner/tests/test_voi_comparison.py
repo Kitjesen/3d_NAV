@@ -11,7 +11,7 @@ import time
 # ── 路径设置 ──
 sys.path.insert(0, "src/semantic_planner")
 
-from semantic.planner.semantic_planner.voi_scheduler import (
+from semantic.planner.voi_scheduler import (
     SchedulerAction,
     SchedulerState,
     VoIConfig,

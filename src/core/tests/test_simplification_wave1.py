@@ -281,7 +281,7 @@ class TestW1GnssRtcmAge(unittest.TestCase):
 
 class TestW1MobileCLIPDeadCodeRemoved(unittest.TestCase):
     def test_try_load_mobileclip_method_removed(self):
-        from semantic.perception.semantic_perception.mobileclip_encoder import (
+        from semantic.perception.mobileclip_encoder import (
             MobileCLIPEncoder,
         )
         self.assertFalse(
@@ -297,7 +297,7 @@ class TestW1MobileCLIPDeadCodeRemoved(unittest.TestCase):
 
 class TestW1ClipDegradedFlag(unittest.TestCase):
     def test_is_degraded_property_exists(self):
-        from semantic.perception.semantic_perception.clip_encoder import CLIPEncoder
+        from semantic.perception.clip_encoder import CLIPEncoder
         enc = CLIPEncoder.__new__(CLIPEncoder)  # avoid loading the model
         enc._degraded = False
         enc._degraded_reason = ""
@@ -316,7 +316,7 @@ class TestW1ClipDegradedFlag(unittest.TestCase):
 
 class TestW1MockLLMSignals(unittest.TestCase):
     def test_mock_response_is_flagged_and_confidence_zero(self):
-        from semantic.planner.semantic_planner.llm_client import (
+        from semantic.planner.llm_client import (
             LLMConfig,
             MockLLMClient,
         )

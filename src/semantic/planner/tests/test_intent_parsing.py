@@ -24,7 +24,7 @@ import unittest
 # Add parent to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from semantic.planner.semantic_planner.task_decomposer import SubGoalAction, TaskDecomposer
+from semantic.planner.task_decomposer import SubGoalAction, TaskDecomposer
 
 
 class TestIntentParsing(unittest.TestCase):
@@ -793,7 +793,7 @@ class TestIntentParsing(unittest.TestCase):
 
     def test_intent_classification_prompt(self):
         """验证 LLM intent classification prompt 可以正常构建。"""
-        from semantic.planner.semantic_planner.prompt_templates import (
+        from semantic.planner.prompt_templates import (
             build_intent_classification_prompt,
         )
         prompt = build_intent_classification_prompt(
@@ -809,7 +809,7 @@ class TestIntentParsing(unittest.TestCase):
 
     def test_compound_decomposition_prompt(self):
         """验证复合指令分解 prompt 可以正常构建。"""
-        from semantic.planner.semantic_planner.prompt_templates import (
+        from semantic.planner.prompt_templates import (
             build_compound_decomposition_prompt,
         )
         prompt = build_compound_decomposition_prompt(

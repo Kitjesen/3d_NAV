@@ -1,9 +1,9 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 
 def test_pct_planner_cmake_installs_existing_legacy_scripts() -> None:
     repo = Path(__file__).resolve().parents[3]
-    package_dir = repo / "src" / "global_planning" / "PCT_planner"
+    package_dir = repo / "src" / "global_planning" / "pct_planner"
     cmake = (package_dir / "CMakeLists.txt").read_text(encoding="utf-8")
 
     expected_scripts = [

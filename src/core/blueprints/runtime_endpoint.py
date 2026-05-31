@@ -1,4 +1,4 @@
-"""Runtime endpoint definitions for Dimos-style task/connection split.
+﻿"""Runtime endpoint definitions for Dimos-style task/connection split.
 
 Profiles describe what LingTu should do: map, navigate, explore, or run TARE.
 Runtime endpoints describe where sensor/state data and command sinks come from:
@@ -197,7 +197,7 @@ _GAZEBO_CONFIG: dict[str, Any] = {
     "slam_profile": "none",
     "llm": "mock",
     "planner": "astar",
-    "tomogram": "src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
+    "tomogram": "src/global_planning/pct_planner/rsc/tomogram/building2_9.pickle",
     "plan_safety_policy": "fallback_astar",
     "fallback_planner_name": "astar",
     "enable_semantic": True,

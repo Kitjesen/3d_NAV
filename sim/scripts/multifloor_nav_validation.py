@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Non-motion multi-floor navigation simulation validation.
 
 The script is simulation-only. It builds a deterministic two-floor scene,
@@ -36,7 +36,7 @@ if str(SRC) not in sys.path:
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry, Path as NavPath
 from nav.global_planner_service import GlobalPlannerService
-from global_planning.PCT_planner_runnable.runtime import inspect_pct_runtime
+from global_planning.pct_planner_runnable.runtime import inspect_pct_runtime
 from sim.engine.scenarios.multifloor_assets import (
     DEFAULT_GOAL,
     DEFAULT_START,

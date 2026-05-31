@@ -18,7 +18,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic.perception.semantic_perception.evaluation_framework import (
+from semantic.perception.evaluation_framework import (
     BenchmarkFramework,
     ExplorationEvaluator,
     ExplorationMetrics,

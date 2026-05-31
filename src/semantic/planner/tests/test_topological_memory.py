@@ -14,7 +14,7 @@ import unittest
 import numpy as np
 import pytest
 
-from semantic.planner.semantic_planner.topological_memory import TopologicalMemory, TopoNode
+from semantic.planner.topological_memory import TopologicalMemory, TopoNode
 
 
 class TestNodeCreation(unittest.TestCase):

@@ -1,26 +1,26 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-Building2_9 闭环仿真节点 (ROS2 SITL)
+Building2_9 闂幆浠跨湡鑺傜偣 (ROS2 SITL)
 
-全栈测试: PCT A* 全局规划 → pct_path_adapter → localPlanner → pathFollower → cmd_vel 积分
-地图:     building2_9.pickle (真实建筑番茄图, 17×18m, 97×94 grid @ 0.2m/voxel)
+鍏ㄦ爤娴嬭瘯: PCT A* 鍏ㄥ眬瑙勫垝 鈫?pct_path_adapter 鈫?localPlanner 鈫?pathFollower 鈫?cmd_vel 绉垎
+鍦板浘:     building2_9.pickle (鐪熷疄寤虹瓚鐣寗鍥? 17脳18m, 97脳94 grid @ 0.2m/voxel)
 
-该节点承担 "虚拟机器人" 角色:
-  - 发布平坦合成点云 → /nav/map_cloud + /nav/terrain_map + /nav/terrain_map_ext
-    (替代真实 LiDAR + terrain_analysis, 避免建筑墙体被误判为近场障碍物触发 E-stop)
-  - 接收 /nav/cmd_vel → 积分二维运动学 → 更新位姿
-  - 持续发布 /nav/stop = 0 (清除 pathFollower safetyStop_ 旗标)
-  - 预热 WARMUP_S 秒后发送 /nav/goal_pose 触发 PCT 规划
-  - 到达目标或超时后保存 /tmp/sim_result.json + /tmp/sim_traj.png
+璇ヨ妭鐐规壙鎷?"铏氭嫙鏈哄櫒浜? 瑙掕壊:
+  - 鍙戝竷骞冲潶鍚堟垚鐐逛簯 鈫?/nav/map_cloud + /nav/terrain_map + /nav/terrain_map_ext
+    (鏇夸唬鐪熷疄 LiDAR + terrain_analysis, 閬垮厤寤虹瓚澧欎綋琚鍒や负杩戝満闅滅鐗╄Е鍙?E-stop)
+  - 鎺ユ敹 /nav/cmd_vel 鈫?绉垎浜岀淮杩愬姩瀛?鈫?鏇存柊浣嶅Э
+  - 鎸佺画鍙戝竷 /nav/stop = 0 (娓呴櫎 pathFollower safetyStop_ 鏃楁爣)
+  - 棰勭儹 WARMUP_S 绉掑悗鍙戦€?/nav/goal_pose 瑙﹀彂 PCT 瑙勫垝
+  - 鍒拌揪鐩爣鎴栬秴鏃跺悗淇濆瓨 /tmp/sim_result.json + /tmp/sim_traj.png
 
-配置 (通过环境变量, 由 sim_navigation.launch.py 注入):
-  SIM_GOAL_X  目标 X (m), 默认  5.0
-  SIM_GOAL_Y  目标 Y (m), 默认  7.3  (Corridor_E 场景)
-  SIM_GOAL_Z  目标 Z (m), 默认  0.0  (>0.1 触发 3D 跨楼层规划)
-  SIM_START_X 起点 X (m), 默认 -5.5
-  SIM_START_Y 起点 Y (m), 默认  7.3
+閰嶇疆 (閫氳繃鐜鍙橀噺, 鐢?sim_navigation.launch.py 娉ㄥ叆):
+  SIM_GOAL_X  鐩爣 X (m), 榛樿  5.0
+  SIM_GOAL_Y  鐩爣 Y (m), 榛樿  7.3  (Corridor_E 鍦烘櫙)
+  SIM_GOAL_Z  鐩爣 Z (m), 榛樿  0.0  (>0.1 瑙﹀彂 3D 璺ㄦゼ灞傝鍒?
+  SIM_START_X 璧风偣 X (m), 榛樿 -5.5
+  SIM_START_Y 璧风偣 Y (m), 榛樿  7.3
 
-building2_9 世界坐标范围: X∈[-7.95, 10.85] m, Y∈[-10.09, 9.31] m
+building2_9 涓栫晫鍧愭爣鑼冨洿: X鈭圼-7.95, 10.85] m, Y鈭圼-10.09, 9.31] m
 """
 import math
 import os
@@ -42,45 +42,45 @@ from visualization_msgs.msg import Marker
 
 from core.runtime_interface import FRAMES, TOPICS
 
-# ── 默认参数 (被环境变量覆盖) ──────────────────────────────────────────────────
+# 鈹€鈹€ 榛樿鍙傛暟 (琚幆澧冨彉閲忚鐩? 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 _DEF_START_X   = float(os.environ.get('SIM_START_X',   '-5.5'))
 _DEF_START_Y   = float(os.environ.get('SIM_START_Y',    '7.3'))
-_DEF_START_Z   = float(os.environ.get('SIM_START_Z',    '0.0'))  # 地图切片起始高度 (building2_9: 0.5)
+_DEF_START_Z   = float(os.environ.get('SIM_START_Z',    '0.0'))  # 鍦板浘鍒囩墖璧峰楂樺害 (building2_9: 0.5)
 _DEF_START_YAW = 0.0   # rad
 _DEF_GOAL_X    = float(os.environ.get('SIM_GOAL_X',    '5.0'))
 _DEF_GOAL_Y    = float(os.environ.get('SIM_GOAL_Y',    '7.3'))
-_DEF_GOAL_Z    = float(os.environ.get('SIM_GOAL_Z',    '0.0'))  # >0.1 → 3D跨楼层规划
+_DEF_GOAL_Z    = float(os.environ.get('SIM_GOAL_Z',    '0.0'))  # >0.1 鈫?3D璺ㄦゼ灞傝鍒?
 
-# ── 小车 URDF 路径 ─────────────────────────────────────────────────────────────
+# 鈹€鈹€ 灏忚溅 URDF 璺緞 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 _URDF_PATH = os.path.join(os.path.dirname(__file__), 'simple_car.urdf')
 
-# ── 差速驱动参数 (与 simple_car.urdf 一致) ────────────────────────────────────
+# 鈹€鈹€ 宸€熼┍鍔ㄥ弬鏁?(涓?simple_car.urdf 涓€鑷? 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 WHEEL_RADIUS = 0.07   # m
-WHEEL_BASE   = 0.34   # m (两轮间距, left +0.17 right -0.17)
+WHEEL_BASE   = 0.34   # m (涓よ疆闂磋窛, left +0.17 right -0.17)
 
-# ── 仿真参数 ───────────────────────────────────────────────────────────────────
-GOAL_THRESH = 0.5    # m, 到达判定距离
-MAX_SECS    = 180.0  # s, 超时时间
-DT          = 0.05   # s, 主循环周期 (20 Hz)
-TERRAIN_R   = 10.0   # m, 合成平坦地形半径
-TERRAIN_S   =  0.4   # m, 格栅间距
-WARMUP_S    = float(os.environ.get('SIM_WARMUP_S', '6.0'))  # s, 预热 (≥ joyToSpeedDelay=2.0s)
-GOAL_RESEND_S = 3600.0 # s, 禁用中途重发 (规划器已有路径, 无需重发导致重规划闪烁)
-LOOP_PAUSE_S  =  5.0 # s, 到达目标后暂停再重置 (演示循环)
+# 鈹€鈹€ 浠跨湡鍙傛暟 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+GOAL_THRESH = 0.5    # m, 鍒拌揪鍒ゅ畾璺濈
+MAX_SECS    = 180.0  # s, 瓒呮椂鏃堕棿
+DT          = 0.05   # s, 涓诲惊鐜懆鏈?(20 Hz)
+TERRAIN_R   = 10.0   # m, 鍚堟垚骞冲潶鍦板舰鍗婂緞
+TERRAIN_S   =  0.4   # m, 鏍兼爡闂磋窛
+WARMUP_S    = float(os.environ.get('SIM_WARMUP_S', '6.0'))  # s, 棰勭儹 (鈮?joyToSpeedDelay=2.0s)
+GOAL_RESEND_S = 3600.0 # s, 绂佺敤涓€旈噸鍙?(瑙勫垝鍣ㄥ凡鏈夎矾寰? 鏃犻渶閲嶅彂瀵艰嚧閲嶈鍒掗棯鐑?
+LOOP_PAUSE_S  =  5.0 # s, 鍒拌揪鐩爣鍚庢殏鍋滃啀閲嶇疆 (婕旂ず寰幆)
 
-# 世界坐标边界 (通过环境变量覆盖，支持不同地图)
-# 工厂场景: SIM_MAP_X_MIN=-5 SIM_MAP_X_MAX=85 SIM_MAP_Y_MIN=-5 SIM_MAP_Y_MAX=60
+# 涓栫晫鍧愭爣杈圭晫 (閫氳繃鐜鍙橀噺瑕嗙洊锛屾敮鎸佷笉鍚屽湴鍥?
+# 宸ュ巶鍦烘櫙: SIM_MAP_X_MIN=-5 SIM_MAP_X_MAX=85 SIM_MAP_Y_MIN=-5 SIM_MAP_Y_MAX=60
 MAP_X_MIN = float(os.environ.get('SIM_MAP_X_MIN', '-7.5'))
 MAP_X_MAX = float(os.environ.get('SIM_MAP_X_MAX',  '10.5'))
 MAP_Y_MIN = float(os.environ.get('SIM_MAP_Y_MIN', '-9.5'))
 MAP_Y_MAX = float(os.environ.get('SIM_MAP_Y_MAX',   '9.0'))
 
 
-# ── 建筑点云 PCD 默认路径 (按优先级查找) ─────────────────────────────────────
+# 鈹€鈹€ 寤虹瓚鐐逛簯 PCD 榛樿璺緞 (鎸変紭鍏堢骇鏌ユ壘) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 _PCD_CANDIDATES = [
     os.environ.get('SIM_PCD_PATH', ''),
     '/home/sunrise/data/SLAM/navigation/install/pct_planner/share/pct_planner/rsc/pcd/building2_9.pcd',
-    '/home/sunrise/data/SLAM/navigation/src/global_planning/PCT_planner/rsc/pcd/building2_9.pcd',
+    '/home/sunrise/data/SLAM/navigation/src/global_planning/pct_planner/rsc/pcd/building2_9.pcd',
 ]
 
 
@@ -88,7 +88,7 @@ def _find_pcd() -> Optional[str]:
     for p in _PCD_CANDIDATES:
         if p and os.path.exists(p):
             return p
-    # 尝试 ament 安装路径
+    # 灏濊瘯 ament 瀹夎璺緞
     try:
         from ament_index_python.packages import get_package_share_directory
         share = get_package_share_directory('pct_planner')
@@ -102,17 +102,17 @@ def _find_pcd() -> Optional[str]:
 
 def _load_pcd_binary(pcd_path: str, max_pts: int = 80000) -> Optional[np.ndarray]:
     """
-    加载 binary PCD 文件 → (N, 4) float32 [x, y, z, intensity=z].
+    鍔犺浇 binary PCD 鏂囦欢 鈫?(N, 4) float32 [x, y, z, intensity=z].
 
-    - 支持 plain binary 和 binary 格式 (含 x y z ... 字段)
-    - 超过 max_pts 时随机降采样
-    - intensity 列设为 z 高度值, 供 Foxglove 按高度着色
+    - 鏀寔 plain binary 鍜?binary 鏍煎紡 (鍚?x y z ... 瀛楁)
+    - 瓒呰繃 max_pts 鏃堕殢鏈洪檷閲囨牱
+    - intensity 鍒楄涓?z 楂樺害鍊? 渚?Foxglove 鎸夐珮搴︾潃鑹?
     """
     try:
         with open(pcd_path, 'rb') as f:
             raw = f.read()
 
-        # 解析 ASCII 头部
+        # 瑙ｆ瀽 ASCII 澶撮儴
         pos, meta = 0, {}
         while pos < len(raw):
             end = raw.find(b'\n', pos)
@@ -136,7 +136,7 @@ def _load_pcd_binary(pcd_path: str, max_pts: int = 80000) -> Optional[np.ndarray
         if data_type != 'binary' or 'x' not in fields:
             return None
 
-        # 构建 numpy dtype (每个字段 float32/int32/uint32)
+        # 鏋勫缓 numpy dtype (姣忎釜瀛楁 float32/int32/uint32)
         np_map = {'F': 'f4', 'I': 'i4', 'U': 'u4'}
         dt = np.dtype([(f, np_map.get(t, 'f4'))
                        for f, t in zip(fields, types)])
@@ -159,7 +159,7 @@ def _load_pcd_binary(pcd_path: str, max_pts: int = 80000) -> Optional[np.ndarray
 
 
 def _make_xyzi_cloud(pts: np.ndarray, frame_id: str, stamp=None) -> PointCloud2:
-    """将 (N,4) float32 [x,y,z,i] 数组打包为 PointCloud2 消息。"""
+    """灏?(N,4) float32 [x,y,z,i] 鏁扮粍鎵撳寘涓?PointCloud2 娑堟伅銆?""
     arr = pts.astype(np.float32)
     msg = PointCloud2()
     msg.header.frame_id = frame_id
@@ -182,8 +182,8 @@ def _make_xyzi_cloud(pts: np.ndarray, frame_id: str, stamp=None) -> PointCloud2:
 
 
 def _flat_cloud(cx: float, cy: float, cz: float = 0.0, stamp=None) -> PointCloud2:
-    """以 (cx, cy, cz) 为中心生成合成平坦 XYZI 点云 (odom 坐标系).
-    cz 跟随机器人当前楼层 Z 高度, 防止多楼层场景 localPlanner 将其他楼层地面误判为障碍."""
+    """浠?(cx, cy, cz) 涓轰腑蹇冪敓鎴愬悎鎴愬钩鍧?XYZI 鐐逛簯 (odom 鍧愭爣绯?.
+    cz 璺熼殢鏈哄櫒浜哄綋鍓嶆ゼ灞?Z 楂樺害, 闃叉澶氭ゼ灞傚満鏅?localPlanner 灏嗗叾浠栨ゼ灞傚湴闈㈣鍒や负闅滅."""
     r = int(TERRAIN_R / TERRAIN_S)
     pts = []
     for ix in range(-r, r + 1):
@@ -215,7 +215,7 @@ class SimRobotNode(Node):
     def __init__(self):
         super().__init__('sim_robot_node')
 
-        # ── 机器人状态 ──
+        # 鈹€鈹€ 鏈哄櫒浜虹姸鎬?鈹€鈹€
         self.x   = _DEF_START_X
         self.y   = _DEF_START_Y
         self.yaw = _DEF_START_YAW
@@ -223,29 +223,29 @@ class SimRobotNode(Node):
         self.gy  = _DEF_GOAL_Y
 
         self.vx = self.vy = self.wz = 0.0
-        self.z    = _DEF_START_Z  # 机器人当前Z高度 (building2_9 地面层=0.5, 3D模式下更新)
-        self.vz   = 0.0   # Z轴速度 (m/s)
-        self._mode_3d    = False  # True=PCT 3D路径跟踪, False=PCT 2D控制
-        self._3d_path    = []     # 3D路点列表 [(x,y,z), ...]（来自PCT 3D A*）
-        self._gz         = 0.0    # 3D目标Z高度
-        self._3d_waiting = False  # True=等待 PCT 3D A* 规划结果（避免 tick 误判到达）
+        self.z    = _DEF_START_Z  # 鏈哄櫒浜哄綋鍓峑楂樺害 (building2_9 鍦伴潰灞?0.5, 3D妯″紡涓嬫洿鏂?
+        self.vz   = 0.0   # Z杞撮€熷害 (m/s)
+        self._mode_3d    = False  # True=PCT 3D璺緞璺熻釜, False=PCT 2D鎺у埗
+        self._3d_path    = []     # 3D璺偣鍒楄〃 [(x,y,z), ...]锛堟潵鑷狿CT 3D A*锛?
+        self._gz         = 0.0    # 3D鐩爣Z楂樺害
+        self._3d_waiting = False  # True=绛夊緟 PCT 3D A* 瑙勫垝缁撴灉锛堥伩鍏?tick 璇垽鍒拌揪锛?
         self.cmd_count = 0
         self.traj = []
         self.goal_reached = False
         self.t_start = None
-        self.phase = 'warmup'   # warmup → running → pausing → (reset)
-        self._user_goal_set = False   # 用户手动设置过目标后, loop reset 不覆盖目标
+        self.phase = 'warmup'   # warmup 鈫?running 鈫?pausing 鈫?(reset)
+        self._user_goal_set = False   # 鐢ㄦ埛鎵嬪姩璁剧疆杩囩洰鏍囧悗, loop reset 涓嶈鐩栫洰鏍?
 
-        # ── 车轮角度 (for JointState + RViz 车轮滚动) ──
+        # 鈹€鈹€ 杞﹁疆瑙掑害 (for JointState + RViz 杞﹁疆婊氬姩) 鈹€鈹€
         self._left_wheel_angle  = 0.0
         self._right_wheel_angle = 0.0
 
-        # ── TF ──
+        # 鈹€鈹€ TF 鈹€鈹€
         self.static_br = StaticTransformBroadcaster(self)
         self.tf_br     = TransformBroadcaster(self)
         self._pub_static_tf()
 
-        # ── Publishers ──
+        # 鈹€鈹€ Publishers 鈹€鈹€
         self.pub_odom    = self.create_publisher(Odometry,    TOPICS.odometry,        10)
         self.pub_cloud   = self.create_publisher(PointCloud2, TOPICS.map_cloud,       10)
         self.pub_terrain = self.create_publisher(PointCloud2, TOPICS.terrain_map,     10)
@@ -253,54 +253,54 @@ class SimRobotNode(Node):
         self.pub_goal    = self.create_publisher(PoseStamped, TOPICS.goal_pose,       10)
         self.pub_stop    = self.create_publisher(Int8,        TOPICS.stop,            10)
 
-        # robot_state_publisher 需要 /joint_states (轮子关节)
+        # robot_state_publisher 闇€瑕?/joint_states (杞瓙鍏宠妭)
         self.pub_joints = self.create_publisher(JointState, '/joint_states', 10)
-        # 机器人位置大球标记 (黄色, Z=0.5m, 直径0.6m, 在建筑点云上方清晰可见)
+        # 鏈哄櫒浜轰綅缃ぇ鐞冩爣璁?(榛勮壊, Z=0.5m, 鐩村緞0.6m, 鍦ㄥ缓绛戠偣浜戜笂鏂规竻鏅板彲瑙?
         self.pub_marker = self.create_publisher(Marker, TOPICS.robot_marker, 10)
 
-        # /robot_description latched (TRANSIENT_LOCAL): RViz/Foxglove 随时可读取 URDF
+        # /robot_description latched (TRANSIENT_LOCAL): RViz/Foxglove 闅忔椂鍙鍙?URDF
         latched = QoSProfile(
             depth=1,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self.pub_desc  = self.create_publisher(String,       '/robot_description',  latched)
-        # /nav/building_cloud: 真实建筑 3D 点云 (非 latched, 每 3s 重发确保 RViz 始终可见)
-        # 注: latched 的时间戳会过期导致 RViz2 message filter 丢弃, 改为定时重发
+        # /nav/building_cloud: 鐪熷疄寤虹瓚 3D 鐐逛簯 (闈?latched, 姣?3s 閲嶅彂纭繚 RViz 濮嬬粓鍙)
+        # 娉? latched 鐨勬椂闂存埑浼氳繃鏈熷鑷?RViz2 message filter 涓㈠純, 鏀逛负瀹氭椂閲嶅彂
         self.pub_bldg  = self.create_publisher(PointCloud2,  TOPICS.building_cloud, 10)
-        self._bldg_last_pub  = 0.0   # 上次建筑点云发布的 wall-clock 时间
+        self._bldg_last_pub  = 0.0   # 涓婃寤虹瓚鐐逛簯鍙戝竷鐨?wall-clock 鏃堕棿
         self._publish_robot_description()
         self._publish_building_cloud()
 
-        # ── Subscribers ──
-        # pathFollower 以 BEST_EFFORT 50 Hz 发布 cmd_vel
+        # 鈹€鈹€ Subscribers 鈹€鈹€
+        # pathFollower 浠?BEST_EFFORT 50 Hz 鍙戝竷 cmd_vel
         be = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=10)
         self.create_subscription(TwistStamped, TOPICS.cmd_vel,        self._on_cmd,           be)
-        # 航点跟踪事件 (JSON)
+        # 鑸偣璺熻釜浜嬩欢 (JSON)
         self.create_subscription(String,       TOPICS.adapter_status, self._on_adapter,        10)
-        # 全局规划器状态 (pathFollower 发布 GOAL_REACHED/STUCK 等)
+        # 鍏ㄥ眬瑙勫垝鍣ㄧ姸鎬?(pathFollower 鍙戝竷 GOAL_REACHED/STUCK 绛?
         self.create_subscription(String,       TOPICS.planner_status, self._on_planner,        10)
-        # 手动目标 — PoseStamped (RViz2 "2D Nav Goal" → /nav/goal_pose)
+        # 鎵嬪姩鐩爣 鈥?PoseStamped (RViz2 "2D Nav Goal" 鈫?/nav/goal_pose)
         self.create_subscription(PoseStamped,  TOPICS.goal_pose,      self._on_goal_pose,      10)
-        # 手动目标 — PointStamped (RViz2 "Publish Point" → /clicked_point, 支持真 XYZ)
+        # 鎵嬪姩鐩爣 鈥?PointStamped (RViz2 "Publish Point" 鈫?/clicked_point, 鏀寔鐪?XYZ)
         self.create_subscription(PointStamped, '/clicked_point',      self._on_clicked_point,  10)
-        # PCT 规划器输出 (含 3D Z 坐标, TRANSIENT_LOCAL latched)
+        # PCT 瑙勫垝鍣ㄨ緭鍑?(鍚?3D Z 鍧愭爣, TRANSIENT_LOCAL latched)
         _latch_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                                 durability=DurabilityPolicy.TRANSIENT_LOCAL, depth=1)
         self.create_subscription(Path, TOPICS.global_path, self._on_global_path, _latch_qos)
 
-        # ── 20 Hz 主循环 ──
+        # 鈹€鈹€ 20 Hz 涓诲惊鐜?鈹€鈹€
         self.create_timer(DT, self._tick)
 
         self.get_logger().info(
-            f'[sim] 仿真节点启动. '
-            f'起点=({self.x:.2f},{self.y:.2f}) '
-            f'目标=({self.gx:.2f},{self.gy:.2f}) '
-            f'预热={WARMUP_S:.1f}s 超时={MAX_SECS:.0f}s')
+            f'[sim] 浠跨湡鑺傜偣鍚姩. '
+            f'璧风偣=({self.x:.2f},{self.y:.2f}) '
+            f'鐩爣=({self.gx:.2f},{self.gy:.2f}) '
+            f'棰勭儹={WARMUP_S:.1f}s 瓒呮椂={MAX_SECS:.0f}s')
 
-    # ── TF 发布 ──────────────────────────────────────────────────────────────
+    # 鈹€鈹€ TF 鍙戝竷 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
     def _publish_robot_description(self):
-        """将 simple_car.urdf 发布到 /robot_description (latched)。"""
+        """灏?simple_car.urdf 鍙戝竷鍒?/robot_description (latched)銆?""
         if os.path.exists(_URDF_PATH):
             with open(_URDF_PATH) as f:
                 content = f.read()
@@ -313,12 +313,12 @@ class SimRobotNode(Node):
         self.get_logger().info(f'[sim] /robot_description published ({len(content)} chars)')
 
     def _publish_building_cloud(self):
-        """发布真实建筑 3D 点云到 /nav/building_cloud (latched)。
-        首次调用从 PCD 文件加载并缓存, 后续直接复用缓存。"""
+        """鍙戝竷鐪熷疄寤虹瓚 3D 鐐逛簯鍒?/nav/building_cloud (latched)銆?
+        棣栨璋冪敤浠?PCD 鏂囦欢鍔犺浇骞剁紦瀛? 鍚庣画鐩存帴澶嶇敤缂撳瓨銆?""
         if not hasattr(self, '_bldg_pts_cache'):
             pcd_path = _find_pcd()
             if pcd_path is None:
-                self.get_logger().warn('[sim] building2_9.pcd not found — 3D cloud skipped')
+                self.get_logger().warn('[sim] building2_9.pcd not found 鈥?3D cloud skipped')
                 self._bldg_pts_cache = None
                 return
             pts = _load_pcd_binary(pcd_path, max_pts=80000)
@@ -332,7 +332,7 @@ class SimRobotNode(Node):
         if self._bldg_pts_cache is None:
             return
 
-        # 使用当前时钟时间戳 — RViz2 message filter 需要能在 TF cache 中查到该时刻
+        # 浣跨敤褰撳墠鏃堕挓鏃堕棿鎴?鈥?RViz2 message filter 闇€瑕佽兘鍦?TF cache 涓煡鍒拌鏃跺埢
         msg = _make_xyzi_cloud(self._bldg_pts_cache, frame_id=FRAMES.map,
                                stamp=self.get_clock().now().to_msg())
         self.pub_bldg.publish(msg)
@@ -340,10 +340,10 @@ class SimRobotNode(Node):
         self.get_logger().info(f'[sim] Building cloud republished: {len(self._bldg_pts_cache)} pts')
 
     def _pub_static_tf(self):
-        """发布静态 TF:  map→odom  +  body→base_link (URDF 根坐标系)。"""
+        """鍙戝竷闈欐€?TF:  map鈫抩dom  +  body鈫抌ase_link (URDF 鏍瑰潗鏍囩郴)銆?""
         tfs = []
 
-        # map → odom (仿真中无 SLAM 漂移, 恒等变换)
+        # map 鈫?odom (浠跨湡涓棤 SLAM 婕傜Щ, 鎭掔瓑鍙樻崲)
         t1 = TransformStamped()
         t1.header.stamp    = self.get_clock().now().to_msg()
         t1.header.frame_id = FRAMES.map
@@ -351,7 +351,7 @@ class SimRobotNode(Node):
         t1.transform.rotation.w = 1.0
         tfs.append(t1)
 
-        # body → base_link (恒等变换, 让 robot_state_publisher 的 URDF TF 链接到导航坐标系)
+        # body 鈫?base_link (鎭掔瓑鍙樻崲, 璁?robot_state_publisher 鐨?URDF TF 閾炬帴鍒板鑸潗鏍囩郴)
         t2 = TransformStamped()
         t2.header.stamp    = t1.header.stamp
         t2.header.frame_id = FRAMES.body
@@ -362,7 +362,7 @@ class SimRobotNode(Node):
         self.static_br.sendTransform(tfs)
 
     def _pub_odom_tf(self, now):
-        """发布 odom → body TF + /nav/odometry。"""
+        """鍙戝竷 odom 鈫?body TF + /nav/odometry銆?""
         tf = TransformStamped()
         tf.header.stamp    = now
         tf.header.frame_id = FRAMES.odom
@@ -388,11 +388,11 @@ class SimRobotNode(Node):
         od.twist.twist.angular.z   = self.wz
         self.pub_odom.publish(od)
 
-        # 机器人位置大球 (Z=0.5m 悬空, 在建筑点云上方可见)
+        # 鏈哄櫒浜轰綅缃ぇ鐞?(Z=0.5m 鎮┖, 鍦ㄥ缓绛戠偣浜戜笂鏂瑰彲瑙?
         self._pub_robot_marker(now)
 
     def _pub_robot_marker(self, now):
-        """发布黄色大球 Marker 标记机器人实时位置 (建筑点云上方清晰可见)。"""
+        """鍙戝竷榛勮壊澶х悆 Marker 鏍囪鏈哄櫒浜哄疄鏃朵綅缃?(寤虹瓚鐐逛簯涓婃柟娓呮櫚鍙)銆?""
         m = Marker()
         m.header.frame_id = FRAMES.odom
         m.header.stamp    = now
@@ -402,13 +402,13 @@ class SimRobotNode(Node):
         m.action          = Marker.ADD
         m.pose.position.x = self.x
         m.pose.position.y = self.y
-        m.pose.position.z = max(0.3, self.z + 0.6)   # 跟随机器人真实Z高度
+        m.pose.position.z = max(0.3, self.z + 0.6)   # 璺熼殢鏈哄櫒浜虹湡瀹瀂楂樺害
         m.pose.orientation.w = 1.0
-        m.scale.x = m.scale.y = m.scale.z = 0.7   # 直径 0.7m, 远处也清晰可见
-        m.color.r = 1.0; m.color.g = 0.9; m.color.b = 0.0; m.color.a = 1.0  # 亮黄色
+        m.scale.x = m.scale.y = m.scale.z = 0.7   # 鐩村緞 0.7m, 杩滃涔熸竻鏅板彲瑙?
+        m.color.r = 1.0; m.color.g = 0.9; m.color.b = 0.0; m.color.a = 1.0  # 浜粍鑹?
         self.pub_marker.publish(m)
 
-        # 朝向箭头 (蓝色, 从球心延伸 1m)
+        # 鏈濆悜绠ご (钃濊壊, 浠庣悆蹇冨欢浼?1m)
         arr = Marker()
         arr.header.frame_id = FRAMES.odom
         arr.header.stamp    = now
@@ -421,17 +421,17 @@ class SimRobotNode(Node):
         arr.pose.position.z = max(0.3, self.z + 0.6)
         arr.pose.orientation.z = math.sin(self.yaw / 2)
         arr.pose.orientation.w = math.cos(self.yaw / 2)
-        arr.scale.x = 1.2   # 箭头长度
-        arr.scale.y = 0.15  # 箭头宽度
+        arr.scale.x = 1.2   # 绠ご闀垮害
+        arr.scale.y = 0.15  # 绠ご瀹藉害
         arr.scale.z = 0.15
-        arr.color.r = 0.0; arr.color.g = 0.5; arr.color.b = 1.0; arr.color.a = 1.0  # 蓝色
+        arr.color.r = 0.0; arr.color.g = 0.5; arr.color.b = 1.0; arr.color.a = 1.0  # 钃濊壊
         self.pub_marker.publish(arr)
 
-    # ── 回调 ──────────────────────────────────────────────────────────────────
+    # 鈹€鈹€ 鍥炶皟 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
     def _on_cmd(self, msg: TwistStamped):
         if self._mode_3d:
-            return   # 3D模式: 由 _follow_3d() 直接控制速度, 忽略 pathFollower cmd_vel
+            return   # 3D妯″紡: 鐢?_follow_3d() 鐩存帴鎺у埗閫熷害, 蹇界暐 pathFollower cmd_vel
         self.vx = msg.twist.linear.x
         self.vy = msg.twist.linear.y
         self.wz = msg.twist.angular.z
@@ -449,61 +449,61 @@ class SimRobotNode(Node):
             self.phase = 'done'
 
     def _on_goal_pose(self, msg: PoseStamped):
-        """RViz2 '2D Nav Goal' 或 ros2 topic pub → /nav/goal_pose.
-        注意: sim_robot_node 自身也发布此话题, 需过滤自身消息."""
+        """RViz2 '2D Nav Goal' 鎴?ros2 topic pub 鈫?/nav/goal_pose.
+        娉ㄦ剰: sim_robot_node 鑷韩涔熷彂甯冩璇濋, 闇€杩囨护鑷韩娑堟伅."""
         gx = msg.pose.position.x
         gy = msg.pose.position.y
-        # 3D 模式下忽略: _activate_3d_nav 已直接发布带 Z 的目标给 PCT, 不需要 _set_new_goal
+        # 3D 妯″紡涓嬪拷鐣? _activate_3d_nav 宸茬洿鎺ュ彂甯冨甫 Z 鐨勭洰鏍囩粰 PCT, 涓嶉渶瑕?_set_new_goal
         if self._mode_3d:
             return
-        # 忽略自身重发 (坐标与当前目标几乎一致)
+        # 蹇界暐鑷韩閲嶅彂 (鍧愭爣涓庡綋鍓嶇洰鏍囧嚑涔庝竴鑷?
         if math.hypot(gx - self.gx, gy - self.gy) < 0.3:
             return
         self._set_new_goal(gx, gy, source='goal_pose')
 
     def _on_clicked_point(self, msg: PointStamped):
-        """RViz2 'Publish Point' 工具 → /clicked_point (真实 3D XYZ).
-        在 RViz2 三维视图里点击建筑点云任意位置 → 触发真实 3D A* 路径规划。"""
+        """RViz2 'Publish Point' 宸ュ叿 鈫?/clicked_point (鐪熷疄 3D XYZ).
+        鍦?RViz2 涓夌淮瑙嗗浘閲岀偣鍑诲缓绛戠偣浜戜换鎰忎綅缃?鈫?瑙﹀彂鐪熷疄 3D A* 璺緞瑙勫垝銆?""
         gx = msg.point.x
         gy = msg.point.y
         gz = msg.point.z
         self.get_logger().info(
-            f'[3D] 收到点击目标: ({gx:.2f}, {gy:.2f}, {gz:.2f}m)')
+            f'[3D] 鏀跺埌鐐瑰嚮鐩爣: ({gx:.2f}, {gy:.2f}, {gz:.2f}m)')
         self._activate_3d_nav(gx, gy, gz)
 
     def _activate_3d_nav(self, gx: float, gy: float, gz: float):
-        """激活 PCT 3D A* 导航模式: 将目标（含 Z）发送给 pct_planner_astar。
-        规划器检测 goal.pose.position.z > 0.1 → 调用 _plan_3d() → 发布含真实 Z 的全局路径。
-        sim_robot 通过 /nav/global_path 订阅接收路径, 再由 _follow_3d() 跟踪。"""
+        """婵€娲?PCT 3D A* 瀵艰埅妯″紡: 灏嗙洰鏍囷紙鍚?Z锛夊彂閫佺粰 pct_planner_astar銆?
+        瑙勫垝鍣ㄦ娴?goal.pose.position.z > 0.1 鈫?璋冪敤 _plan_3d() 鈫?鍙戝竷鍚湡瀹?Z 鐨勫叏灞€璺緞銆?
+        sim_robot 閫氳繃 /nav/global_path 璁㈤槄鎺ユ敹璺緞, 鍐嶇敱 _follow_3d() 璺熻釜銆?""
         if not (MAP_X_MIN <= gx <= MAP_X_MAX and MAP_Y_MIN <= gy <= MAP_Y_MAX):
             self.get_logger().warn(
-                f'[3D] 目标 ({gx:.2f},{gy:.2f}) 超出地图范围 — 已忽略')
+                f'[3D] 鐩爣 ({gx:.2f},{gy:.2f}) 瓒呭嚭鍦板浘鑼冨洿 鈥?宸插拷鐣?)
             return
 
         self._user_goal_set = True
         self.goal_reached   = False
         self._gz        = gz
-        self._mode_3d   = (gz > 0.1)   # Z>0.1m → 3D跟踪; 否则回退 2D
+        self._mode_3d   = (gz > 0.1)   # Z>0.1m 鈫?3D璺熻釜; 鍚﹀垯鍥為€€ 2D
         self._3d_path   = []
-        self._3d_waiting = True   # 等待 PCT 规划器响应, 避免 tick 误判 "路径为空=到达"
+        self._3d_waiting = True   # 绛夊緟 PCT 瑙勫垝鍣ㄥ搷搴? 閬垮厤 tick 璇垽 "璺緞涓虹┖=鍒拌揪"
         if self.t_start is None:
             self.t_start = time.time()
         self.phase = 'running'
 
-        # 发送带 Z 的目标给 PCT 规划器 → 触发 _plan_3d()
+        # 鍙戦€佸甫 Z 鐨勭洰鏍囩粰 PCT 瑙勫垝鍣?鈫?瑙﹀彂 _plan_3d()
         now = self.get_clock().now().to_msg()
         msg_goal = PoseStamped()
         msg_goal.header.stamp    = now
         msg_goal.header.frame_id = 'map'
         msg_goal.pose.position.x = gx
         msg_goal.pose.position.y = gy
-        msg_goal.pose.position.z = gz    # PCT 规划器检测 Z>0.1 → 执行 3D A*
+        msg_goal.pose.position.z = gz    # PCT 瑙勫垝鍣ㄦ娴?Z>0.1 鈫?鎵ц 3D A*
         msg_goal.pose.orientation.w = 1.0
         self.pub_goal.publish(msg_goal)
         self.get_logger().info(
-            f'[3D] 目标已发送给 PCT 规划器: ({gx:.2f},{gy:.2f},{gz:.2f}m)')
+            f'[3D] 鐩爣宸插彂閫佺粰 PCT 瑙勫垝鍣? ({gx:.2f},{gy:.2f},{gz:.2f}m)')
 
-        # 红色目标球 Marker (id=2)
+        # 绾㈣壊鐩爣鐞?Marker (id=2)
         gm = Marker()
         gm.header.frame_id = 'map'; gm.header.stamp = now
         gm.ns   = 'goal_3d'; gm.id = 2
@@ -516,8 +516,8 @@ class SimRobotNode(Node):
         self.pub_marker.publish(gm)
 
     def _on_global_path(self, msg: Path):
-        """接收 PCT 规划器发布的全局路径 (含真实 Z).
-        若路径存在 Z 变化 (>0.2m) → 判定为 3D 路径, 填充 _3d_path 供 _follow_3d() 跟踪。"""
+        """鎺ユ敹 PCT 瑙勫垝鍣ㄥ彂甯冪殑鍏ㄥ眬璺緞 (鍚湡瀹?Z).
+        鑻ヨ矾寰勫瓨鍦?Z 鍙樺寲 (>0.2m) 鈫?鍒ゅ畾涓?3D 璺緞, 濉厖 _3d_path 渚?_follow_3d() 璺熻釜銆?""
         if not msg.poses:
             return
         z_vals = [ps.pose.position.z for ps in msg.poses]
@@ -528,15 +528,15 @@ class SimRobotNode(Node):
                 [ps.pose.position.x, ps.pose.position.y, ps.pose.position.z]
                 for ps in msg.poses
             ]
-            self._3d_waiting = False   # 路径已收到, tick 可正常判断到达
+            self._3d_waiting = False   # 璺緞宸叉敹鍒? tick 鍙甯稿垽鏂埌杈?
             self.get_logger().info(
-                f'[3D] 收到 PCT 3D 路径: {n}点  Z范围={z_range:.2f}m  '
-                f'→ _follow_3d 激活')
+                f'[3D] 鏀跺埌 PCT 3D 璺緞: {n}鐐? Z鑼冨洿={z_range:.2f}m  '
+                f'鈫?_follow_3d 婵€娲?)
 
     def _follow_3d(self):
-        """3D 路径跟踪控制器。
-        XY: 比例转向 + 速度控制（抑制大偏航时前进速度）
-        Z:  比例控制垂直速度"""
+        """3D 璺緞璺熻釜鎺у埗鍣ㄣ€?
+        XY: 姣斾緥杞悜 + 閫熷害鎺у埗锛堟姂鍒跺ぇ鍋忚埅鏃跺墠杩涢€熷害锛?
+        Z:  姣斾緥鎺у埗鍨傜洿閫熷害"""
         if not self._3d_path:
             self.vx = self.vy = self.wz = self.vz = 0.0
             self._mode_3d = False
@@ -547,50 +547,50 @@ class SimRobotNode(Node):
         dist_xy = math.hypot(dx, dy)
         dist_3d = math.sqrt(dist_xy * dist_xy + dz * dz)
 
-        # 到达当前路点
+        # 鍒拌揪褰撳墠璺偣
         if dist_3d < 0.4:
             self._3d_path.pop(0)
             return
 
-        # XY 控制
+        # XY 鎺у埗
         target_yaw = math.atan2(dy, dx)
         yaw_err = (target_yaw - self.yaw + math.pi) % (2 * math.pi) - math.pi
         self.wz = max(-1.5, min(1.5, 3.0 * yaw_err))
-        # 大偏航时减速，对准方向后全速
+        # 澶у亸鑸椂鍑忛€燂紝瀵瑰噯鏂瑰悜鍚庡叏閫?
         speed_factor = max(0.0, 1.0 - abs(yaw_err) / 1.2)
         self.vx = min(0.8, dist_xy) * speed_factor
         self.vy = 0.0
 
-        # Z 控制（垂直速度）
+        # Z 鎺у埗锛堝瀭鐩撮€熷害锛?
         self.vz = max(-0.5, min(0.5, 2.0 * dz))
 
     def _set_new_goal(self, gx: float, gy: float, source: str = '?'):
-        """验证并设置新目标, 立即触发 PCT 重规划."""
-        # 地图范围校验
+        """楠岃瘉骞惰缃柊鐩爣, 绔嬪嵆瑙﹀彂 PCT 閲嶈鍒?"""
+        # 鍦板浘鑼冨洿鏍￠獙
         if not (MAP_X_MIN <= gx <= MAP_X_MAX and MAP_Y_MIN <= gy <= MAP_Y_MAX):
             self.get_logger().warn(
-                f'[goal] 目标 ({gx:.2f},{gy:.2f}) 超出地图范围 '
-                f'X∈[{MAP_X_MIN},{MAP_X_MAX}] Y∈[{MAP_Y_MIN},{MAP_Y_MAX}] — 已忽略')
+                f'[goal] 鐩爣 ({gx:.2f},{gy:.2f}) 瓒呭嚭鍦板浘鑼冨洿 '
+                f'X鈭圼{MAP_X_MIN},{MAP_X_MAX}] Y鈭圼{MAP_Y_MIN},{MAP_Y_MAX}] 鈥?宸插拷鐣?)
             return
         old_gx, old_gy = self.gx, self.gy
         self.gx = gx
         self.gy = gy
-        self._user_goal_set = True   # 用户手动设置过目标, loop reset 不覆盖
+        self._user_goal_set = True   # 鐢ㄦ埛鎵嬪姩璁剧疆杩囩洰鏍? loop reset 涓嶈鐩?
         self.get_logger().info(
-            f'[goal] 新目标 [{source}]: ({gx:.2f},{gy:.2f})  '
-            f'(原={old_gx:.2f},{old_gy:.2f})')
+            f'[goal] 鏂扮洰鏍?[{source}]: ({gx:.2f},{gy:.2f})  '
+            f'(鍘?{old_gx:.2f},{old_gy:.2f})')
 
-        # 无论当前处于哪个阶段, 立即进入 running 并触发重规划
+        # 鏃犺褰撳墠澶勪簬鍝釜闃舵, 绔嬪嵆杩涘叆 running 骞惰Е鍙戦噸瑙勫垝
         self.goal_reached = False
-        self.vx = self.vy = self.wz = 0.0    # 清速度防惯性漂移
+        self.vx = self.vy = self.wz = 0.0    # 娓呴€熷害闃叉儻鎬ф紓绉?
         if self.t_start is None:
             self.t_start = time.time()
         self.phase = 'running'
         now = self.get_clock().now().to_msg()
         self._pub_goal(now)
-        self.get_logger().info(f'[goal] 已发送新目标给 PCT 规划器, 重新规划中...')
+        self.get_logger().info(f'[goal] 宸插彂閫佹柊鐩爣缁?PCT 瑙勫垝鍣? 閲嶆柊瑙勫垝涓?..')
 
-    # ── 运动学积分 ────────────────────────────────────────────────────────────
+    # 鈹€鈹€ 杩愬姩瀛︾Н鍒?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
     def _integrate(self):
         c, s = math.cos(self.yaw), math.sin(self.yaw)
@@ -598,15 +598,15 @@ class SimRobotNode(Node):
         self.y   += (s * self.vx + c * self.vy) * DT
         self.yaw += self.wz * DT
         self.yaw  = (self.yaw + math.pi) % (2 * math.pi) - math.pi
-        self.z   += self.vz * DT          # Z 轴积分 (3D 模式)
+        self.z   += self.vz * DT          # Z 杞寸Н鍒?(3D 妯″紡)
 
-        # 差速驱动车轮角度积分
+        # 宸€熼┍鍔ㄨ溅杞搴︾Н鍒?
         v_left  = self.vx - self.wz * WHEEL_BASE / 2.0
         v_right = self.vx + self.wz * WHEEL_BASE / 2.0
         self._left_wheel_angle  += v_left  / WHEEL_RADIUS * DT
         self._right_wheel_angle += v_right / WHEEL_RADIUS * DT
 
-        # 发布 JointState (robot_state_publisher 需要)
+        # 鍙戝竷 JointState (robot_state_publisher 闇€瑕?
         js = JointState()
         js.header.stamp = self.get_clock().now().to_msg()
         js.name     = ['left_wheel_joint', 'right_wheel_joint']
@@ -614,16 +614,16 @@ class SimRobotNode(Node):
         js.velocity = [v_left / WHEEL_RADIUS, v_right / WHEEL_RADIUS]
         self.pub_joints.publish(js)
 
-    # ── 主循环 ────────────────────────────────────────────────────────────────
+    # 鈹€鈹€ 涓诲惊鐜?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
     def _tick(self):
         now = self.get_clock().now().to_msg()
 
-        # ── 建筑点云: 每 3s 重发 (所有阶段均适用, 确保 RViz 随时连接都能看到) ──
+        # 鈹€鈹€ 寤虹瓚鐐逛簯: 姣?3s 閲嶅彂 (鎵€鏈夐樁娈靛潎閫傜敤, 纭繚 RViz 闅忔椂杩炴帴閮借兘鐪嬪埌) 鈹€鈹€
         if time.time() - self._bldg_last_pub >= 3.0:
             self._publish_building_cloud()
 
-        # ── pausing 阶段: 持续发布 TF + 地形 (不 sleep, 避免阻塞 executor) ──
+        # 鈹€鈹€ pausing 闃舵: 鎸佺画鍙戝竷 TF + 鍦板舰 (涓?sleep, 閬垮厤闃诲 executor) 鈹€鈹€
         if self.phase == 'pausing':
             self._pub_odom_tf(now)
             terrain = _flat_cloud(self.x, self.y, self.z, stamp=now)
@@ -644,7 +644,7 @@ class SimRobotNode(Node):
             self.t_start = time.time()
         elapsed = time.time() - self.t_start
 
-        # ── 始终发布: 里程计 + TF + 合成平坦地形 + stop=0 ──
+        # 鈹€鈹€ 濮嬬粓鍙戝竷: 閲岀▼璁?+ TF + 鍚堟垚骞冲潶鍦板舰 + stop=0 鈹€鈹€
         self._pub_odom_tf(now)
 
         terrain = _flat_cloud(self.x, self.y, self.z, stamp=now)
@@ -656,31 +656,31 @@ class SimRobotNode(Node):
         stop_msg.data = 0
         self.pub_stop.publish(stop_msg)
 
-        # ── 预热阶段 ──
+        # 鈹€鈹€ 棰勭儹闃舵 鈹€鈹€
         if self.phase == 'warmup':
             if elapsed >= WARMUP_S:
                 self.phase = 'running'
                 if _DEF_GOAL_Z > 0.1:
-                    # 3D 跨楼层: 触发 3D A* 规划
+                    # 3D 璺ㄦゼ灞? 瑙﹀彂 3D A* 瑙勫垝
                     self._activate_3d_nav(self.gx, self.gy, _DEF_GOAL_Z)
                     self.get_logger().info(
-                        f'== RUNNING [3D]: 目标=({self.gx:.2f},{self.gy:.2f},Z={_DEF_GOAL_Z:.1f}m) ==')
+                        f'== RUNNING [3D]: 鐩爣=({self.gx:.2f},{self.gy:.2f},Z={_DEF_GOAL_Z:.1f}m) ==')
                 else:
                     self._pub_goal(now)
                     self.get_logger().info(
-                        f'== RUNNING: 目标已发送, PCT 规划器开始规划 ==')
+                        f'== RUNNING: 鐩爣宸插彂閫? PCT 瑙勫垝鍣ㄥ紑濮嬭鍒?==')
 
-        # ── 运行阶段 ──
+        # 鈹€鈹€ 杩愯闃舵 鈹€鈹€
         elif self.phase == 'running':
-            # ── 3D 模式: 由 PCT 3D A* 提供路径, _follow_3d 跟踪, 绕过 pathFollower ──
+            # 鈹€鈹€ 3D 妯″紡: 鐢?PCT 3D A* 鎻愪緵璺緞, _follow_3d 璺熻釜, 缁曡繃 pathFollower 鈹€鈹€
             if self._mode_3d:
-                # 等待 PCT 规划器响应 (_3d_waiting=True 时不判断到达)
+                # 绛夊緟 PCT 瑙勫垝鍣ㄥ搷搴?(_3d_waiting=True 鏃朵笉鍒ゆ柇鍒拌揪)
                 if self._3d_waiting:
                     self._integrate()
                     return
                 self._follow_3d()
                 self._integrate()
-                # 以约 2 Hz 记录 3D 轨迹
+                # 浠ョ害 2 Hz 璁板綍 3D 杞ㄨ抗
                 if int(elapsed * 2) > int((elapsed - DT) * 2):
                     dist_xy = math.hypot(self.x - self.gx, self.y - self.gy)
                     self.get_logger().info(
@@ -700,11 +700,11 @@ class SimRobotNode(Node):
                     })
                 if not self._3d_path:
                     self.get_logger().info(
-                        f'[3D] *** 3D目标到达! 终点=({self.x:.2f},{self.y:.2f},{self.z:.2f}) ***')
+                        f'[3D] *** 3D鐩爣鍒拌揪! 缁堢偣=({self.x:.2f},{self.y:.2f},{self.z:.2f}) ***')
                     self.goal_reached = True
                     self.phase = 'done'
                 return
-            # 每 GOAL_RESEND_S 秒重新发送目标 (防规划器重启后丢失)
+            # 姣?GOAL_RESEND_S 绉掗噸鏂板彂閫佺洰鏍?(闃茶鍒掑櫒閲嶅惎鍚庝涪澶?
             if elapsed > WARMUP_S:
                 slot_now  = int((elapsed - WARMUP_S) / GOAL_RESEND_S)
                 slot_prev = int((elapsed - WARMUP_S - DT) / GOAL_RESEND_S)
@@ -713,14 +713,14 @@ class SimRobotNode(Node):
 
             self._integrate()
 
-            # 以约 2 Hz 记录轨迹和日志
+            # 浠ョ害 2 Hz 璁板綍杞ㄨ抗鍜屾棩蹇?
             if int(elapsed * 2) > int((elapsed - DT) * 2):
                 dist = math.hypot(self.x - self.gx, self.y - self.gy)
                 self.get_logger().info(
                     f't={elapsed:6.1f}s  '
                     f'pos=({self.x:.3f},{self.y:.3f})  '
-                    f'yaw={math.degrees(self.yaw):6.1f}°  '
-                    f'v=({self.vx:.2f},{self.vy:.2f})  ω={self.wz:.3f}  '
+                    f'yaw={math.degrees(self.yaw):6.1f}掳  '
+                    f'v=({self.vx:.2f},{self.vy:.2f})  蠅={self.wz:.3f}  '
                     f'dist={dist:.2f}m  cmds={self.cmd_count}')
                 self.traj.append({
                     't':    round(elapsed, 2),
@@ -736,7 +736,7 @@ class SimRobotNode(Node):
                 if dist < GOAL_THRESH:
                     self.goal_reached = True
                     self.get_logger().info(
-                        f'*** GOAL REACHED (距离)  t={elapsed:.1f}s  dist={dist:.3f}m ***')
+                        f'*** GOAL REACHED (璺濈)  t={elapsed:.1f}s  dist={dist:.3f}m ***')
                     self.phase = 'done'
                     return
 
@@ -758,12 +758,12 @@ class SimRobotNode(Node):
         msg.pose.position.y = self.gy
         msg.pose.orientation.w = 1.0
         self.pub_goal.publish(msg)
-        self.get_logger().info(f'[goal] 目标已发布: ({self.gx:.2f}, {self.gy:.2f})')
+        self.get_logger().info(f'[goal] 鐩爣宸插彂甯? ({self.gx:.2f}, {self.gy:.2f})')
 
-    # ── 保存结果 ──────────────────────────────────────────────────────────────
+    # 鈹€鈹€ 淇濆瓨缁撴灉 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
     def _finish(self):
-        """保存结果后切换到 pausing 阶段 (非阻塞, 不 sleep)。"""
+        """淇濆瓨缁撴灉鍚庡垏鎹㈠埌 pausing 闃舵 (闈為樆濉? 涓?sleep)銆?""
         self.phase = 'pausing'
         self._pause_start = time.time()
         result = {
@@ -778,16 +778,16 @@ class SimRobotNode(Node):
         json_path = '/tmp/sim_result.json'
         with open(json_path, 'w') as f:
             json.dump(result, f, indent=2)
-        self.get_logger().info(f'结果已保存: {json_path}  ({LOOP_PAUSE_S:.0f}s 后重置...)')
+        self.get_logger().info(f'缁撴灉宸蹭繚瀛? {json_path}  ({LOOP_PAUSE_S:.0f}s 鍚庨噸缃?..)')
         self._plot(result)
 
     def _reset_for_loop(self):
-        """重置机器人位置到起点，保留用户手动设置的目标。"""
+        """閲嶇疆鏈哄櫒浜轰綅缃埌璧风偣锛屼繚鐣欑敤鎴锋墜鍔ㄨ缃殑鐩爣銆?""
         self.x   = _DEF_START_X
         self.y   = _DEF_START_Y
         self.yaw = _DEF_START_YAW
         self.vx = self.vy = self.wz = 0.0
-        self.z = 0.0    # 重置 Z 高度到地面 (3D 模式结束后归零)
+        self.z = 0.0    # 閲嶇疆 Z 楂樺害鍒板湴闈?(3D 妯″紡缁撴潫鍚庡綊闆?
         self.vz = 0.0
         self._mode_3d    = False
         self._3d_path    = []
@@ -798,14 +798,14 @@ class SimRobotNode(Node):
         self.t_start = None
         self._left_wheel_angle  = 0.0
         self._right_wheel_angle = 0.0
-        # 只有用户没有手动设置过目标时才回归默认目标
+        # 鍙湁鐢ㄦ埛娌℃湁鎵嬪姩璁剧疆杩囩洰鏍囨椂鎵嶅洖褰掗粯璁ょ洰鏍?
         if not self._user_goal_set:
             self.gx = _DEF_GOAL_X
             self.gy = _DEF_GOAL_Y
         self.phase = 'warmup'
         self.get_logger().info(
-            f'[sim] == 循环重置: 起点=({self.x},{self.y}) 目标=({self.gx:.2f},{self.gy:.2f}) ==')
-        # 重新发布建筑点云, 确保刚连接的 RViz 实例也能看到
+            f'[sim] == 寰幆閲嶇疆: 璧风偣=({self.x},{self.y}) 鐩爣=({self.gx:.2f},{self.gy:.2f}) ==')
+        # 閲嶆柊鍙戝竷寤虹瓚鐐逛簯, 纭繚鍒氳繛鎺ョ殑 RViz 瀹炰緥涔熻兘鐪嬪埌
         self._publish_building_cloud()
 
     def _plot(self, result):
@@ -816,7 +816,7 @@ class SimRobotNode(Node):
 
             traj = result['trajectory']
             if not traj:
-                self.get_logger().warn('轨迹为空, 跳过绘图')
+                self.get_logger().warn('杞ㄨ抗涓虹┖, 璺宠繃缁樺浘')
                 return
 
             ts  = [p['t']    for p in traj]
@@ -828,35 +828,35 @@ class SimRobotNode(Node):
 
             fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
-            # 面板 1: XY 轨迹
+            # 闈㈡澘 1: XY 杞ㄨ抗
             ax = axes[0]
-            ax.plot(xs, ys, 'b-', lw=2, label='机器人轨迹')
-            ax.plot(xs[0],  ys[0],  'go',  ms=12, label=f'起点 ({xs[0]:.1f},{ys[0]:.1f})')
-            ax.plot(self.gx, self.gy, 'r*', ms=18, label=f'目标 ({self.gx:.1f},{self.gy:.1f})')
+            ax.plot(xs, ys, 'b-', lw=2, label='鏈哄櫒浜鸿建杩?)
+            ax.plot(xs[0],  ys[0],  'go',  ms=12, label=f'璧风偣 ({xs[0]:.1f},{ys[0]:.1f})')
+            ax.plot(self.gx, self.gy, 'r*', ms=18, label=f'鐩爣 ({self.gx:.1f},{self.gy:.1f})')
             ax.plot(xs[-1], ys[-1], 'bs', ms=10,
-                    label=f'终点 ({xs[-1]:.2f},{ys[-1]:.2f})')
-            status = '✓ 到达目标' if result['goal_reached'] else f'✗ 超时 (dist={ds[-1]:.2f}m)'
+                    label=f'缁堢偣 ({xs[-1]:.2f},{ys[-1]:.2f})')
+            status = '鉁?鍒拌揪鐩爣' if result['goal_reached'] else f'鉁?瓒呮椂 (dist={ds[-1]:.2f}m)'
             _scene = os.environ.get('SIM_SCENE_NAME', 'Building2_9')
-            ax.set_title(f'{_scene} SITL — {status}', fontsize=11)
+            ax.set_title(f'{_scene} SITL 鈥?{status}', fontsize=11)
             ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)')
             ax.legend(fontsize=8); ax.set_aspect('equal'); ax.grid(True, alpha=0.3)
 
-            # 面板 2: 时间序列指标
+            # 闈㈡澘 2: 鏃堕棿搴忓垪鎸囨爣
             ax2 = axes[1]
-            ax2.plot(ts, ds,  'r-',  lw=2,   label='到目标距离 (m)')
+            ax2.plot(ts, ds,  'r-',  lw=2,   label='鍒扮洰鏍囪窛绂?(m)')
             ax2.plot(ts, vxs, 'b-',  lw=1.5, label='vx (m/s)')
-            ax2.plot(ts, wzs, 'g--', lw=1.2, label='ωz (rad/s)')
+            ax2.plot(ts, wzs, 'g--', lw=1.2, label='蠅z (rad/s)')
             ax2.axhline(GOAL_THRESH, color='r', ls=':', alpha=0.5,
-                        label=f'到达阈值 {GOAL_THRESH}m')
-            ax2.set_xlabel('时间 (s)'); ax2.set_title('导航指标')
+                        label=f'鍒拌揪闃堝€?{GOAL_THRESH}m')
+            ax2.set_xlabel('鏃堕棿 (s)'); ax2.set_title('瀵艰埅鎸囨爣')
             ax2.legend(fontsize=8); ax2.grid(True, alpha=0.3)
 
             plt.tight_layout()
             png_path = '/tmp/sim_traj.png'
             plt.savefig(png_path, dpi=130, bbox_inches='tight')
-            self.get_logger().info(f'轨迹图已保存: {png_path}')
+            self.get_logger().info(f'杞ㄨ抗鍥惧凡淇濆瓨: {png_path}')
         except Exception as e:
-            self.get_logger().error(f'绘图失败: {e}')
+            self.get_logger().error(f'缁樺浘澶辫触: {e}')
 
 
 def main():
@@ -865,13 +865,13 @@ def main():
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        print('[sim] 用户中断')
+        print('[sim] 鐢ㄦ埛涓柇')
     finally:
         if node.phase not in ('done', 'saved') and node.traj:
             node._finish()
         node.destroy_node()
         rclpy.shutdown()
-    print('[sim] 完成.')
+    print('[sim] 瀹屾垚.')
 
 
 if __name__ == '__main__':

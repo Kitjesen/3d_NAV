@@ -12,8 +12,8 @@ from nav.cmd_vel_mux_module import CmdVelMux
 from nav.global_planner_service import GlobalPlannerService
 from nav.navigation_module import NavigationModule
 from nav.traversability_cost_module import TraversabilityCostModule
-from semantic.planner.semantic_planner.bbox_navigator import STATE_TRACKING
-from semantic.planner.semantic_planner.visual_servo_module import (
+from semantic.planner.bbox_navigator import STATE_TRACKING
+from semantic.planner.visual_servo_module import (
     MODE_FIND,
     VisualServoModule,
 )

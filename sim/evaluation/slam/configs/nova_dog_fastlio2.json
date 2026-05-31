@@ -1,6 +1,6 @@
 {
   "name": "nova_dog_factory_fastlio2",
-  "world": "sim/worlds/factory_scene.xml",
+  "world": "sim/worlds/mujoco/factory_scene.xml",
   "robot": {
     "name": "nova_dog",
     "model_path": "sim/robots/nova_dog/robot_with_camera.xml",

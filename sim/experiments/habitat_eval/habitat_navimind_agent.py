@@ -43,10 +43,10 @@ for _pkg in [
         sys.path.insert(0, _p)
 
 from semantic.common.semantic_common import sanitize_position, safe_json_loads
-from semantic.perception.semantic_perception.projection import Detection3D
-from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
-from semantic.planner.semantic_planner.goal_resolver import GoalResolver, GoalResult
-from semantic.planner.semantic_planner.llm_client import LLMConfig
+from semantic.perception.projection import Detection3D
+from semantic.perception.instance_tracker import InstanceTracker
+from semantic.planner.goal_resolver import GoalResolver, GoalResult
+from semantic.planner.llm_client import LLMConfig
 
 logger = logging.getLogger(__name__)
 

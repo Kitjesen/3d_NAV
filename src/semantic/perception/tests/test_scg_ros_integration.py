@@ -20,13 +20,13 @@ import pytest
 _pkg_root = Path(__file__).parent.parent
 sys.path.insert(0, str(_pkg_root))
 
-from semantic.perception.semantic_perception.polyhedron_expansion import (
+from semantic.perception.polyhedron_expansion import (
     Polyhedron,
     PolyhedronExpander,
     PolyhedronExpansionConfig,
 )
-from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
-from semantic.perception.semantic_perception.scg_path_planner import SCGPath, SCGPathPlanner
+from semantic.perception.scg_builder import SCGBuilder, SCGConfig
+from semantic.perception.scg_path_planner import SCGPath, SCGPathPlanner
 
 # ══════════════════════════════════════════════════════════════════
 #  Fixtures

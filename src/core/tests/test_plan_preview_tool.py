@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib.util
 import json
@@ -358,7 +358,7 @@ def test_aarch64_pct_runtime_report_lists_missing_root_libs(tmp_path):
 def test_pct_runtime_report_honors_env_override(tmp_path, monkeypatch):
     tool = _load_tool()
     env_dir = tmp_path / "runtime_env"
-    fallback_dir = tmp_path / "src/global_planning/PCT_planner_runnable/native/x86_64"
+    fallback_dir = tmp_path / "src/global_planning/pct_planner_runnable/native/x86_64"
     env_dir.mkdir(parents=True)
     fallback_dir.mkdir(parents=True)
     _touch_pct_extensions(env_dir)

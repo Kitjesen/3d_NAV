@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Summarize LingTu server-side simulation closure reports."""
 
 from __future__ import annotations
@@ -3181,7 +3181,7 @@ def _default_path_exists(path: str | Path) -> bool:
 
 def _inspect_pct_runtime_for_host(machine: str | None) -> dict[str, Any]:
     try:
-        from global_planning.PCT_planner_runnable.runtime import inspect_pct_runtime
+        from global_planning.pct_planner_runnable.runtime import inspect_pct_runtime
 
         return dict(inspect_pct_runtime(ROOT, machine=machine))
     except Exception as exc:

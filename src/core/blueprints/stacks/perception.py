@@ -59,7 +59,7 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
             "perception",
             "scene",
             seed_group="perception",
-            fallback="semantic.perception.semantic_perception.perception_module.PerceptionModule",
+            fallback="semantic.perception.perception_module.PerceptionModule",
         )
 
         bp.add(
@@ -101,7 +101,7 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
             "encoder",
             "pluggable",
             seed_group="perception",
-            fallback="semantic.perception.semantic_perception.encoder_module.EncoderModule",
+            fallback="semantic.perception.encoder_module.EncoderModule",
         )
         if EncoderModule is not None:
             # Experimental tool module; the full-stack scene graph path uses

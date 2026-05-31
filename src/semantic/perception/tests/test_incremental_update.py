@@ -20,8 +20,8 @@ _SRC_DIR = os.path.join(_REPO_ROOT, "src", "semantic_perception")
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-from semantic.perception.semantic_perception.instance_tracker import InstanceTracker, TrackedObject
-from semantic.perception.semantic_perception.projection import Detection3D
+from semantic.perception.instance_tracker import InstanceTracker, TrackedObject
+from semantic.perception.projection import Detection3D
 
 # ─────────────────────────────────────────────
 #  Helpers

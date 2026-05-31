@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -937,7 +937,7 @@ def test_gazebo_launch_is_optional_but_ros_native():
 
 
 def test_gazebo_default_world_is_deliverable_demo_room():
-    world = _read("sim/worlds/lingtu_gazebo_demo_room.sdf")
+    world = _read("sim/worlds/gazebo/lingtu_gazebo_demo_room.sdf")
 
     assert '<world name="lingtu_gazebo_demo_room">' in world
     assert 'filename="gz-sim-physics-system"' in world
@@ -961,7 +961,7 @@ def test_gazebo_default_world_is_deliverable_demo_room():
 
 
 def test_gazebo_industrial_park_scene_is_first_class_product_scene():
-    world_path = REPO_ROOT / "sim/worlds/lingtu_gazebo_industrial_park.sdf"
+    world_path = REPO_ROOT / "sim/worlds/gazebo/lingtu_gazebo_industrial_park.sdf"
     tree = ET.parse(world_path)
     root = tree.getroot()
     text = world_path.read_text(encoding="utf-8")
@@ -1226,7 +1226,7 @@ def test_sim_navigation_launch_can_reuse_native_chain_with_gazebo_odometry():
     assert "'legacy'" in launch
     assert "'global_planner.py'" in launch
     global_planner = _read(
-        "src/global_planning/PCT_planner/planner/scripts/legacy/global_planner.py"
+        "src/global_planning/pct_planner/planner/scripts/legacy/global_planner.py"
     )
     assert "prepare_pct_runtime" in global_planner
     assert "flatten_path_z" in global_planner

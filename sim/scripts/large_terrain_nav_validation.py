@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Validate large-terrain navigation assets without robot motion."""
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ if str(SRC) not in sys.path:
 
 from nav.global_planner_service import GlobalPlannerService
 from nav.plan_safety import evaluate_plan_safety, grid_from_tomogram, path_distance
-from global_planning.PCT_planner_runnable.runtime import inspect_pct_runtime
+from global_planning.pct_planner_runnable.runtime import inspect_pct_runtime
 from sim.engine.scenarios.large_terrain_assets import (
     LargeTerrainAssets,
     TerrainRoute,

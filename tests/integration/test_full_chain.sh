@@ -1,5 +1,5 @@
-#!/bin/bash
-# ─────────────────────────────────────────────────────────────────────────────
+﻿#!/bin/bash
+# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 # T6: Full-chain closed-loop integration test
 #
 # Starts 6 real ROS2 nodes (terrainAnalysis, localPlanner, pathFollower,
@@ -18,7 +18,7 @@
 #   - ROS2 Humble sourced
 #   - Workspace built (install/setup.bash exists)
 #   - building2_9.pickle available (auto-detected from install or src)
-# ─────────────────────────────────────────────────────────────────────────────
+# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 set -e
 
@@ -32,7 +32,7 @@ BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# ── PID tracking ──────────────────────────────────────────────────────────────
+# 鈹€鈹€ PID tracking 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 TF_PID=""
 TA_PID=""
 LP_PID=""
@@ -58,7 +58,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ── Kill leftover nodes from previous runs ────────────────────────────────────
+# 鈹€鈹€ Kill leftover nodes from previous runs 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 echo -e "${YELLOW}Killing leftover navigation nodes...${NC}"
 pkill -9 -f terrainAnalysis 2>/dev/null || true
 pkill -9 -f localPlanner 2>/dev/null || true
@@ -73,7 +73,7 @@ echo -e "${BOLD}  T6: Full-chain closed-loop test${NC}"
 echo "=========================================="
 echo ""
 
-# ── Environment check ─────────────────────────────────────────────────────────
+# 鈹€鈹€ Environment check 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 if [ ! -f "/opt/ros/humble/setup.bash" ]; then
     echo -e "${RED}ROS2 Humble not found${NC}"
     exit 1
@@ -86,15 +86,15 @@ if [ ! -f "install/setup.bash" ]; then
 fi
 source install/setup.bash || { echo -e "${RED}Failed to source workspace${NC}"; exit 1; }
 
-# ── Locate tomogram pickle ───────────────────────────────────────────────────
+# 鈹€鈹€ Locate tomogram pickle 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 # Try installed path first, then source path
 PCT_SHARE=$(ros2 pkg prefix pct_planner 2>/dev/null)/share/pct_planner || true
 MAP_FILE=""
 for candidate in \
     "${PCT_SHARE}/rsc/pcd/building2_9.pickle" \
-    "src/global_planning/PCT_planner/rsc/pcd/building2_9.pickle" \
+    "src/global_planning/pct_planner/rsc/pcd/building2_9.pickle" \
     "/home/sunrise/data/SLAM/navigation/install/pct_planner/share/pct_planner/rsc/pcd/building2_9.pickle" \
-    "/home/sunrise/data/SLAM/navigation/src/global_planning/PCT_planner/rsc/pcd/building2_9.pickle"; do
+    "/home/sunrise/data/SLAM/navigation/src/global_planning/pct_planner/rsc/pcd/building2_9.pickle"; do
     if [ -f "$candidate" ]; then
         MAP_FILE="$candidate"
         break
@@ -103,12 +103,12 @@ done
 
 if [ -z "$MAP_FILE" ]; then
     echo -e "${RED}building2_9.pickle not found. Cannot run global planner.${NC}"
-    echo "  Looked in: \$PCT_SHARE/rsc/pcd/, src/global_planning/PCT_planner/rsc/pcd/"
+    echo "  Looked in: \$PCT_SHARE/rsc/pcd/, src/global_planning/pct_planner/rsc/pcd/"
     exit 1
 fi
 echo -e "${BLUE}Tomogram: ${MAP_FILE}${NC}"
 
-# ── Locate paths folder for localPlanner ──────────────────────────────────────
+# 鈹€鈹€ Locate paths folder for localPlanner 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 LP_SHARE=$(ros2 pkg prefix local_planner 2>/dev/null)/share/local_planner || true
 PATHS_DIR="${LP_SHARE}/paths"
 if [ ! -d "$PATHS_DIR" ]; then
@@ -120,14 +120,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="/tmp/t6_logs"
 mkdir -p "$LOG_DIR"
 
-# ── Node 1: Static TF map -> odom (identity) ─────────────────────────────────
+# 鈹€鈹€ Node 1: Static TF map -> odom (identity) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 echo -e "${BLUE}[1/6] Static TF: map -> odom${NC}"
 ros2 run tf2_ros static_transform_publisher \
     0 0 0 0 0 0 map odom \
     > "$LOG_DIR/tf.log" 2>&1 &
 TF_PID=$!
 
-# ── Node 2: terrainAnalysis ──────────────────────────────────────────────────
+# 鈹€鈹€ Node 2: terrainAnalysis 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 echo -e "${BLUE}[2/6] terrainAnalysis${NC}"
 ros2 run terrain_analysis terrainAnalysis --ros-args \
     -r /Odometry:=/nav/odometry \
@@ -141,7 +141,7 @@ ros2 run terrain_analysis terrainAnalysis --ros-args \
     > "$LOG_DIR/terrain.log" 2>&1 &
 TA_PID=$!
 
-# ── Node 3: localPlanner ────────────────────────────────────────────────────
+# 鈹€鈹€ Node 3: localPlanner 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 echo -e "${BLUE}[3/6] localPlanner${NC}"
 ros2 run local_planner localPlanner --ros-args \
     -r /Odometry:=/nav/odometry \
@@ -167,7 +167,7 @@ ros2 run local_planner localPlanner --ros-args \
     > "$LOG_DIR/local_planner.log" 2>&1 &
 LP_PID=$!
 
-# ── Node 4: pathFollower ────────────────────────────────────────────────────
+# 鈹€鈹€ Node 4: pathFollower 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 echo -e "${BLUE}[4/6] pathFollower${NC}"
 ros2 run local_planner pathFollower --ros-args \
     -r /Odometry:=/nav/odometry \
@@ -191,13 +191,13 @@ ros2 run local_planner pathFollower --ros-args \
     > "$LOG_DIR/path_follower.log" 2>&1 &
 PF_PID=$!
 
-# ── Node 5: pct_planner_astar (Python A* global planner) ────────────────────
+# 鈹€鈹€ Node 5: pct_planner_astar (Python A* global planner) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 echo -e "${BLUE}[5/6] pct_planner_astar (Python A*)${NC}"
 # Find the script in the installed share directory
 PCT_SCRIPT="${PCT_SHARE}/planner/scripts/pct_planner_astar.py"
 if [ ! -f "$PCT_SCRIPT" ]; then
     # Fallback: source tree
-    PCT_SCRIPT="src/global_planning/PCT_planner/planner/scripts/pct_planner_astar.py"
+    PCT_SCRIPT="src/global_planning/pct_planner/planner/scripts/pct_planner_astar.py"
 fi
 if [ ! -f "$PCT_SCRIPT" ]; then
     echo -e "${RED}pct_planner_astar.py not found${NC}"
@@ -212,7 +212,7 @@ python3 "$PCT_SCRIPT" --ros-args \
     > "$LOG_DIR/global_planner.log" 2>&1 &
 GP_PID=$!
 
-# ── Node 6: pct_path_adapter ────────────────────────────────────────────────
+# 鈹€鈹€ Node 6: pct_path_adapter 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 echo -e "${BLUE}[6/6] pct_path_adapter${NC}"
 ros2 run pct_adapters pct_path_adapter --ros-args \
     -r /pct_path:=/nav/global_path \
@@ -225,7 +225,7 @@ ros2 run pct_adapters pct_path_adapter --ros-args \
     > "$LOG_DIR/adapter.log" 2>&1 &
 PA_PID=$!
 
-# ── Wait for nodes to start ─────────────────────────────────────────────────
+# 鈹€鈹€ Wait for nodes to start 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 echo ""
 echo -e "${BLUE}Waiting for nodes to initialize (10s)...${NC}"
 for i in $(seq 1 10); do
@@ -234,7 +234,7 @@ for i in $(seq 1 10); do
 done
 echo ""
 
-# ── Verify all PIDs still alive ──────────────────────────────────────────────
+# 鈹€鈹€ Verify all PIDs still alive 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 echo ""
 echo -e "${YELLOW}Node liveness check:${NC}"
 ALL_ALIVE=true
@@ -261,7 +261,7 @@ if [ "$ALL_ALIVE" = false ]; then
 fi
 echo ""
 
-# ── Run the Python test harness ──────────────────────────────────────────────
+# 鈹€鈹€ Run the Python test harness 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 echo -e "${BOLD}Running test harness...${NC}"
 echo ""
 

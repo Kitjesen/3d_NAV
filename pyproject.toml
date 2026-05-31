@@ -1,11 +1,11 @@
-[build-system]
+﻿[build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "lingtu"
 version = "2.2.0"
-description = "LingTu — autonomous navigation for quadruped robots"
+description = "LingTu 鈥?autonomous navigation for quadruped robots"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24,<2.0",
@@ -26,9 +26,9 @@ perception = ["torch", "ultralytics", "open-clip-torch"]
 llm = ["openai", "anthropic"]
 vector = ["chromadb"]
 dev = ["pytest", "pytest-cov", "ruff", "mypy"]
-# ThunderDriver 依赖 brainstem 的 gRPC 契约包 brainstem_api (v2.0.0)。
-# 真机 / sunrise 部署时安装: pip install -e '.[thunder]'
-# stub / sim 模式不需要装。
+# ThunderDriver 渚濊禆 brainstem 鐨?gRPC 濂戠害鍖?brainstem_api (v2.0.0)銆?
+# 鐪熸満 / sunrise 閮ㄧ讲鏃跺畨瑁? pip install -e '.[thunder]'
+# stub / sim 妯″紡涓嶉渶瑕佽銆?
 thunder = ["brainstem-api @ git+https://github.com/Kitjesen/brainstem_api.git@v2.0.0#subdirectory=python"]
 
 [project.scripts]
@@ -46,9 +46,9 @@ target-version = "py310"
 line-length = 100
 src = ["src", "cli"]
 exclude = [
-    "src/global_planning/PCT_planner/planner/lib/3rdparty",
-    "src/global_planning/PCT_planner/planner/scripts",
-    "src/global_planning/PCT_planner/tomography",
+    "src/global_planning/pct_planner/planner/lib/3rdparty",
+    "src/global_planning/pct_planner/planner/scripts",
+    "src/global_planning/pct_planner/tomography",
     "**/legacy/*",
 ]
 
@@ -72,9 +72,9 @@ ignore = [
     "RUF001",  # ambiguous unicode in string (Chinese chars, legacy code)
     "RUF002",  # ambiguous unicode in docstring (Chinese chars, legacy code)
     "RUF003",  # ambiguous unicode in comment (Chinese chars, legacy code)
-    "UP035",   # deprecated typing imports (Dict→dict etc, too many to fix at once)
+    "UP035",   # deprecated typing imports (Dict鈫抎ict etc, too many to fix at once)
     "UP031",   # printf-string-formatting (legacy %s style, migrate gradually)
-    "E741",    # ambiguous variable name (l, I, O — common in math code)
+    "E741",    # ambiguous variable name (l, I, O 鈥?common in math code)
     "RUF012",  # mutable class default (Module ports use this pattern intentionally)
     "F403",    # undefined-local-with-import-star (legacy ROS2-style wildcard imports)
     "B027",    # empty-method-without-abstract-decorator (Module lifecycle stubs)

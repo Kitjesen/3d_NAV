@@ -21,7 +21,7 @@ import math
 import time
 import unittest
 
-from semantic.planner.semantic_planner.voi_scheduler import (
+from semantic.planner.voi_scheduler import (
     SchedulerAction,
     SchedulerState,
     VoIConfig,

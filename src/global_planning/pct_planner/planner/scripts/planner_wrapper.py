@@ -1,0 +1,376 @@
+﻿import os
+import sys
+import pickle
+import math
+import numpy as np
+
+from utils import *
+
+sys.path.append('../')
+from lib import a_star, ele_planner, traj_opt
+
+rsg_root = os.path.dirname(os.path.abspath(__file__)) + '/../..'
+# For on-the-fly PCD -> tomogram (optional)
+_tomography_scripts = os.path.join(rsg_root, 'tomography', 'scripts')
+if os.path.isdir(_tomography_scripts) and _tomography_scripts not in sys.path:
+    sys.path.insert(0, _tomography_scripts)
+if os.path.join(rsg_root, 'tomography') not in sys.path:
+    sys.path.insert(0, os.path.join(rsg_root, 'tomography'))
+
+
+class TomogramPlanner(object):
+    def __init__(self, cfg):
+        self.cfg = cfg
+        _planner = getattr(cfg, "planner", None)
+        _wrapper = getattr(cfg, "wrapper", None)
+        self.use_quintic = getattr(_planner, "use_quintic", True)
+        self.max_heading_rate = getattr(_planner, "max_heading_rate", 10)
+        self.obstacle_thr = getattr(_planner, "obstacle_thr", 50)
+        tomo_dir = getattr(_wrapper, "tomo_dir", "/rsc/tomogram/")
+        self.tomo_dir = rsg_root + tomo_dir
+        self.pcd_dir = getattr(_wrapper, "pcd_dir", None)
+
+        self.resolution = None
+        self.center = None
+        self.n_slice = None
+        self.slice_h0 = None
+        self.slice_dh = None
+        self.map_dim = []
+        self.offset = None
+
+        self.start_idx = np.zeros(3, dtype=np.float32)
+        self.end_idx = np.zeros(3, dtype=np.float32)
+
+    def _initFromDataDict(self, data_dict):
+        tomogram = np.asarray(data_dict['data'], dtype=np.float32)
+        self.resolution = float(data_dict['resolution'])
+        self.center = np.asarray(data_dict['center'], dtype=np.double)
+        self.n_slice = tomogram.shape[1]
+        self.slice_h0 = float(data_dict['slice_h0'])
+        self.slice_dh = float(data_dict['slice_dh'])
+        # map_dim: [x_dim=cols=W, y_dim=rows=H] 鈥?涓?C++ ele_planner 鐨?(max_x, max_y) 瀵归綈
+        # tomogram shape = (channels, n_slice, H=rows, W=cols)
+        self.map_dim = [tomogram.shape[3], tomogram.shape[2]]
+        self.offset = np.array([int(self.map_dim[0] / 2), int(self.map_dim[1] / 2)], dtype=np.int32)
+        # Keep raw layers for ROS publishing (tomogram / traversability visualization)
+        self.layers_g = tomogram[3].copy()
+        self.layers_t = tomogram[0].copy()
+        trav = tomogram[0]
+        trav_gx = tomogram[1]
+        trav_gy = tomogram[2]
+        elev_g = tomogram[3].copy()
+        # Fill NaN with per-slice nominal height (not -100) 鈥?prevents GPMP optimizer
+        # from producing extreme Z values at smoothed points near NaN cells
+        for s in range(self.n_slice):
+            mask = np.isnan(elev_g[s])
+            elev_g[s][mask] = self.slice_h0 + s * self.slice_dh
+        elev_c = tomogram[4].copy()
+        for s in range(self.n_slice):
+            mask = np.isnan(elev_c[s])
+            elev_c[s][mask] = self.slice_h0 + s * self.slice_dh + 3.0
+        self.initPlanner(trav, trav_gx, trav_gy, elev_g, elev_c)
+
+    def loadTomogram(self, tomo_file, resolution=None, slice_dh=None, ground_h=None):
+        """鍔犺浇 tomogram銆傝嫢浼?resolution/slice_dh/ground_h 鍒欎粠 PCD 寤哄浘鏃朵紭鍏堜娇鐢紙濡傛潵鑷?ROS 鍙傛暟锛夈€?""
+        if os.path.isabs(tomo_file):
+            basename = os.path.basename(tomo_file)
+            search_dir = os.path.dirname(tomo_file)
+        else:
+            basename = tomo_file
+            search_dir = self.tomo_dir
+        # 鍙墺绂诲凡鐭ユ墿灞曞悕 (.pickle / .pcd)锛岄伩鍏?splitext 璇妸鏂囦欢鍚嶄腑鐨?        # 灏忔暟鐐瑰綋鎵╁睍鍚?(濡?"spiral0.3_2" 浼氳 splitext 閿欒鍒嗗壊涓?"spiral0")
+        for ext in ('.pickle', '.pcd'):
+            if basename.endswith(ext):
+                basename = basename[:-len(ext)]
+                break
+        base = basename
+        pcd_dir = self.pcd_dir if self.pcd_dir is not None else self.tomo_dir
+        pcd_search_dir = os.path.dirname(tomo_file) if os.path.isabs(tomo_file) else pcd_dir
+        pickle_path = os.path.join(search_dir, base + '.pickle')
+        pcd_path = os.path.join(pcd_search_dir, base + '.pcd')
+
+        if os.path.isfile(pickle_path):
+            with open(pickle_path, 'rb') as handle:
+                data_dict = pickle.load(handle)
+            print("tomogram.shape:", np.asarray(data_dict['data']).shape)
+            self._initFromDataDict(data_dict)
+            print(f"Tomogram loaded from {pickle_path}. Map: {self.map_dim}, Slices: {self.n_slice}")
+        elif os.path.isfile(pcd_path):
+            print(f"[PCT] No .pickle found; building tomogram from PCD: {pcd_path}")
+            try:
+                from build_tomogram import build_tomogram_from_pcd  # type: ignore[reportMissingImports]
+            except ImportError:
+                raise ImportError("PCD found but build_tomogram not available. Add pct_planner/tomography/scripts to PYTHONPATH or install tomography deps.")
+            _w = getattr(self.cfg, "wrapper", None)
+            res = resolution if resolution is not None else getattr(_w, "tomogram_resolution", 0.2)
+            dh = slice_dh if slice_dh is not None else getattr(_w, "tomogram_slice_dh", 0.5)
+            gh = ground_h if ground_h is not None else getattr(_w, "tomogram_ground_h", 0.0)
+            data_dict = build_tomogram_from_pcd(
+                pcd_path,
+                output_pickle_path=pickle_path,
+                resolution=res,
+                slice_dh=dh,
+                ground_h=gh,
+            )
+            print("tomogram.shape:", np.asarray(data_dict['data']).shape)
+            self._initFromDataDict(data_dict)
+            print(f"[PCT] Tomogram built from PCD and cached to {pickle_path}. Map: {self.map_dim}, Slices: {self.n_slice}")
+        else:
+            raise FileNotFoundError(
+                f"Neither tomogram nor PCD found for '{tomo_file}'. "
+                f"Looked for: {pickle_path} and {pcd_path}"
+            )
+        import gc
+        gc.collect()
+        
+    def initPlanner(self, trav, trav_gx, trav_gy, elev_g, elev_c):
+        diff_t = trav[1:] - trav[:-1]
+        diff_g = np.abs(elev_g[1:] - elev_g[:-1])
+
+        gateway_up = np.zeros_like(trav, dtype=bool)
+        mask_t = diff_t < -15.0
+        mask_g = (diff_g < 0.5) & (~np.isnan(elev_g[1:]))
+        gateway_up[:-1] = np.logical_and(mask_t, mask_g)
+        print("np.sum(gateway_up)", np.sum(gateway_up))
+        print("np.sum(mask_t)", np.sum(mask_t))
+        print("np.sum(mask_g)", np.sum(mask_g))
+
+        gateway_dn = np.zeros_like(trav, dtype=bool)
+        mask_t = diff_t > 15.0
+        mask_g = (diff_g < 0.5) & (~np.isnan(elev_g[:-1]))
+        gateway_dn[1:] = np.logical_and(mask_t, mask_g)
+        
+        gateway = np.zeros_like(trav, dtype=np.int32)
+        gateway[gateway_up] = 2
+        gateway[gateway_dn] = -2
+
+        self.planner = ele_planner.OfflineElePlanner(
+            max_heading_rate=self.max_heading_rate, use_quintic=self.use_quintic
+        )
+        # ele_planner.so was compiled against numpy 1.x C API.
+        # numpy 2.x changed array struct layout (ABI break), so we must
+        # force C-contiguous + correct dtype BEFORE passing to C++.
+        def _compat(arr, dtype=np.double):
+            return np.ascontiguousarray(arr.reshape(-1, arr.shape[-1]), dtype=dtype)
+
+        self.planner.init_map(
+            self.obstacle_thr, 30, self.resolution, self.n_slice, 0.5,
+            _compat(trav),
+            _compat(elev_g),
+            _compat(elev_c),
+            _compat(gateway, dtype=np.int32),
+            _compat(trav_gy),
+            _compat(-trav_gx),
+        )
+
+    def plan(self, start_pos, end_pos, start_height=0, end_height=0):
+        """
+        瑙勫垝璺緞鐨勬柟娉曪紝鏀寔璁剧疆璧峰鐐瑰拰缁堢偣鐨勯珮搴︺€?        """
+        # 杈撳叆 NaN 闃插尽锛氭嫆缁濋潪鏈夐檺鍧愭爣锛岄伩鍏?C++ planner segfault
+        if not (np.all(np.isfinite(start_pos)) and np.all(np.isfinite(end_pos))):
+            print(f"[planner_wrapper] rejecting NaN/Inf input: start={start_pos} end={end_pos}",
+                  flush=True)
+            return None
+        if not (np.isfinite(start_height) and np.isfinite(end_height)):
+            print(f"[planner_wrapper] rejecting NaN/Inf height: start_h={start_height} end_h={end_height}",
+                  flush=True)
+            return None
+
+        # 灏嗚捣濮嬬偣鍜岀粓鐐圭殑浜岀淮浣嶇疆杞崲涓虹储寮?        self.start_idx[1:] = self.pos2idx(start_pos)
+        self.end_idx[1:] = self.pos2idx(end_pos)
+        
+        # 浣跨敤 pos2slice 鏇夸唬鏃х殑 height2idx锛屼笌鍙傝€冮」鐩榻?        # 娉ㄦ剰锛氳繖閲屾垜浠紭鍏堜娇鐢ㄤ紶鍏ョ殑 height 鍙傛暟锛屽鏋滃畠鏄?0 涓?pos Z 淇℃伅缂哄け鎵嶇敤榛樿閫昏緫
+        # 鍦?global_planner.py 涓紝鎴戜滑浼犲叆鐨勬槸 start_h 鍜?end_h (鏉ヨ嚜 get_robot_pose 鍜?goal_pose.z)
+        
+        self.start_idx[0] = self.pos2slice(start_height)
+        self.end_idx[0] = self.pos2slice(end_height)
+        
+        # 璋冭瘯淇℃伅
+        print(f"[planner_wrapper] plan: start_idx={self.start_idx}, end_idx={self.end_idx}, "
+              f"obstacle_thr={self.obstacle_thr}, map_dim={self.map_dim}, center={self.center}",
+              flush=True)
+
+        self.planner.plan(self.start_idx, self.end_idx, True)
+        path_finder: a_star.Astar = self.planner.get_path_finder()
+        path = path_finder.get_result_matrix()
+        
+        if len(path) == 0:
+            return None
+
+        optimizer: traj_opt.GPMPOptimizer = (
+            self.planner.get_trajectory_optimizer()
+            if not self.use_quintic
+            else self.planner.get_trajectory_optimizer_wnoj()
+        )
+
+        opt_init = optimizer.get_opt_init_value()
+        init_layer = optimizer.get_opt_init_layer()
+        traj_raw = optimizer.get_result_matrix()
+        layers = optimizer.get_layers()
+        heights = optimizer.get_heights()
+
+        opt_init = np.concatenate([opt_init.transpose(1, 0), init_layer.reshape(-1, 1)], axis=-1)
+        traj = np.concatenate([traj_raw, layers.reshape(-1, 1)], axis=-1)
+        y_idx = (traj.shape[-1] - 1) // 2
+        traj_grid_xy = np.stack([traj[:, 0], traj[:, y_idx]], axis=1)
+        print(f"[planner_wrapper] traj_grid_xy first={traj_grid_xy[0]}, last={traj_grid_xy[-1]}, "
+              f"y_idx={y_idx}, traj_shape={traj.shape}", flush=True)
+        traj_3d = self._optimized_traj_to_world(traj_grid_xy, heights)
+        print(f"[planner_wrapper] traj_world first={traj_3d[0]}, last={traj_3d[-1]}", flush=True)
+
+        blocked = self._hard_obstacle_sample_count(traj_3d)
+        if blocked:
+            raw_world = self._raw_path_to_world(path)
+            raw_blocked = self._hard_obstacle_sample_count(raw_world)
+            if raw_world is not None and raw_blocked == 0:
+                print(
+                    f"[planner_wrapper] optimized trajectory crosses {blocked} hard-obstacle samples; "
+                    "returning raw A* path",
+                    flush=True,
+                )
+                return raw_world
+            print(
+                f"[planner_wrapper] optimized trajectory crosses {blocked} hard-obstacle samples; "
+                f"raw path blocked={raw_blocked}",
+                flush=True,
+            )
+
+        return traj_3d
+
+    def _optimized_traj_to_world(self, xy_grid, heights):
+        """Convert optimizer XY grid coordinates while preserving true Z heights."""
+        xy_grid = np.asarray(xy_grid, dtype=np.float64)
+        heights = np.asarray(heights, dtype=np.float64).reshape(-1)
+        if xy_grid.ndim != 2 or xy_grid.shape[1] < 2 or xy_grid.shape[0] != heights.shape[0]:
+            raise ValueError(
+                f"invalid optimized trajectory shapes: xy={xy_grid.shape}, heights={heights.shape}"
+            )
+        world = np.empty((xy_grid.shape[0], 3), dtype=np.float64)
+        world[:, 0] = (xy_grid[:, 0] - self.map_dim[0] // 2) * self.resolution + self.center[0]
+        world[:, 1] = (xy_grid[:, 1] - self.map_dim[1] // 2) * self.resolution + self.center[1]
+        world[:, 2] = heights
+        return world
+
+    def _raw_path_to_world(self, path):
+        arr = np.asarray(path, dtype=np.float64)
+        if arr.ndim != 2 or arr.shape[1] < 3 or self.map_dim is None or self.center is None:
+            return None
+
+        # Native A* path is [slice, y_idx, x_idx]. Convert directly instead of
+        # using transTrajGrid2Map, whose third column expects height/resolution.
+        layers = np.clip(np.rint(arr[:, 0]).astype(np.int32), 0, max(self.n_slice - 1, 0))
+        rows = np.clip(np.rint(arr[:, 1]).astype(np.int32), 0, self.map_dim[1] - 1)
+        cols = np.clip(np.rint(arr[:, 2]).astype(np.int32), 0, self.map_dim[0] - 1)
+
+        xy = np.empty((arr.shape[0], 2), dtype=np.float64)
+        xy[:, 0] = (cols - self.map_dim[0] // 2) * self.resolution + self.center[0]
+        xy[:, 1] = (rows - self.map_dim[1] // 2) * self.resolution + self.center[1]
+
+        heights = np.empty(arr.shape[0], dtype=np.float64)
+        for idx, (layer, row, col) in enumerate(zip(layers, rows, cols)):
+            height = float("nan")
+            if self.layers_g is not None:
+                try:
+                    height = float(self.layers_g[layer, row, col])
+                except Exception:
+                    height = float("nan")
+            if not np.isfinite(height):
+                height = float(self.slice_h0 + layer * self.slice_dh)
+            heights[idx] = height
+
+        return np.column_stack((xy, heights))
+
+    def _hard_obstacle_sample_count(self, path_world):
+        if path_world is None or self.layers_t is None:
+            return 0
+        pts = np.asarray(path_world, dtype=np.float64)
+        if pts.ndim != 2 or pts.shape[0] == 0 or pts.shape[1] < 2:
+            return 0
+
+        step = max(float(self.resolution) * 0.5, 0.05)
+        blocked = 0
+        for start, end in zip(pts[:-1], pts[1:]):
+            dist = math.hypot(float(end[0] - start[0]), float(end[1] - start[1]))
+            steps = max(1, int(math.ceil(dist / step)))
+            for sample_idx in range(1, steps + 1):
+                alpha = sample_idx / steps
+                sample = start + (end - start) * alpha
+                if self._is_hard_obstacle_sample(sample):
+                    blocked += 1
+        if pts.shape[0] == 1 and self._is_hard_obstacle_sample(pts[0]):
+            blocked += 1
+        return blocked
+
+    def _is_hard_obstacle_sample(self, sample):
+        try:
+            idx = self.pos2idx(np.asarray(sample[:2], dtype=np.float64))
+            col = int(np.rint(idx[0]))
+            row = int(np.rint(idx[1]))
+            layer = int(np.rint(self.pos2slice(float(sample[2])))) if len(sample) > 2 else 0
+        except Exception:
+            return True
+
+        if (
+            layer < 0
+            or row < 0
+            or col < 0
+            or layer >= self.layers_t.shape[0]
+            or row >= self.layers_t.shape[1]
+            or col >= self.layers_t.shape[2]
+        ):
+            return True
+        cost = float(self.layers_t[layer, row, col])
+        return (not np.isfinite(cost)) or cost >= float(self.obstacle_thr)
+    
+    def pos2idx(self, pos):
+        pos = pos - self.center
+        idx = np.round(pos / self.resolution).astype(np.int32) + self.offset
+        
+        # Safety clamp for XY
+        if self.map_dim:
+            idx[0] = np.clip(idx[0], 0, self.map_dim[0] - 1)
+            idx[1] = np.clip(idx[1], 0, self.map_dim[1] - 1)
+
+        # NOTE: 涓嶅仛浜ゆ崲 鈥?C++ ele_planner 鎶?start_idx[1] 瑙ｉ噴涓?x (dim0), start_idx[2] 涓?y (dim1),
+        #       鍐呴儴璁块棶 trav[slice, y, x]. 杩斿洖 [idx[0], idx[1]] = [x_idx, y_idx] 涓?C++ 鏈熸湜涓€鑷?
+        return idx.astype(np.float32)
+    
+    def pos2slice(self, z):
+        """灏唞鍧愭爣杞崲涓哄垏鐗囩储寮?(Copied from reference project)"""
+        if self.slice_dh is None or self.slice_dh == 0:
+            return 0.0
+            
+        # 璁＄畻鐩稿浜庤捣濮嬮珮搴︾殑鍒囩墖鏁?        slice_offset = (z - self.slice_h0) / self.slice_dh
+        
+        # 杞崲涓烘暣鏁扮储寮曞苟纭繚鍦ㄦ湁鏁堣寖鍥村唴
+        slice_idx = np.round(slice_offset)
+        
+        if self.n_slice is not None:
+             slice_idx = max(0.0, min(float(slice_idx), float(self.n_slice - 1)))
+        
+        return float(slice_idx)
+
+    def get_surface_height(self, pos: np.ndarray) -> float:
+        """鏌ヨ XY 浣嶇疆鐨勫湴褰㈣〃闈㈤珮搴︼紙tomogram 鏈€浣庢湁鏁堝眰锛夈€?
+        鐢ㄤ簬灏?2D 鐩爣锛坺=0锛夎嚜鍔ㄨ创鍚堝埌 tomogram 瀹為檯鍦板舰琛ㄩ潰锛?        瑙ｅ喅鍦ㄦ湁鍧″害鍦板舰涓婁娇鐢?RViz "2D Nav Goal" 鏃剁洰鏍囬珮搴﹂敊璇棶棰樸€?
+        Args:
+            pos: 涓栫晫鍧愭爣 [x, y] (np.ndarray, float32)
+        Returns:
+            鍦板舰琛ㄩ潰楂樺害 (m)锛屾煡璇㈠け璐ユ椂杩斿洖 slice_h0 鎴?0.0
+        """
+        if self.layers_g is None or self.resolution is None or self.center is None:
+            return float(self.slice_h0) if self.slice_h0 is not None else 0.0
+        # 浣跨敤 pos2idx 寰楀埌涓庤鍒掑櫒涓€鑷寸殑鏍肩綉绱㈠紩 (宸?clamp)
+        # pos2idx 杩斿洖 [x_cpp, y_cpp]; 鏁扮粍甯冨眬 layers_g[:, dim0=row=y, dim1=col=x]
+        idx = self.pos2idx(pos)
+        ai = int(np.clip(idx[1], 0, self.layers_g.shape[1] - 1))  # row = y_cpp = idx[1]
+        bi = int(np.clip(idx[0], 0, self.layers_g.shape[2] - 1))  # col = x_cpp = idx[0]
+        heights = self.layers_g[:, ai, bi]   # (n_slices,)
+        valid_mask = ~np.isnan(heights)
+        if not valid_mask.any():
+            return float(self.slice_h0) if self.slice_h0 is not None else 0.0
+        # 鏈€浣庢湁鏁堝眰 = 鍦板舰琛ㄩ潰
+        return float(heights[valid_mask][0])
+
+    # 鍏煎鏃ф帴鍙ｏ紝灏嗗叾鎸囧悜鏂板嚱鏁?    def height2idx(self, height):
+        return self.pos2slice(height)

@@ -1267,7 +1267,7 @@ class TestSemanticPlannerModule(unittest.TestCase):
         import os
         import sys
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "semantic", "planner"))
-        from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
+        from semantic.planner.semantic_planner_module import SemanticPlannerModule
         return SemanticPlannerModule()
 
     def test_ports_in(self):

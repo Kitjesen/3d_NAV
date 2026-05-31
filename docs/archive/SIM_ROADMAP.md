@@ -54,7 +54,7 @@ factory_scene, spiral_terrain}.xml`) are interchangeable.
 
 | File | Used by |
 |------|---------|
-| `sim/robot/thunder.urdf` | Thunder quadruped (16-DOF). Meshes in `sim/meshes/`. Currently the only URDF in this directory. |
+| `sim/robot/thunder.urdf` | Thunder quadruped (16-DOF). Meshes in `sim/assets/meshes/`. Currently the only URDF in this directory. |
 | `sim/robots/go2/` | Unitree Go2 MJCF + meshes. Used by `sim/scripts/run_sim.py` Go2 demos. |
 | `sim/robots/nova_dog/` | NOVA Dog MJCF (legacy, kept for the person-following benchmark). |
 

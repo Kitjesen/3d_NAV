@@ -10,7 +10,7 @@ test_task_decomposer.py — 任务分解器单元测试
 import json
 import unittest
 
-from semantic.planner.semantic_planner.task_decomposer import (
+from semantic.planner.task_decomposer import (
     SubGoal,
     SubGoalAction,
     SubGoalStatus,

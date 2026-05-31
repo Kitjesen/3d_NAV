@@ -37,7 +37,7 @@ motion command claim must preserve `simulation_only=true`,
 | `sim/datasets/` | Offline datasets and metadata. | Boundary README added; keep dataset/large-file policy locked. |
 | `sim/output/` | Generated local outputs. | Prefer `artifacts/` for reproducible evidence. |
 | `sim/external_scenes/` | External/license-constrained scene placeholders. | Keep. |
-| `sim/meshes/` | Legacy mesh path. | Do not move until references are audited. |
+| `sim/meshes/` | Legacy mesh path. | Removed 2026-05-31 — duplicates of sim/assets/meshes/. No code references. |
 | `sim/maps/`, `sim/configs/` | Reserved placeholders. | Keep only if referenced; otherwise prune later. |
 | `sim/semantic/` | Legacy semantic simulation residue. | Move to tests or mark experimental later. |
 

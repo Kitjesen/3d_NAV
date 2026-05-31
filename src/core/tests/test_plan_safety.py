@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import pickle
 from pathlib import Path
@@ -160,7 +160,7 @@ def test_plan_safety_reports_z_out_of_bounds_samples() -> None:
 
 def test_pct_wrapper_preserves_optimizer_height_when_converting_xy() -> None:
     root = Path(__file__).resolve().parents[3]
-    wrapper = root / "src/global_planning/PCT_planner/planner/scripts/planner_wrapper.py"
+    wrapper = root / "src/global_planning/pct_planner/planner/scripts/planner_wrapper.py"
     text = wrapper.read_text(encoding="utf-8")
 
     assert "world[:, 2] = heights" in text

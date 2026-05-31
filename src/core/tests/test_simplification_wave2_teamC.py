@@ -18,7 +18,7 @@ import numpy as np
 
 def _make_perception_module(**kw):
     """Return a PerceptionModule instance with runtime state set to safe defaults."""
-    from semantic.perception.semantic_perception.perception_module import PerceptionModule
+    from semantic.perception.perception_module import PerceptionModule
 
     with patch("core.config.get_config") as mock_cfg:
         # Minimal camera config
@@ -139,7 +139,7 @@ class TestProjectTo3dFallback(unittest.TestCase):
 
 def _make_bpu_detector(**kw):
     """Return a BPUDetector without loading any .hbm model."""
-    from semantic.perception.semantic_perception.bpu_detector import BPUDetector
+    from semantic.perception.bpu_detector import BPUDetector
     det = BPUDetector.__new__(BPUDetector)
     det._conf_thr = 0.25
     det._iou_thr = 0.45
@@ -214,7 +214,7 @@ class TestGenerateMasks(unittest.TestCase):
         raw, kept_mc = _make_raw_and_mc(n=3)
         outputs = {}  # no proto key
 
-        with self.assertLogs("semantic.perception.semantic_perception.bpu_detector",
+        with self.assertLogs("semantic.perception.bpu_detector",
                              level="ERROR") as log_ctx:
             masks1 = det._generate_masks(raw, kept_mc, outputs, 1.0, 0, 0)
             # Second call must NOT emit another log (logged once guard)

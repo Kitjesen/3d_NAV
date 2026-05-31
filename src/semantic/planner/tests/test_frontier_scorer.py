@@ -14,14 +14,14 @@ import unittest
 import numpy as np
 import pytest
 
-from semantic.planner.semantic_planner.frontier_scorer import (
+from semantic.planner.frontier_scorer import (
     FREE_CELL,
     OCCUPIED_CELL,
     UNKNOWN_CELL,
     Frontier,
     FrontierScorer,
 )
-from semantic.planner.semantic_planner.frontier_types import (
+from semantic.planner.frontier_types import (
     angle_diff,
     angle_to_label,
     cooccurrence_score,
@@ -238,7 +238,7 @@ class TestKGRoomScore(unittest.TestCase):
     """P2: KG 目标-房间概率评分测试。"""
 
     def test_kg_room_score_with_kg(self):
-        from semantic.planner.semantic_planner.room_object_kg import RoomObjectKG
+        from semantic.planner.room_object_kg import RoomObjectKG
 
         kg = RoomObjectKG()
         for _ in range(10):

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from core.msgs.sensor import PointCloud2
-from nav.services.nav_services.map_manager_module import MapManagerModule
+from nav.services.map_manager_module import MapManagerModule
 
 
 # -- fixtures ------------------------------------------------------------------

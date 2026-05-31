@@ -29,10 +29,10 @@ _QUIET_PREFIXES = (
     "core.service_manager",                     # systemd service start/stop
     "core.blueprint",                           # "System started: N modules"
     "slam.slam_bridge_module",                  # DDS transport choice
-    "semantic.perception.semantic_perception.mobileclip_encoder",
-    "semantic.perception.semantic_perception.encoder_module",
-    "semantic.perception.semantic_perception.perception_module",
-    "semantic.planner.semantic_planner.person_tracker",
+    "semantic.perception.mobileclip_encoder",
+    "semantic.perception.encoder_module",
+    "semantic.perception.perception_module",
+    "semantic.planner.person_tracker",
     "drivers.sim.ros2_sim_driver",
     "gateway.mcp_server",
     "memory.modules.vector_memory_module",
@@ -43,7 +43,7 @@ _QUIET_PREFIXES = (
 # Loggers whose WARNING/ERROR messages are also not useful on screen.
 # These are "graceful degradation" notices — the system handles them automatically.
 _MUTE_PREFIXES = (
-    "semantic.planner.semantic_planner.llm_client",  # "API key not found"
+    "semantic.planner.llm_client",  # "API key not found"
     "base_autonomy.modules.terrain_module",           # "_nav_core not available, falling back"
     "base_autonomy.modules.local_planner_module",     # "_nav_core not available, falling back"
     "base_autonomy.modules.path_follower_module",     # "_nav_core not available, falling back"

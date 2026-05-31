@@ -53,7 +53,7 @@ T("2.VectorMemory query", v.query_location("find backpack")["found"])
 T("2.VectorMemory stats", v.get_memory_stats()["entries"] == 1)
 
 # 3
-from semantic.planner.semantic_planner.visual_servo_module import VisualServoModule
+from semantic.planner.visual_servo_module import VisualServoModule
 
 vs = VisualServoModule()
 vs.setup()
@@ -83,7 +83,7 @@ T("4.Teleop idle", not tp._active)
 # 5
 import json
 
-from semantic.planner.semantic_planner.agent_loop import AGENT_TOOLS, AgentLoop
+from semantic.planner.agent_loop import AGENT_TOOLS, AgentLoop
 
 r = AgentLoop._parse_text_tool_call('{"tool":"navigate_to","args":{"x":5,"y":3}}')
 T("5.AgentLoop parse", "tool_calls" in r)

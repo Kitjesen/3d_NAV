@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sys
 import os
@@ -7,8 +7,8 @@ import pickle
 
 import numpy as np
 import pytest
-from global_planning.PCT_planner_runnable import runtime as pct_runtime
-from global_planning.PCT_planner_runnable.runtime import (
+from global_planning.pct_planner_runnable import runtime as pct_runtime
+from global_planning.pct_planner_runnable.runtime import (
     inspect_pct_runtime,
     prepare_pct_runtime,
     prepare_tomogram_for_pct,
@@ -42,7 +42,7 @@ def _touch_pct_runtime(lib_dir: Path) -> None:
 
 def test_resolve_prefers_arch_specific_lib_dir(tmp_path):
     repo = tmp_path
-    lib_dir = repo / "src/global_planning/PCT_planner/planner/lib/x86_64"
+    lib_dir = repo / "src/global_planning/pct_planner/planner/lib/x86_64"
     lib_dir.mkdir(parents=True)
     _touch_pct_runtime(lib_dir)
 
@@ -54,8 +54,8 @@ def test_resolve_prefers_arch_specific_lib_dir(tmp_path):
 
 def test_resolve_prefers_runnable_native_dir_over_original_lib(tmp_path):
     repo = tmp_path
-    original_dir = repo / "src/global_planning/PCT_planner/planner/lib/x86_64"
-    runnable_dir = repo / "src/global_planning/PCT_planner_runnable/native/x86_64"
+    original_dir = repo / "src/global_planning/pct_planner/planner/lib/x86_64"
+    runnable_dir = repo / "src/global_planning/pct_planner_runnable/native/x86_64"
     original_dir.mkdir(parents=True)
     runnable_dir.mkdir(parents=True)
     _touch_pct_runtime(original_dir)
@@ -69,7 +69,7 @@ def test_resolve_prefers_runnable_native_dir_over_original_lib(tmp_path):
 def test_resolve_prefers_env_lib_dir_over_runnable_native_dir(tmp_path, monkeypatch):
     repo = tmp_path
     env_dir = repo / "custom_pct_lib"
-    runnable_dir = repo / "src/global_planning/PCT_planner_runnable/native/x86_64"
+    runnable_dir = repo / "src/global_planning/pct_planner_runnable/native/x86_64"
     env_dir.mkdir(parents=True)
     runnable_dir.mkdir(parents=True)
     _touch_pct_runtime(env_dir)
@@ -84,7 +84,7 @@ def test_resolve_prefers_env_lib_dir_over_runnable_native_dir(tmp_path, monkeypa
 def test_inspect_pct_runtime_uses_same_env_dir_as_loader(tmp_path, monkeypatch):
     repo = tmp_path
     env_dir = repo / "custom_pct_lib"
-    fallback_dir = repo / "src/global_planning/PCT_planner_runnable/native/x86_64"
+    fallback_dir = repo / "src/global_planning/pct_planner_runnable/native/x86_64"
     env_dir.mkdir(parents=True)
     fallback_dir.mkdir(parents=True)
     _touch_pct_runtime(env_dir)
@@ -100,7 +100,7 @@ def test_inspect_pct_runtime_uses_same_env_dir_as_loader(tmp_path, monkeypatch):
 
 def test_prepare_installs_lib_namespace_for_original_wrapper(tmp_path):
     repo = tmp_path
-    planner_root = repo / "src/global_planning/PCT_planner/planner"
+    planner_root = repo / "src/global_planning/pct_planner/planner"
     lib_dir = planner_root / "lib/x86_64"
     scripts_dir = planner_root / "scripts"
     lib_dir.mkdir(parents=True)
@@ -125,7 +125,7 @@ def test_prepare_reports_unloadable_shared_library(tmp_path):
     if os.name == "nt":
         pytest.skip("Windows does not preload Linux shared libraries")
     repo = tmp_path
-    lib_dir = repo / "src/global_planning/PCT_planner/planner/lib/x86_64"
+    lib_dir = repo / "src/global_planning/pct_planner/planner/lib/x86_64"
     lib_dir.mkdir(parents=True)
     _touch_pct_runtime(lib_dir)
 
@@ -135,7 +135,7 @@ def test_prepare_reports_unloadable_shared_library(tmp_path):
 
 def test_inspect_pct_runtime_rejects_missing_shared_libraries(tmp_path):
     repo = tmp_path
-    lib_dir = repo / "src/global_planning/PCT_planner/planner/lib/x86_64"
+    lib_dir = repo / "src/global_planning/pct_planner/planner/lib/x86_64"
     lib_dir.mkdir(parents=True)
     _touch_pct_extensions(lib_dir)
 
@@ -162,7 +162,7 @@ def test_inspect_pct_runtime_reports_wrong_abi_candidate_extensions(
     monkeypatch,
 ):
     repo = tmp_path
-    lib_dir = repo / "src/global_planning/PCT_planner/planner/lib/x86_64"
+    lib_dir = repo / "src/global_planning/pct_planner/planner/lib/x86_64"
     lib_dir.mkdir(parents=True)
     for name in ("a_star", "ele_planner", "traj_opt"):
         (lib_dir / f"{name}.cpython-310-x86_64-linux-gnu.so").write_bytes(b"")

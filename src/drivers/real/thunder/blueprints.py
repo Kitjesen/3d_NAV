@@ -48,10 +48,10 @@ def thunder_nav(dog_host: str = "127.0.0.1", dog_port: int = 13145, **kw) -> Blu
     """Navigation: basic + perception + semantic planner."""
     bp = thunder_basic(dog_host=dog_host, dog_port=dog_port, **kw)
     try:
-        from semantic.perception.semantic_perception.detector_module import DetectorModule
-        from semantic.perception.semantic_perception.encoder_module import EncoderModule
-        from semantic.planner.semantic_planner.llm_module import LLMModule
-        from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
+        from semantic.perception.detector_module import DetectorModule
+        from semantic.perception.encoder_module import EncoderModule
+        from semantic.planner.llm_module import LLMModule
+        from semantic.planner.semantic_planner_module import SemanticPlannerModule
 
         bp.add(DetectorModule, detector=kw.get("detector", "yoloe"))
         bp.add(EncoderModule, encoder=kw.get("encoder", "mobileclip"))

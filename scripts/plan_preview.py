@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Offline LingTu plan preview for real tomograms.
 
 This tool is intentionally non-motion:
@@ -36,7 +36,7 @@ for _path in (REPO_ROOT, REPO_ROOT / "src"):
     if text not in sys.path:
         sys.path.insert(0, text)
 
-from global_planning.PCT_planner_runnable.runtime import (  # noqa: E402
+from global_planning.pct_planner_runnable.runtime import (  # noqa: E402
     inspect_pct_runtime,
 )
 

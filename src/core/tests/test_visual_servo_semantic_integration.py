@@ -3,7 +3,7 @@ import numpy as np
 from core.msgs.geometry import Vector3
 from core.msgs.semantic import Detection3D, SceneGraph
 from core.msgs.sensor import Image, ImageFormat
-from semantic.planner.semantic_planner.visual_servo_module import VisualServoModule
+from semantic.planner.visual_servo_module import VisualServoModule
 
 
 def test_find_target_bbox_reads_bbox_2d():

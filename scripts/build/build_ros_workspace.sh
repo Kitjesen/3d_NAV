@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 set -euo pipefail
 
 # Build every ROS 2 package discovered under src/ and verify that installed
@@ -122,10 +122,10 @@ build_workspace() {
   local skip_packages=()
   mapfile -t skip_packages < <(prepare_optional_packages)
 
-  local gtsam_dir="${ROOT}/src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/install/lib/cmake/GTSAM"
+  local gtsam_dir="${ROOT}/src/global_planning/pct_planner/planner/lib/3rdparty/gtsam-4.1.1/install/lib/cmake/GTSAM"
   local cmake_args=(-DCMAKE_BUILD_TYPE="${BUILD_TYPE}")
   if [[ -d "${gtsam_dir}" ]]; then
-    export CMAKE_PREFIX_PATH="${ROOT}/src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/install:${CMAKE_PREFIX_PATH:-}"
+    export CMAKE_PREFIX_PATH="${ROOT}/src/global_planning/pct_planner/planner/lib/3rdparty/gtsam-4.1.1/install:${CMAKE_PREFIX_PATH:-}"
     cmake_args+=(-DGTSAM_DIR="${gtsam_dir}")
   fi
 

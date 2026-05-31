@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 set -euo pipefail
 
 # Prepare and verify a Linux server for LingTu ROS2/PCT/MuJoCo gates.
@@ -277,7 +277,7 @@ build_pct_runtime() {
   fi
   log "building PCT native runtime for this host Python ABI"
   JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}" \
-    bash "${ROOT}/src/global_planning/PCT_planner_runnable/build_host_x86_64.sh"
+    bash "${ROOT}/src/global_planning/pct_planner_runnable/build_host_x86_64.sh"
 }
 
 build_nav_core_runtime() {
@@ -304,7 +304,7 @@ run_verification() {
   if [[ "${RUN_PCT}" == "1" ]]; then
     log "PCT runtime inspection"
     python3 - <<'PY'
-from global_planning.PCT_planner_runnable.runtime import inspect_pct_runtime
+from global_planning.pct_planner_runnable.runtime import inspect_pct_runtime
 import json
 print(json.dumps(inspect_pct_runtime(), indent=2, ensure_ascii=False))
 PY

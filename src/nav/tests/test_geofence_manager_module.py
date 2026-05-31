@@ -13,7 +13,7 @@ import pytest
 
 from core.msgs.nav import Odometry
 from core.msgs.geometry import Pose
-from nav.services.nav_services.geofence_manager_module import GeofenceManagerModule
+from nav.services.geofence_manager_module import GeofenceManagerModule
 
 
 # -- fixtures ------------------------------------------------------------------

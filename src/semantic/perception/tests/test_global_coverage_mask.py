@@ -16,7 +16,7 @@ import unittest
 
 import numpy as np
 
-from semantic.perception.semantic_perception.global_coverage_mask import (
+from semantic.perception.global_coverage_mask import (
     CoverageCell,
     GlobalCoverageMask,
 )

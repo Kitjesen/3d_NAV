@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """S100P full pipeline test: MuJoCo + terrain_core + PCT/A* + navigation.
 
 Run on S100P:
@@ -52,7 +52,7 @@ import mujoco
 _prepend_path(SRC_ROOT)
 _prepend_path(REPO_ROOT)
 
-# ── Step 1: Check components ──
+# 鈹€鈹€ Step 1: Check components 鈹€鈹€
 print("=" * 60)
 print("Step 1: Component check")
 print("=" * 60)
@@ -79,7 +79,7 @@ tc = _nav_core.TerrainAnalysisCore()
 print("OK")
 
 print("  PCT planner...", end=" ")
-so_path = os.path.join(os.path.dirname(__file__), "../../global_planning/PCT_planner/build/ele_planner.so")
+so_path = os.path.join(os.path.dirname(__file__), "../../global_planning/pct_planner/build/ele_planner.so")
 has_pct = os.path.exists(so_path)
 print("OK" if has_pct else "NOT FOUND (will use A*)")
 
@@ -108,7 +108,7 @@ except Exception:
     print("A* only")
     USE_PCT = False
 
-# ── Step 2: MuJoCo + terrain_core test ──
+# 鈹€鈹€ Step 2: MuJoCo + terrain_core test 鈹€鈹€
 print()
 print("=" * 60)
 print("Step 2: MuJoCo + terrain_core (nanobind C++)")
@@ -158,7 +158,7 @@ print("  Elevation map: %dx%d" % ((scan_results and (51, 51)) or (0, 0)))
 e.close()
 print("  PASSED")
 
-# ── Step 3: Full navigation pipeline ──
+# 鈹€鈹€ Step 3: Full navigation pipeline 鈹€鈹€
 print()
 print("=" * 60)
 print("Step 3: Full MuJoCo navigation (cmu_py + nav_core + A*)")
@@ -226,21 +226,21 @@ bp.add(LocalPlannerModule, backend="cmu_py")
 bp.add(PathFollowerModule, backend="nav_core")
 bp.add(NavigationModule, planner="astar", waypoint_threshold=2.0, downsample_dist=1.0)
 
-# Odometry → all consumers
+# Odometry 鈫?all consumers
 bp.wire("MujocoDriverModule", "odometry", "LiveMapper", "odom_in")
 bp.wire("MujocoDriverModule", "odometry", "NavigationModule", "odometry")
 bp.wire("MujocoDriverModule", "odometry", "TerrainModule", "odometry")
 bp.wire("MujocoDriverModule", "odometry", "LocalPlannerModule", "odometry")
 bp.wire("MujocoDriverModule", "odometry", "PathFollowerModule", "odometry")
-# LiDAR → TerrainModule (raw cloud) + LiveMapper (costmap)
+# LiDAR 鈫?TerrainModule (raw cloud) + LiveMapper (costmap)
 bp.wire("MujocoDriverModule", "lidar_cloud", "TerrainModule", "map_cloud")
 bp.wire("MujocoDriverModule", "lidar_cloud", "LiveMapper", "lidar_in")
-# TerrainModule → LocalPlannerModule (processed terrain, not raw cloud)
+# TerrainModule 鈫?LocalPlannerModule (processed terrain, not raw cloud)
 bp.wire("TerrainModule", "terrain_map", "LocalPlannerModule", "terrain_map")
 # Costmap + goal
 bp.wire("LiveMapper", "costmap_out", "NavigationModule", "costmap")
 bp.wire("LiveMapper", "goal_cmd", "NavigationModule", "goal_pose")
-# Navigation → local planning → path following → driver
+# Navigation 鈫?local planning 鈫?path following 鈫?driver
 bp.wire("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint")
 bp.wire("LocalPlannerModule", "local_path", "PathFollowerModule", "local_path")
 bp.wire("PathFollowerModule", "cmd_vel", "MujocoDriverModule", "cmd_vel")
@@ -276,7 +276,7 @@ system.stop()
 print()
 print("=" * 60)
 if success:
-    print("RESULT: ALL TESTS PASSED — MuJoCo + terrain + navigation SUCCESS")
+    print("RESULT: ALL TESTS PASSED 鈥?MuJoCo + terrain + navigation SUCCESS")
 else:
     print("RESULT: Navigation did not reach goal (may need more time or tuning)")
 print("=" * 60)

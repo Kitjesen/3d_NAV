@@ -108,7 +108,7 @@ def _scene_for_tomogram(tomogram: Path, explicit: Path | None) -> Path:
                 return world
         except Exception:
             pass
-    return ROOT / "sim/worlds/industrial_park_scene.xml"
+    return ROOT / "sim/worlds/mujoco/industrial_park_scene.xml"
 
 
 def _load_json(path: Path) -> dict[str, Any]:

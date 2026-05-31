@@ -22,13 +22,13 @@ def planner(llm: str = "kimi", save_dir: str = "", **config) -> Blueprint:
             "semantic_planner",
             "default",
             seed_group="semantic",
-            fallback="semantic.planner.semantic_planner.semantic_planner_module.SemanticPlannerModule",
+            fallback="semantic.planner.semantic_planner_module.SemanticPlannerModule",
         )
         LLMModule = stack_module(
             "llm",
             "pluggable",
             seed_group="llm",
-            fallback="semantic.planner.semantic_planner.llm_module.LLMModule",
+            fallback="semantic.planner.llm_module.LLMModule",
         )
         bp.add(
             SemanticPlannerModule,
@@ -44,7 +44,7 @@ def planner(llm: str = "kimi", save_dir: str = "", **config) -> Blueprint:
         "visual_servo",
         "default",
         seed_group="semantic",
-        fallback="semantic.planner.semantic_planner.visual_servo_module.VisualServoModule",
+        fallback="semantic.planner.visual_servo_module.VisualServoModule",
     )
     if VisualServoModule is not None:
         bp.add(VisualServoModule, alias="VisualServoModule")

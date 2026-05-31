@@ -7,9 +7,9 @@
 
 import pytest
 import numpy as np
-from semantic.perception.semantic_perception.laplacian_filter import is_blurry
-from semantic.perception.semantic_perception.projection import project_to_3d, CameraIntrinsics
-from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
+from semantic.perception.laplacian_filter import is_blurry
+from semantic.perception.projection import project_to_3d, CameraIntrinsics
+from semantic.perception.instance_tracker import InstanceTracker
 
 
 class TestLaplacianFilter:

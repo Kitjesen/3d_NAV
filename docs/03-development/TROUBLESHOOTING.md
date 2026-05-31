@@ -1,4 +1,4 @@
-# Troubleshooting Guide
+﻿# Troubleshooting Guide
 
 Diagnose build, runtime, localization, planning, communication, and OTA failures on the
 S100P deployment. The production entry is `python lingtu.py` orchestrated by
@@ -47,11 +47,11 @@ find_package(tf2_geometry_msgs REQUIRED)
 ### GTSAM not found / `libgtsam.so.4: cannot open`
 
 GTSAM is vendored under
-`src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/install/`. Either
+`src/global_planning/pct_planner/planner/lib/3rdparty/gtsam-4.1.1/install/`. Either
 rebuild it:
 
 ```bash
-cd src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1
+cd src/global_planning/pct_planner/planner/lib/3rdparty/gtsam-4.1.1
 mkdir -p build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=../install -DGTSAM_BUILD_TESTS=OFF -DGTSAM_WITH_TBB=OFF
 make -j$(nproc) && make install
@@ -61,7 +61,7 @@ or extend `LD_LIBRARY_PATH` (the `lingtu.service` unit already does this via
 `source install/setup.bash`):
 
 ```bash
-export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$(pwd)/src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/install/lib"
+export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$(pwd)/src/global_planning/pct_planner/planner/lib/3rdparty/gtsam-4.1.1/install/lib"
 ```
 
 ### `_nav_core` import fails after build
@@ -109,7 +109,7 @@ Common causes:
 | `robot-fastlio2` not yet ready    | `lingtu` waits up to 60 s; check `journalctl -u robot-fastlio2` |
 | Missing API key for LLM module    | `eval $(grep MOONSHOT_API_KEY ~/.bashrc)` and re-`systemctl restart lingtu` |
 | `_nav_core.so` missing            | `bash scripts/build_nav_core.sh` then restart                  |
-| Port 5050 / 8090 already bound    | `ss -tnlp | grep -E '5050|8090'` — kill stragglers             |
+| Port 5050 / 8090 already bound    | `ss -tnlp | grep -E '5050|8090'` 鈥?kill stragglers             |
 
 ### TF chain `map -> odom -> body` broken
 
@@ -123,7 +123,7 @@ ros2 run tf2_ros tf2_echo odom body
 |------------------------------------|------------------------------------------------------|
 | `robot-localizer` not running      | `sudo systemctl start robot-localizer`               |
 | No active map loaded               | `lingtu nav start <map_name>`                        |
-| Fast-LIO2 hasn't published         | `ros2 topic hz /Odometry` — expect ~100 Hz           |
+| Fast-LIO2 hasn't published         | `ros2 topic hz /Odometry` 鈥?expect ~100 Hz           |
 
 ### Topic frame_ids wrong
 
@@ -247,9 +247,9 @@ ls -la /home/sunrise/data/nova/maps/active/map.pcd
 
 Checklist:
 
-1. `/terrain_map` flowing — `ros2 topic hz /terrain_map`.
-2. Goal set — `lingtu status` `[5] Path` should show waypoints.
-3. All candidate paths blocked — open `http://<robot>:5050/api/v1/free_paths` (debug
+1. `/terrain_map` flowing 鈥?`ros2 topic hz /terrain_map`.
+2. Goal set 鈥?`lingtu status` `[5] Path` should show waypoints.
+3. All candidate paths blocked 鈥?open `http://<robot>:5050/api/v1/free_paths` (debug
    endpoint exposes the same data RViz used to render `/free_paths`).
 
 ### `cmd_vel` arbitration confusion
@@ -273,7 +273,7 @@ curl http://<robot>:5050/api/v1/cmd_vel_mux
 
 1. Verify map is loaded: `lingtu status` `[1] Session map=`.
 2. Goal must be inside the tomogram bounds.
-3. Drop `w_traversability` in `src/global_planning/PCT_planner/config/params.yaml`.
+3. Drop `w_traversability` in `src/global_planning/pct_planner/config/params.yaml`.
 4. Rebuild tomogram via the Gateway:
    ```bash
    curl -X POST -H 'Content-Type: application/json' \
@@ -307,7 +307,7 @@ ss -tnlp | grep -E "5050|8090|13145"
 sudo systemctl status lingtu
 ```
 
-S100P firewall: `iptables -L -n | grep 5050` — the `ROBOT_REMOTE` chain may be blocking.
+S100P firewall: `iptables -L -n | grep 5050` 鈥?the `ROBOT_REMOTE` chain may be blocking.
 See `memory/feedback_orbbec_color_fps_trap.md` for the recurring port reset on reboot.
 
 ### MCP tools fail from external client
@@ -317,7 +317,7 @@ curl http://<robot>:8090/mcp/tools
 claude mcp add --transport http lingtu http://<robot>:8090/mcp
 ```
 
-If MCP is up but tools error, the framework module behind the tool may be down — see
+If MCP is up but tools error, the framework module behind the tool may be down 鈥?see
 `lingtu status` `[1] Session` for module health.
 
 ### brainstem (`robot-brainstem`) unresponsive on port 13145
@@ -334,9 +334,9 @@ a new control lease.
 
 `TeleopModule` runs inside `lingtu.service`. Symptoms and fixes:
 
-1. WS connection dropped — refresh the joystick UI at `http://<robot>:5050/teleop`.
-2. 3 s idle auto-release fired — re-engage the joystick.
-3. Mux outranked — VisualServo or Recovery is publishing higher priority. Check
+1. WS connection dropped 鈥?refresh the joystick UI at `http://<robot>:5050/teleop`.
+2. 3 s idle auto-release fired 鈥?re-engage the joystick.
+3. Mux outranked 鈥?VisualServo or Recovery is publishing higher priority. Check
    `/api/v1/cmd_vel_mux`.
 
 ---
@@ -363,7 +363,7 @@ sha256sum /tmp/ota_staging/<artifact>
 # compare with manifest.json from release
 ```
 
-Release pipeline issue — the artifact and manifest got out of sync. Re-publish the
+Release pipeline issue 鈥?the artifact and manifest got out of sync. Re-publish the
 release.
 
 ### Rollback
@@ -417,7 +417,7 @@ curl http://<robot>:5050/api/v1/health | jq '.slam'
 
 ## Related
 
-- `docs/03-development/PARAMETER_TUNING.md` — tuning defaults and effects
-- `docs/04-deployment/README.md` — service layout, deployment basics
-- `docs/04-deployment/lingtu_cli.md` — operations CLI reference
-- `docs/archive/05-specialized/slam_drift_watchdog.md` — drift watchdog internals
+- `docs/03-development/PARAMETER_TUNING.md` 鈥?tuning defaults and effects
+- `docs/04-deployment/README.md` 鈥?service layout, deployment basics
+- `docs/04-deployment/lingtu_cli.md` 鈥?operations CLI reference
+- `docs/archive/05-specialized/slam_drift_watchdog.md` 鈥?drift watchdog internals

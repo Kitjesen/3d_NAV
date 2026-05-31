@@ -4,8 +4,8 @@ import pytest
 
 from core.module import Module
 from core.registry import register
-from semantic.perception.semantic_perception.perception_module import PerceptionModule
-from semantic.planner.semantic_planner.llm_module import LLMModule
+from semantic.perception.perception_module import PerceptionModule
+from semantic.planner.llm_module import LLMModule
 
 
 class _RuntimeSwitchDetector:

@@ -17,7 +17,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic.perception.semantic_perception.baseline_wrappers import (
+from semantic.perception.baseline_wrappers import (
     PCTAStarPlanner,
     USSNavPlanner,
     create_planner,

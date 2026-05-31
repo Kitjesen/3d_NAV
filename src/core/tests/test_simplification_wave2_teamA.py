@@ -27,7 +27,7 @@ class TestInstanceTrackerFxZero(unittest.TestCase):
         for mod in stub_modules:
             patches[mod] = types.ModuleType(mod)
         with patch.dict("sys.modules", patches):
-            from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
+            from semantic.perception.instance_tracker import InstanceTracker
         return InstanceTracker()
 
     def test_warned_no_fx_flag_initialises_false(self):

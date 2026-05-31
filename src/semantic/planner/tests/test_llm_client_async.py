@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 # semantic_planner 包路径
 sys.path.insert(0, "D:/inovxio/brain/lingtu/src/semantic_planner")
 
-from semantic.planner.semantic_planner.llm_client import (
+from semantic.planner.llm_client import (
     LLMConfig,
     LLMError,
     MockLLMClient,
@@ -160,7 +160,7 @@ class TestLLMTimeout(unittest.TestCase):
 
         # Mock OpenAI 客户端使其超时
         with patch.dict("sys.modules", {"openai": MagicMock()}):
-            from semantic.planner.semantic_planner.llm_client import OpenAIClient
+            from semantic.planner.llm_client import OpenAIClient
             client = OpenAIClient(config)
 
             # 模拟 _client.chat.completions.create 抛超时

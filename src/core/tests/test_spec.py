@@ -194,7 +194,7 @@ def test_wrong_detector_missing_methods():
 def test_real_goal_resolver_satisfies_protocol():
     """GoalResolver from semantic_planner should satisfy the GoalResolver protocol."""
     try:
-        from semantic.planner.semantic_planner.goal_resolver import (
+        from semantic.planner.goal_resolver import (
             GoalResolver as RealGoalResolver,
         )
     except ImportError:
@@ -206,7 +206,7 @@ def test_real_goal_resolver_satisfies_protocol():
 def test_real_task_decomposer_satisfies_protocol():
     """TaskDecomposer from semantic_planner should satisfy the protocol."""
     try:
-        from semantic.planner.semantic_planner.task_decomposer import (
+        from semantic.planner.task_decomposer import (
             TaskDecomposer as RealTaskDecomposer,
         )
     except ImportError:
@@ -217,7 +217,7 @@ def test_real_task_decomposer_satisfies_protocol():
 def test_real_topological_memory_satisfies_spatial():
     """TopologicalMemory should satisfy SpatialMemory protocol."""
     try:
-        from semantic.planner.semantic_planner.topological_memory import TopologicalMemory
+        from semantic.planner.topological_memory import TopologicalMemory
     except ImportError:
         pytest.skip("semantic_planner not importable in this environment")
     assert hasattr(TopologicalMemory, "update_position")
@@ -227,7 +227,7 @@ def test_real_topological_memory_satisfies_spatial():
 def test_real_episodic_memory_satisfies_protocol():
     """EpisodicMemory should have add() and format_for_llm()."""
     try:
-        from semantic.planner.semantic_planner.episodic_memory import EpisodicMemory
+        from semantic.planner.episodic_memory import EpisodicMemory
     except ImportError:
         pytest.skip("semantic_planner not importable in this environment")
     assert hasattr(EpisodicMemory, "add")
@@ -237,7 +237,7 @@ def test_real_episodic_memory_satisfies_protocol():
 def test_real_llm_client_has_chat():
     """LLMClientBase subclasses should have async chat()."""
     try:
-        from semantic.planner.semantic_planner.llm_client import LLMClientBase
+        from semantic.planner.llm_client import LLMClientBase
     except ImportError:
         pytest.skip("semantic_planner not importable in this environment")
     assert hasattr(LLMClientBase, "chat")

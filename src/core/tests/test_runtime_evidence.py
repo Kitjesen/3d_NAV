@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib.util
 import json
@@ -3731,7 +3731,7 @@ def test_profile_runtime_specs_reject_missing_endpoint_config_tomogram(
             endpoint,
             config_overrides={
                 **endpoint.config_overrides,
-                "tomogram": "src/global_planning/PCT_planner/rsc/tomogram/missing.pickle",
+                "tomogram": "src/global_planning/pct_planner/rsc/tomogram/missing.pickle",
             },
         ),
     )
@@ -3741,7 +3741,7 @@ def test_profile_runtime_specs_reject_missing_endpoint_config_tomogram(
     assert result["ok"] is False
     assert (
         "endpoint gazebo config_overrides tomogram path missing: "
-        "src/global_planning/PCT_planner/rsc/tomogram/missing.pickle"
+        "src/global_planning/pct_planner/rsc/tomogram/missing.pickle"
         in result["blockers"]
     )
 
@@ -3753,7 +3753,7 @@ def test_profile_runtime_specs_reject_missing_endpoint_profile_tomogram(
     endpoint = audit.RUNTIME_ENDPOINTS["mujoco_live"]
     explore_overrides = dict(endpoint.profile_overrides["explore"])
     explore_overrides["tomogram"] = (
-        "src/global_planning/PCT_planner/rsc/tomogram/missing.pickle"
+        "src/global_planning/pct_planner/rsc/tomogram/missing.pickle"
     )
     monkeypatch.setitem(
         audit.RUNTIME_ENDPOINTS,
@@ -3772,7 +3772,7 @@ def test_profile_runtime_specs_reject_missing_endpoint_profile_tomogram(
     assert result["ok"] is False
     assert (
         "endpoint mujoco_live profile_overrides.explore tomogram path missing: "
-        "src/global_planning/PCT_planner/rsc/tomogram/missing.pickle"
+        "src/global_planning/pct_planner/rsc/tomogram/missing.pickle"
         in result["blockers"]
     )
 

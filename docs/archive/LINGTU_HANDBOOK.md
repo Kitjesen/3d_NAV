@@ -1,4 +1,4 @@
----
+﻿---
 title: "LingTu System Handbook"
 subtitle: "Autonomous navigation full stack for outdoor quadruped robots"
 ---
@@ -11,31 +11,31 @@ subtitle: "Autonomous navigation full stack for outdoor quadruped robots"
 
 ---
 
-## Part I — System Overview
+## Part I 鈥?System Overview
 
 ### 1. What LingTu Is
 
 LingTu is the autonomous-navigation full stack for quadruped robots in outdoor / off-road environments.
 
 Positioning:
-- Not a SLAM library, not a planner library — it is the complete pipeline from sensors to motors.
-- Not a teleop tool — it is an autonomous decision system. Give it a goal and it plans, drives, avoids and recovers on its own.
-- Not a simulation toy — it runs on real hardware (S100P / RDK X5).
+- Not a SLAM library, not a planner library 鈥?it is the complete pipeline from sensors to motors.
+- Not a teleop tool 鈥?it is an autonomous decision system. Give it a goal and it plans, drives, avoids and recovers on its own.
+- Not a simulation toy 鈥?it runs on real hardware (S100P / RDK X5).
 
 Target hardware:
 - Compute: S100P (Nash BPU 128 TOPS, aarch64, Ubuntu 22.04 + ROS 2 Humble)
 - LiDAR: Livox MID-360 (10 Hz, 360 deg x 59 deg)
-- Camera: Orbbec Gemini 335 (color + depth, mounted vertically — see camera.rotate)
+- Camera: Orbbec Gemini 335 (color + depth, mounted vertically 鈥?see camera.rotate)
 - IMU: Livox built-in fused at 200 Hz
 - GNSS (optional): WTRTK-980 RTK + NTRIP RTCM injection
 - Motion control: Brainstem quadruped board over gRPC (port 13145)
 
 Design principles:
-1. Module-First — Module is the only runtime unit, Blueprint is the only assembly unit.
-2. Composition over inheritance — nine stack factory functions assemble the full system.
-3. Pluggable backends via Registry — algorithm selection is `@register("category", "name")`, no `if/else` branching.
-4. C++ owns the hot paths — Python orchestrates, C++ does the heavy lifting through nanobind.
-5. Raw DDS instead of rclpy — production avoids the ROS 2 Python runtime; rclpy is only a fallback.
+1. Module-First 鈥?Module is the only runtime unit, Blueprint is the only assembly unit.
+2. Composition over inheritance 鈥?nine stack factory functions assemble the full system.
+3. Pluggable backends via Registry 鈥?algorithm selection is `@register("category", "name")`, no `if/else` branching.
+4. C++ owns the hot paths 鈥?Python orchestrates, C++ does the heavy lifting through nanobind.
+5. Raw DDS instead of rclpy 鈥?production avoids the ROS 2 Python runtime; rclpy is only a fallback.
 
 ### 2. Layer Architecture
 
@@ -66,7 +66,7 @@ Higher layers depend on lower layers; lower layers never depend on higher ones. 
 |---|---|---|
 | Module | Runtime unit with In / Out ports + lifecycle (`setup` / `start` / `stop`) | `core.module.Module` |
 | Port | Typed message channel with backpressure policy | `core.stream.In[T]`, `Out[T]` |
-| Blueprint | DSL for assembling modules — supports `autoconnect`, explicit `wire`, multiple transports | `core.blueprint.Blueprint` |
+| Blueprint | DSL for assembling modules 鈥?supports `autoconnect`, explicit `wire`, multiple transports | `core.blueprint.Blueprint` |
 | Stack | Pre-assembled group of related modules (driver / slam / maps / ...) | `core.blueprints.stacks.*` |
 | Registry | Plugin system via `@register("slam", "fastlio2")` | `core.registry` |
 | NativeModule | C++ subprocess wrapper with watchdog + SIGTERM | `core.native_module` |
@@ -100,7 +100,7 @@ Robot presets (`ROBOT_PRESETS` in the same file): `stub`, `sim`, `ros2`, `s100p`
 
 ---
 
-## Part II — Sensing and Localization
+## Part II 鈥?Sensing and Localization
 
 ### 5. Sensors
 
@@ -112,8 +112,8 @@ Robot presets (`ROBOT_PRESETS` in the same file): `stub`, `sim`, `ros2`, `s100p`
 | IMU (Livox) | `/nav/imu` | 200 Hz | Fast-LIO2 |
 
 CameraBridge has two subscriber back ends (`src/drivers/thunder/camera_bridge_module.py`):
-- DDS-first via raw cyclonedds — runs without a full ROS 2 environment, this is the production path.
-- rclpy fallback — used when ROS 2 Python is available; adds watchdog + USB reset + L1/L2/L3 self-recovery.
+- DDS-first via raw cyclonedds 鈥?runs without a full ROS 2 environment, this is the production path.
+- rclpy fallback 鈥?used when ROS 2 Python is available; adds watchdog + USB reset + L1/L2/L3 self-recovery.
 
 The camera is mounted vertically on the body, so `config/robot_config.yaml::camera.rotate=270`. CameraBridge applies `cv2.rotate` in `_on_ros2_color`; downstream modules always see "upright" frames.
 
@@ -162,7 +162,7 @@ Five representations coexist, each with a single purpose:
 `MapManagerModule.save` runs the full pipeline:
 1. Fast-LIO2 emits `map.pcd` + `poses.txt`.
 2. `_build_tomogram(pcd)` -> `tomogram.pickle`.
-3. DUFOMap offline filter (Phase 2) — ray-casting + void detection on `<map>/patches/*.pcd`. Writes a clean `map.pcd`, backs the original up as `map.pcd.predufo`. Gated by `LINGTU_SAVE_DYNAMIC_FILTER=1`. Binary at `~/src/dufomap/build/dufomap_run`, config `config/dufomap.toml`.
+3. DUFOMap offline filter (Phase 2) 鈥?ray-casting + void detection on `<map>/patches/*.pcd`. Writes a clean `map.pcd`, backs the original up as `map.pcd.predufo`. Gated by `LINGTU_SAVE_DYNAMIC_FILTER=1`. Binary at `~/src/dufomap/build/dufomap_run`, config `config/dufomap.toml`.
 4. `_build_occupancy_snapshot` -> `occupancy.npz` + `map.pgm` + `map.yaml` (nav2-compatible).
 
 Default storage: `~/data/lingtu/maps/<name>/` (legacy `~/data/nova/maps/` still honoured if it exists, see `cli/profiles_data.py::_default_map_dir`).
@@ -171,20 +171,20 @@ Default storage: `~/data/lingtu/maps/<name>/` (legacy `~/data/nova/maps/` still 
 
 ---
 
-## Part III — Planning and Control
+## Part III 鈥?Planning and Control
 
 ### 8. Global Planner (PCT)
 
-`PCT_planner` from HKU/HKUST (GPLv2). Paper: "Efficient Trajectory Planning for Off-Road" (arXiv 2310.07780).
+`pct_planner` from HKU/HKUST (GPLv2). Paper: "Efficient Trajectory Planning for Off-Road" (arXiv 2310.07780).
 
-Artifacts (aarch64 only — x86 dev boxes auto-fall-back to `_AStarBackend`):
-- `ele_planner.so` — 3D A* on a hex grid with multi-slice height handling.
-- `traj_opt.so` — GPMP (Gaussian-process motion planning) for jerk-minimal smoothing.
+Artifacts (aarch64 only 鈥?x86 dev boxes auto-fall-back to `_AStarBackend`):
+- `ele_planner.so` 鈥?3D A* on a hex grid with multi-slice height handling.
+- `traj_opt.so` 鈥?GPMP (Gaussian-process motion planning) for jerk-minimal smoothing.
 - `a_star.so`, `libele_planner_lib.so`.
 
 Steps in `planner_wrapper.py::TomogramPlanner.plan()`:
 1. World -> grid index (`pos2idx`).
-2. Height -> slice index (`pos2slice`) — handles stairs / multi-storey.
+2. Height -> slice index (`pos2slice`) 鈥?handles stairs / multi-storey.
 3. C++ `ele_planner.so` runs 3D A* with traversability cost and slice-switch penalty.
 4. C++ `traj_opt.so` smooths with GPMP.
 5. Grid -> world.
@@ -199,7 +199,7 @@ Source: CMU `base_autonomy` (TARE team). Core: `src/nav/core/include/nav_core/lo
 
 Strategy: pre-generate ~1000 candidate paths offline, pick the best per frame online. **No online MPC.**
 
-- Library: `src/base_autonomy/local_planner/paths/*.ply` — 7 groups, ~150 paths each, MATLAB-generated arcs of 1-2 m.
+- Library: `src/base_autonomy/local_planner/paths/*.ply` 鈥?7 groups, ~150 paths each, MATLAB-generated arcs of 1-2 m.
 - Online (10 Hz):
   1. Rotate the library by robot yaw across 36 directions (OpenMP parallel).
   2. For each path's voxels, check terrain map for collision -> mark blocked.
@@ -262,9 +262,9 @@ Stuck detection: 2 s of < 0.1 m motion -> recovery (back up 0.3 s + replan). Thr
 
 ---
 
-## Part IV — Semantics and Intelligence
+## Part IV 鈥?Semantics and Intelligence
 
-### 13. SemanticPlannerModule — five-level goal resolver
+### 13. SemanticPlannerModule 鈥?five-level goal resolver
 
 User says "go to the kitchen" or "find the red chair". `goal_resolver.py` runs:
 
@@ -282,13 +282,13 @@ Fast / Slow dual process:
 - AdaNav escalation: when candidate-score Shannon entropy > 1.5 and confidence < 0.85, force the Slow Path even if Fast Path produced a hit.
 - LERa recovery: 3-step Look-Explain-Replan on subgoal failure; after the second consecutive failure the LLM picks `retry_different_path | expand_search | requery_goal | abort`.
 
-### 14. VisualServoModule — visual servo + person follow
+### 14. VisualServoModule 鈥?visual servo + person follow
 
 Two output channels selected by distance:
 - Far (> 3 m): emit `goal_pose` -> NavigationModule -> normal planning.
 - Near (< 3 m): emit `cmd_vel` -> CmdVelMux (priority 80) -> bypass planner, PD-track directly.
 
-Components: `BBoxNavigator` (bbox + depth -> 3D -> PD), `PersonTracker` (VLM select + CLIP Re-ID for occlusion robustness), `vlm_bbox_query` (open-vocab detection — Grounding-DINO or YoloE).
+Components: `BBoxNavigator` (bbox + depth -> 3D -> PD), `PersonTracker` (VLM select + CLIP Re-ID for occlusion robustness), `vlm_bbox_query` (open-vocab detection 鈥?Grounding-DINO or YoloE).
 
 ### 15. Memory Layers
 
@@ -302,7 +302,7 @@ Components: `BBoxNavigator` (bbox + depth -> 3D -> PD), `PersonTracker` (VLM sel
 
 Storage: `data/memory/{global,sites,robots,missions}/`. Markdown is the long-term truth; the vector store is a search-acceleration cache only.
 
-### 16. AgentLoop — multi-step LLM tool use
+### 16. AgentLoop 鈥?multi-step LLM tool use
 
 `src/semantic/planner/.../agent_loop.py` runs an observe -> think -> act loop with seven LLM tools:
 
@@ -318,11 +318,11 @@ LLM back ends registered through `@register("llm", ...)`:
 | `openai` | `OPENAI_API_KEY` |
 | `claude` | `ANTHROPIC_API_KEY` |
 | `qwen` | `DASHSCOPE_API_KEY` (China fallback) |
-| `mock` | none — keyword path |
+| `mock` | none 鈥?keyword path |
 
 ---
 
-## Part V — Safety and Interfaces
+## Part V 鈥?Safety and Interfaces
 
 ### 17. Safety
 
@@ -344,7 +344,7 @@ bp.wire("SafetyRingModule", "stop_cmd", "NavigationModule", "stop_signal")
 
 ### 18. Gateway / Dashboard / MCP
 
-`GatewayModule` (L6, `src/gateway/gateway_module.py`) — FastAPI + uvicorn on port 5050.
+`GatewayModule` (L6, `src/gateway/gateway_module.py`) 鈥?FastAPI + uvicorn on port 5050.
 
 - HTTP: ~30 endpoints under `/api/v1/*`.
 - SSE: `/api/v1/events` streams `odometry`, `mission`, `scene_graph`, `map_cloud`, `slam_drift`, ...
@@ -352,16 +352,16 @@ bp.wire("SafetyRingModule", "stop_cmd", "NavigationModule", "stop_signal")
 - Static hosting of the dashboard (`web/dist/`).
 
 Key endpoints:
-- `GET  /api/v1/session` — current mode + map + ICP quality.
-- `POST /api/v1/session/start {mode, map_name}` — start mode (auto-launches slam / localizer services).
-- `POST /api/v1/session/end` — return to idle.
-- `POST /api/v1/goal {x, y, z?}` — send a navigation goal.
-- `POST /api/v1/slam/relocalize {map_name, x, y, yaw}` — manual relocalization.
-- `POST /api/v1/cmd/stop` — emergency stop.
-- `POST /api/v1/bag/start {duration, prefix}` — start rosbag recording.
-- `POST /api/v1/webrtc/bitrate {bps}` — adjust video bitrate.
-- `GET  /api/v1/webrtc/stats` — video stats.
-- `POST /api/v1/map_cloud/reset` — clear the browser-side cumulative point cloud.
+- `GET  /api/v1/session` 鈥?current mode + map + ICP quality.
+- `POST /api/v1/session/start {mode, map_name}` 鈥?start mode (auto-launches slam / localizer services).
+- `POST /api/v1/session/end` 鈥?return to idle.
+- `POST /api/v1/goal {x, y, z?}` 鈥?send a navigation goal.
+- `POST /api/v1/slam/relocalize {map_name, x, y, yaw}` 鈥?manual relocalization.
+- `POST /api/v1/cmd/stop` 鈥?emergency stop.
+- `POST /api/v1/bag/start {duration, prefix}` 鈥?start rosbag recording.
+- `POST /api/v1/webrtc/bitrate {bps}` 鈥?adjust video bitrate.
+- `GET  /api/v1/webrtc/stats` 鈥?video stats.
+- `POST /api/v1/map_cloud/reset` 鈥?clear the browser-side cumulative point cloud.
 
 `MCPServerModule` (`src/gateway/mcp_server.py`): JSON-RPC at `:8090/mcp`, auto-discovers `@skill` methods. 16 tools across navigation, perception, memory, semantic map, visual servo, planning, system. Connect from Claude Code with `claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp`.
 
@@ -375,7 +375,7 @@ Pose persistence: a successful `/slam/relocalize` writes `~/.lingtu/last_nav_pos
 - 3 s idle auto-release.
 - Emits cmd_vel to CmdVelMux (priority 100).
 
-Bag recording (`scripts/record_bag.sh`): `ros2 bag record` over 13 topics (no raw camera — payloads explode) into `~/data/bags/<prefix>_<ts>/`:
+Bag recording (`scripts/record_bag.sh`): `ros2 bag record` over 13 topics (no raw camera 鈥?payloads explode) into `~/data/bags/<prefix>_<ts>/`:
 
 ```
 /nav/{lidar_scan, imu, odometry, map_cloud, registered_cloud, cmd_vel, goal_pose}
@@ -396,25 +396,25 @@ JPEG is currently sufficient; WebRTC waits on hardware encode.
 
 ---
 
-## Part VI — Operations and Field
+## Part VI 鈥?Operations and Field
 
 ### 20. S100P Layout
 
 ```
 ~/data/SLAM/navigation/                  -> ~/data/inovxio/lingtu/  (symlink)
 ~/data/inovxio/lingtu/                   source root
-  ├── lingtu.py                          CLI entry
-  ├── cli/profiles_data.py               profile + robot presets
-  ├── src/                               Python source
-  ├── install/                           colcon build (ROS 2 packages)
-  └── web/dist/                          dashboard static assets
+  鈹溾攢鈹€ lingtu.py                          CLI entry
+  鈹溾攢鈹€ cli/profiles_data.py               profile + robot presets
+  鈹溾攢鈹€ src/                               Python source
+  鈹溾攢鈹€ install/                           colcon build (ROS 2 packages)
+  鈹斺攢鈹€ web/dist/                          dashboard static assets
 /tmp/lingtu_nav.log                      tmux runtime log
 ~/data/lingtu/maps/                      maps (legacy ~/data/nova/maps still honoured)
-  └── <map_name>/
-       ├── map.pcd                       SLAM point cloud
-       ├── tomogram.pickle               PCT input
-       ├── map.pgm + map.yaml            nav2-compatible
-       └── poses.txt                     PGO output
+  鈹斺攢鈹€ <map_name>/
+       鈹溾攢鈹€ map.pcd                       SLAM point cloud
+       鈹溾攢鈹€ tomogram.pickle               PCT input
+       鈹溾攢鈹€ map.pgm + map.yaml            nav2-compatible
+       鈹斺攢鈹€ poses.txt                     PGO output
 ~/data/bags/                             rosbag storage
 ~/.lingtu/last_nav_pose.json             relocalization persistence
 ~/src/dufomap/build/dufomap_run          DUFOMap offline filter binary
@@ -424,10 +424,10 @@ JPEG is currently sufficient; WebRTC waits on hardware encode.
 ```
 
 systemd services on the robot:
-- `slam.service` — Fast-LIO2 + Livox driver
-- `localizer.service` — ICP localizer (loads saved map)
-- `camera.service` — Orbbec launch
-- `lingtu.service` — currently unused; field operations launch via tmux
+- `slam.service` 鈥?Fast-LIO2 + Livox driver
+- `localizer.service` 鈥?ICP localizer (loads saved map)
+- `camera.service` 鈥?Orbbec launch
+- `lingtu.service` 鈥?currently unused; field operations launch via tmux
 
 Production launch (stable tmux):
 
@@ -437,7 +437,7 @@ tmux new-session -d -s lingtu -x 200 -y 50 \
   'cd ~/data/SLAM/navigation && python3 lingtu.py nav --llm mock --no-repl 2>&1 | tee /tmp/lingtu_nav.log'
 ```
 
-Firewall: `iptables ROBOT_REMOTE` chain DROPs by default — open `5050` and `8090` after `lt restart`.
+Firewall: `iptables ROBOT_REMOTE` chain DROPs by default 鈥?open `5050` and `8090` after `lt restart`.
 DDS: production uses raw cyclonedds (no rclpy). Local Windows dev requires extra DDS XML.
 
 ### 21. Field Operations
@@ -455,33 +455,33 @@ Read the output:
 |---|---|---|---|
 | mode | navigating / mapping | idle | empty |
 | icp_quality | 0 < x < 0.3 | 0.3-0.5 | 0 / -1 |
-| localizer_ready | true | — | false |
+| localizer_ready | true | 鈥?| false |
 | /nav/odometry | 8-10 Hz | 3-8 | < 3 / empty |
-| /localization_quality | ~10 Hz | — | empty |
+| /localization_quality | ~10 Hz | 鈥?| empty |
 
 Anything red sends you to section 23.
 
 Standard navigation flow (90% of field tasks):
 
 ```bash
-# Step 1 — confirm mode
+# Step 1 鈥?confirm mode
 lt                             # check mode
 lt session nav                 # idle -> nav (loads last-used map)
 lt session nav my_custom_map   # specify map
 
-# Step 2 — relocalize (give ICP a sane initial pose)
+# Step 2 鈥?relocalize (give ICP a sane initial pose)
 lt reloc 0 0 0                 # at map origin, facing east
 lt reloc 2.5 -1.3 1.57         # at (2.5, -1.3) facing north
 # Wait ~3 s for icp_quality < 0.3 to confirm.
 
-# Step 3 — send goal
+# Step 3 鈥?send goal
 lt nav 5 3                     # go to (5, 3)
 
-# Step 4 — monitor or stop
+# Step 4 鈥?monitor or stop
 lt                             # mission status
 lt stop                        # estop, cmd_vel zeroed
 
-# Step 5 — record a bag for failure repro
+# Step 5 鈥?record a bag for failure repro
 lt record start
 lt record
 lt record stop
@@ -499,7 +499,7 @@ lt map use my_lab_20260425
 lt session nav my_lab_20260425
 ```
 
-Obstacle avoidance is automatic — no toggle. As long as session is `navigating`, ICP quality is good and a goal is set, LocalPlanner re-scores 1000 candidates per frame, Terrain emits traversability, and CmdVelMux selects the final velocity.
+Obstacle avoidance is automatic 鈥?no toggle. As long as session is `navigating`, ICP quality is good and a goal is set, LocalPlanner re-scores 1000 candidates per frame, Terrain emits traversability, and CmdVelMux selects the final velocity.
 
 ### 22. Operations CLI (`scripts/lingtu`)
 
@@ -515,7 +515,7 @@ Commands:
 | Subcommand | Purpose |
 |---|---|
 | `lingtu status` | One-screen status across 8 sections (session / SLAM / robot / mission / path / control / map / log) |
-| `lingtu watch` | `watch -c -n 1` continuous refresh — keep on a side monitor while mapping or navigating |
+| `lingtu watch` | `watch -c -n 1` continuous refresh 鈥?keep on a side monitor while mapping or navigating |
 | `lingtu map start \| save <name> \| end \| list` | Mapping session lifecycle |
 | `lingtu nav start <map> \| stop \| goal X Y [YAW]` | Navigation session + send goal |
 | `lingtu svc status \| restart [slam\|lingtu\|all]` | systemctl wrapper |
@@ -536,10 +536,10 @@ Commands:
 | `lt` command missing | Not installed | `scp lt -> /usr/local/bin/lt && chmod +x` |
 
 Field gotchas worth remembering:
-- Orbbec `color_fps:=30` locks the bootloader — never pass it to `gemini_330_series.launch.py`; you will physically need to replug.
-- rclpy + uvicorn + aiortc together break thread scheduling — stay on the DDS fallback.
-- `iptables ROBOT_REMOTE` DROPs `5050` / `8090` by default — open both after every deploy / reboot.
-- SSH command lines with semicolons return exit 255 — wrap in a heredoc script.
+- Orbbec `color_fps:=30` locks the bootloader 鈥?never pass it to `gemini_330_series.launch.py`; you will physically need to replug.
+- rclpy + uvicorn + aiortc together break thread scheduling 鈥?stay on the DDS fallback.
+- `iptables ROBOT_REMOTE` DROPs `5050` / `8090` by default 鈥?open both after every deploy / reboot.
+- SSH command lines with semicolons return exit 255 鈥?wrap in a heredoc script.
 
 ### 24. Calibration
 
@@ -560,7 +560,7 @@ Runtime check: `src/core/utils/calibration_check.py` runs at `full_stack_bluepri
 
 ---
 
-## Part VII — Reference
+## Part VII 鈥?Reference
 
 ### 25. Performance on S100P (aarch64)
 
@@ -579,28 +579,28 @@ Runtime check: `src/core/utils/calibration_check.py` runs at `full_stack_bluepri
 
 ### 26. Known Limitations and Roadmap
 
-Red — production blocking:
+Red 鈥?production blocking:
 
 | # | Issue | Status |
 |---|---|---|
 | R1 | Fast-LIO2 static drift > 1 h | **Fixing** (C++ IEKF covariance ceiling) |
 | R2 | WebRTC libx264 encoder stalls on aarch64 | Roadmap (`hobot_codec` BPU hardware encode) |
 
-Yellow — field UX:
+Yellow 鈥?field UX:
 
 | # | Issue | Status |
 |---|---|---|
 | Y1 | Camera defaults to ~7 fps | No stable 30 fps `color_fps=0` parameter combination found |
-| Y2 | PCT only on aarch64 | Accepted — A* fallback |
-| Y3 | ChromaDB optional | Accepted — VectorMemory soft-fails to numpy |
-| Y4 | All 1226 framework tests are mock-based | Roadmap — real ROS 2 integration tests |
+| Y2 | PCT only on aarch64 | Accepted 鈥?A* fallback |
+| Y3 | ChromaDB optional | Accepted 鈥?VectorMemory soft-fails to numpy |
+| Y4 | All 1226 framework tests are mock-based | Roadmap 鈥?real ROS 2 integration tests |
 
-Green — optimisation:
+Green 鈥?optimisation:
 
 | # | Issue | Status |
 |---|---|---|
-| G1 | `gateway_module.py` exceeds 2700 lines, tightly coupled | Roadmap — split Session / SSE / HTTP |
-| G2 | No monitoring / alerting | Roadmap — Prometheus + WeChat Work |
+| G1 | `gateway_module.py` exceeds 2700 lines, tightly coupled | Roadmap 鈥?split Session / SSE / HTTP |
+| G2 | No monitoring / alerting | Roadmap 鈥?Prometheus + WeChat Work |
 
 ### 27. CLI / HTTP / FAQ
 
@@ -643,19 +643,19 @@ cli/profiles_data.py                      Profile and robot-preset definitions
 FAQ:
 
 **Q: Why not nav2 directly?**
-A: nav2 is heavy; quadrupeds don't need its behaviour-tree machinery; PCT's 3D terrain-aware planning has no nav2 equivalent; we want Module-First, not nav2 lifecycle nodes. OccupancyGrid is still nav2-compatible (`map.pgm` + `map.yaml`) — maps remain interoperable.
+A: nav2 is heavy; quadrupeds don't need its behaviour-tree machinery; PCT's 3D terrain-aware planning has no nav2 equivalent; we want Module-First, not nav2 lifecycle nodes. OccupancyGrid is still nav2-compatible (`map.pgm` + `map.yaml`) 鈥?maps remain interoperable.
 
 **Q: Can the robot still be remotely controlled while mapping?**
 A: Yes. While in mapping mode, `lt nav X Y` (PCT plans through already-mapped area) and the joystick both work. Manual driving usually produces a better map.
 
 **Q: Does it work offline?**
-A: Yes. Use `--llm mock` — Fast Path is enough for the keyword cases. Only the multi-step Slow Path needs cloud LLM.
+A: Yes. Use `--llm mock` 鈥?Fast Path is enough for the keyword cases. Only the multi-step Slow Path needs cloud LLM.
 
 **Q: Can I run `lingtu.py` on a Windows laptop?**
 A: Yes (profiles `dev` or `sim`). PCT auto-falls back to A*, CameraBridge runs in stub mode, SLAM is `none`. Good for code work and framework tests; not real navigation.
 
 **Q: Does the robot lose its position on power loss?**
-A: No — `~/.lingtu/last_nav_pose.json` persists the last successful relocalization. The next `session/start navigating` background worker restores it automatically.
+A: No 鈥?`~/.lingtu/last_nav_pose.json` persists the last successful relocalization. The next `session/start navigating` background worker restores it automatically.
 
 **Q: Do the dashboard and `lt` conflict?**
 A: No. Both call the same backend API. Browser for the picture, `lt` for commands is the common combo.
@@ -664,7 +664,7 @@ A: No. Both call the same backend API. Browser for the picture, `lt` for command
 
 ## Acknowledgements
 
-- **PCT_Planner**: HKU/HKUST Bowen Yang and Jie Cheng, GPLv2.
+- **pct_planner**: HKU/HKUST Bowen Yang and Jie Cheng, GPLv2.
 - **base_autonomy** (LocalPlanner / PathFollower / Terrain): CMU Chao Cao team, TARE.
 - **Fast-LIO2**: HKU-Mars Wei Xu.
 - **Orbbec SDK**: Orbbec.

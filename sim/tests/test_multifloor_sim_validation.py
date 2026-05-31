@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import pickle
 
 import numpy as np
 import pytest
 
-from global_planning.PCT_planner_runnable.runtime import prepare_tomogram_for_pct
+from global_planning.pct_planner_runnable.runtime import prepare_tomogram_for_pct
 from sim.engine.scenarios.multifloor_assets import build_multifloor_assets
 import sim.scripts.multifloor_nav_validation as multifloor_nav_validation
 from sim.scripts.multifloor_nav_validation import (

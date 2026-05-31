@@ -1,23 +1,23 @@
-# ============================================================
-# LingTu .gitignore — 2026-05-31 cleaned
+﻿# ============================================================
+# LingTu .gitignore 鈥?2026-05-31 cleaned
 # ============================================================
 
-# ── Third-party reference code (local only, not tracked) ──
+# 鈹€鈹€ Third-party reference code (local only, not tracked) 鈹€鈹€
 third_party/
 
-# ── ROS 2 build artifacts ──
+# 鈹€鈹€ ROS 2 build artifacts 鈹€鈹€
 build/
 install/
 log/
 !scripts/build/
 !scripts/build/build_ros_workspace.sh
 
-# ── ROS bag files ──
+# 鈹€鈹€ ROS bag files 鈹€鈹€
 *.bag
 *.db3
 *.mcap
 
-# ── Runtime state ──
+# 鈹€鈹€ Runtime state 鈹€鈹€
 .lingtu/
 artifacts/
 logs/
@@ -25,7 +25,7 @@ output/
 MUJOCO_LOG.TXT
 status.out
 
-# ── Python ──
+# 鈹€鈹€ Python 鈹€鈹€
 __pycache__/
 *.pyc
 *.py[cod]
@@ -42,7 +42,7 @@ env/
 .tmp_gateway_tests/
 pytest_tmp/
 
-# ── C/C++ build artifacts ──
+# 鈹€鈹€ C/C++ build artifacts 鈹€鈹€
 *.o
 *.so
 *.pyd
@@ -53,7 +53,7 @@ pytest_tmp/
 *.out
 src/nav/core/build_nb*/
 
-# ── Model weights (large binaries — distribute via release-models.yml) ──
+# 鈹€鈹€ Model weights (large binaries 鈥?distribute via release-models.yml) 鈹€鈹€
 *.pt
 *.pth
 *.onnx
@@ -62,7 +62,7 @@ src/nav/core/build_nb*/
 *.hbm
 mobileclip2_b.ts
 
-# ── Large data / media files ──
+# 鈹€鈹€ Large data / media files 鈹€鈹€
 assets/media/*.mp4
 *.tar
 *.tar.gz
@@ -72,14 +72,14 @@ assets/media/*.mp4
 *.bagol*
 *.part
 
-# ── Maps & 3D assets (keep example files) ──
+# 鈹€鈹€ Maps & 3D assets (keep example files) 鈹€鈹€
 maps/*.pcd
 docs/media/videos/*.mp4
 docs/media/videos/*.gif
-!src/global_planning/PCT_planner/rsc/PCD/example.pcd
-!src/global_planning/PCT_planner/rsc/tomogram/example.pickle
+!src/global_planning/pct_planner/rsc/PCD/example.pcd
+!src/global_planning/pct_planner/rsc/tomogram/example.pickle
 
-# ── IDE / editor / tooling ──
+# 鈹€鈹€ IDE / editor / tooling 鈹€鈹€
 .vscode/
 .idea/
 .cursor/
@@ -89,27 +89,27 @@ docs/media/videos/*.gif
 *~
 .DS_Store
 
-# ── AI agent / OMC state ──
+# 鈹€鈹€ AI agent / OMC state 鈹€鈹€
 **/.omc/
 **/.omx/
 .chat_history
 
-# ── Temporary files ──
+# 鈹€鈹€ Temporary files 鈹€鈹€
 *.tmp
 *.temp
 *.test
 *.log
 *.bak
 
-# ── Keys / credentials — NEVER commit ──
+# 鈹€鈹€ Keys / credentials 鈥?NEVER commit 鈹€鈹€
 keys/
 *.pem
 
-# ── Build / dist artifacts ──
+# 鈹€鈹€ Build / dist artifacts 鈹€鈹€
 dist/
 **/target/
 
-# ── Flutter client ──
+# 鈹€鈹€ Flutter client 鈹€鈹€
 client/flutter_monitor/.dart_tool/
 client/flutter_monitor/.flutter-plugins
 client/flutter_monitor/.flutter-plugins-dependencies
@@ -118,17 +118,17 @@ client/flutter_monitor/build/
 client/flutter_monitor/linux/flutter/ephemeral/
 client/flutter_monitor/web/.dart_tool/
 
-# ── Third-party (use scripts/clone_semantic_deps.sh to restore) ──
+# 鈹€鈹€ Third-party (use scripts/clone_semantic_deps.sh to restore) 鈹€鈹€
 third_party/
 !third_party/.gitkeep
 
-# OR-Tools binaries fetched by scripts/build/fetch_ortools.sh — ~130 MB
+# OR-Tools binaries fetched by scripts/build/fetch_ortools.sh 鈥?~130 MB
 # per arch, not committed. The or-tools/ directory below ships the
 # .gitkeep placeholder only.
 src/exploration/tare_planner/or-tools/*
 !src/exploration/tare_planner/or-tools/.gitkeep
 
-# ── Generated test/paper output ──
+# 鈹€鈹€ Generated test/paper output 鈹€鈹€
 paper_figures/
 pipeline_videos/
 functional_test_output/
@@ -138,25 +138,25 @@ src/semantic_perception/test_results/
 det_*.jpg
 det_*.png
 
-# ── Vendored libs (use system install) ──
-src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/
+# 鈹€鈹€ Vendored libs (use system install) 鈹€鈹€
+src/global_planning/pct_planner/planner/lib/3rdparty/gtsam-4.1.1/
 
-# ── Sim output (videos, benchmarks — too large for git) ──
+# 鈹€鈹€ Sim output (videos, benchmarks 鈥?too large for git) 鈹€鈹€
 sim/output/
 
-# ── Sim datasets (too large for git) ──
+# 鈹€鈹€ Sim datasets (too large for git) 鈹€鈹€
 sim/datasets/legkilo_all/
 
-# ── Research reference repos (clone manually, see research/README.md) ──
+# 鈹€鈹€ Research reference repos (clone manually, see research/README.md) 鈹€鈹€
 research/semantic_map_refs/
 !research/README.md
 
-# ── MuJoCo temp XML ──
+# 鈹€鈹€ MuJoCo temp XML 鈹€鈹€
 sim/robots/*/tmp*.xml
 
-# ── Misc generated ──
+# 鈹€鈹€ Misc generated 鈹€鈹€
 generate_paper_figures*.py
-src/global_planning/PCT_planner/planner/lib/3rdparty/
+src/global_planning/pct_planner/planner/lib/3rdparty/
 .claude/worktrees/
 mobileclip_blt.ts
 web/node_modules

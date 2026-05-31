@@ -128,8 +128,8 @@ def test_semantic_namespace_wrappers_expose_runtime_import_paths():
     from core.utils.robustness import retry
     from core.utils.sanitize import sanitize_position
     from core.utils.validation import validate_bgr
-    from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
-    from semantic.perception.semantic_perception.tracked_objects import TrackedObject
+    from semantic.perception.instance_tracker import InstanceTracker
+    from semantic.perception.tracked_objects import TrackedObject
 
     assert callable(sanitize_position)
     assert InstanceTracker is not None
@@ -3041,7 +3041,7 @@ def test_frontier_exploration_goal_reaches_navigation_planner():
 
 
 def test_sim_scene_observer_emits_building_scene_stairs():
-    from semantic.perception.semantic_perception.sim_scene_observer import SimSceneObserver
+    from semantic.perception.sim_scene_observer import SimSceneObserver
 
     class _Intrinsics:
         fx = 415.7
@@ -3066,7 +3066,7 @@ def test_sim_scene_observer_emits_building_scene_stairs():
 
 
 def test_sim_scene_observer_respects_live_forward_axis_convention():
-    from semantic.perception.semantic_perception.sim_scene_observer import SimSceneObserver
+    from semantic.perception.sim_scene_observer import SimSceneObserver
 
     class _Intrinsics:
         fx = 415.7

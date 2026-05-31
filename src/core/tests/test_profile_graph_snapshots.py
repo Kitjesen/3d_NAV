@@ -628,7 +628,7 @@ def test_simulation_runtime_contracts_lock_simulator_boundary():
     fastlio = simulation_runtime_contract("mujoco_fastlio2_live")
 
     assert gazebo.profile == "sim_industrial"
-    assert gazebo.world == "sim/worlds/lingtu_gazebo_industrial_park.sdf"
+    assert gazebo.world == "sim/worlds/gazebo/lingtu_gazebo_industrial_park.sdf"
     assert gazebo.launch_script == "sim/scripts/launch_lingtu_gazebo_industrial_demo.sh"
     assert gazebo.rviz_config == "tests/planning/lingtu_industrial_demo.rviz"
     assert gazebo.adapter_script == "sim/engine/bridge/gazebo_runtime_adapter.py"
@@ -726,7 +726,7 @@ def test_simulation_runtime_contracts_lock_simulator_boundary():
 
     assert fastlio.provider == "mujoco"
     assert fastlio.profile == "sim_mujoco_live"
-    assert fastlio.world == "sim/worlds/industrial_park_scene.xml"
+    assert fastlio.world == "sim/worlds/mujoco/industrial_park_scene.xml"
     assert fastlio.launch_script == "sim/scripts/launch_mujoco_fastlio2_live.sh"
     assert fastlio.data_source_contract == "mujoco_fastlio2_live"
     assert set(fastlio.canonical_topics) == set(

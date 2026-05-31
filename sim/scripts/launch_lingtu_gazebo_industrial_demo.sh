@@ -90,7 +90,7 @@ start_demo() {
   mkdir -p "$run_dir"
   rm -f "$run_dir"/*.pid "$run_dir"/*.log "$run_dir"/*report*.json "$run_dir"/*trace*.json
 
-  local world="$root/sim/worlds/lingtu_gazebo_industrial_park.sdf"
+  local world="$root/sim/worlds/gazebo/lingtu_gazebo_industrial_park.sdf"
   local rviz_config="${LINGTU_GAZEBO_INDUSTRIAL_RVIZ:-$root/tests/planning/lingtu_industrial_demo.rviz}"
   local python_bin="${LINGTU_PYTHON:-/usr/bin/python3}"
   [[ -x "$python_bin" ]] || python_bin="python3"

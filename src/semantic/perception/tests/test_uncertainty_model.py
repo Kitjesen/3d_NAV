@@ -18,13 +18,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic.perception.semantic_perception.global_coverage_mask import GlobalCoverageMask
-from semantic.perception.semantic_perception.polyhedron_expansion import (
+from semantic.perception.global_coverage_mask import GlobalCoverageMask
+from semantic.perception.polyhedron_expansion import (
     PolyhedronExpander,
     PolyhedronExpansionConfig,
 )
-from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
-from semantic.perception.semantic_perception.uncertainty_model import (
+from semantic.perception.scg_builder import SCGBuilder, SCGConfig
+from semantic.perception.uncertainty_model import (
     ExplorationStrategy,
     UncertaintyModel,
 )

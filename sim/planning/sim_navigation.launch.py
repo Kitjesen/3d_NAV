@@ -1,4 +1,4 @@
-r"""
+﻿r"""
 Building2_9 full-stack navigation simulation launch file for ROS 2 SITL.
 
 No physical robot, LiDAR, or SLAM service is required. Node topology:
@@ -16,7 +16,7 @@ Usage:
 
   # Specify map and goal.
   ros2 launch tests/planning/sim_navigation.launch.py \
-    map_path:=/home/sunrise/data/SLAM/navigation/src/global_planning/PCT_planner/rsc/pcd/building2_9.pickle \
+    map_path:=/home/sunrise/data/SLAM/navigation/src/global_planning/pct_planner/rsc/pcd/building2_9.pickle \
     goal_x:=5.0 goal_y:=-8.0
 
   # Alternative diagonal corridor case.
@@ -51,7 +51,7 @@ def _default_pickle():
     tests_dir = os.path.dirname(__file__)           # tests/planning/
     src_root  = os.path.join(tests_dir, '..', '..', 'src')
     return os.path.normpath(os.path.join(
-        src_root, 'global_planning', 'PCT_planner',
+        src_root, 'global_planning', 'pct_planner',
         'rsc', 'pcd', 'building2_9.pickle',
     ))
 
@@ -148,12 +148,12 @@ def generate_launch_description():
     try:
         pct_share = get_package_share_directory('pct_planner')
     except Exception:
-        pct_share = os.path.join(repo_root, 'src', 'global_planning', 'PCT_planner')
+        pct_share = os.path.join(repo_root, 'src', 'global_planning', 'pct_planner')
     source_global_planner_script = os.path.join(
         repo_root,
         'src',
         'global_planning',
-        'PCT_planner',
+        'pct_planner',
         'planner',
         'scripts',
         'legacy',

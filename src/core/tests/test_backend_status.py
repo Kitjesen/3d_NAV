@@ -68,7 +68,7 @@ def test_terrain_simple_backend_reports_not_degraded():
 
 
 def test_perception_health_reports_detector_and_encoder_backend_status():
-    from semantic.perception.semantic_perception.perception_module import PerceptionModule
+    from semantic.perception.perception_module import PerceptionModule
 
     module = PerceptionModule(detector_type="bpu", encoder_type="mobileclip")
 

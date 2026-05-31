@@ -16,8 +16,8 @@ from scipy.spatial import ConvexHull
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic.perception.semantic_perception.polyhedron_expansion import Polyhedron
-from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
+from semantic.perception.polyhedron_expansion import Polyhedron
+from semantic.perception.scg_builder import SCGBuilder, SCGConfig
 
 
 def test_polyhedron_creation():
@@ -91,7 +91,7 @@ def test_visualization_import():
     """测试可视化模块导入。"""
     print("测试 3: 可视化模块导入")
 
-    from semantic.perception.semantic_perception.visualization_tools import (
+    from semantic.perception.visualization_tools import (
         ComprehensiveVisualizer,
         PathVisualizer,
         PerformanceVisualizer,

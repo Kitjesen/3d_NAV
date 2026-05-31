@@ -9,8 +9,8 @@ from typing import Dict, Optional
 # Project root (two levels above this file)
 _LINGTU_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# sim/worlds/ directory (contains existing XML files)
-_SIM_WORLDS = _LINGTU_ROOT / "sim" / "worlds"
+# sim/worlds/mujoco/ directory (contains existing MuJoCo XML scene files)
+_SIM_WORLDS = _LINGTU_ROOT / "sim" / "worlds" / "mujoco"
 
 # Inline minimal scene (empty world)
 _EMPTY_WORLD_XML = """\

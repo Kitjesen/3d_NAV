@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Compatibility wrapper for the legacy ROS simulation launch.
 
 This wrapper keeps `sim/launch/sim.launch.py` usable without reviving the old
@@ -19,7 +19,7 @@ LEGACY_PLANNER = (
     REPO_ROOT
     / "src"
     / "global_planning"
-    / "PCT_planner"
+    / "pct_planner"
     / "planner"
     / "scripts"
     / "legacy"

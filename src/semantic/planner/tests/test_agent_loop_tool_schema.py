@@ -1,4 +1,4 @@
-from semantic.planner.semantic_planner.agent_loop import AgentLoop
+from semantic.planner.agent_loop import AgentLoop
 
 
 class _DummyLLM:

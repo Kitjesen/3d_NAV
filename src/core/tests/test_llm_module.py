@@ -16,7 +16,7 @@ class TestLLMModulePreflight(unittest.TestCase):
     """Test LLMModule.preflight() for various backends."""
 
     def _make(self, **kw):
-        from semantic.planner.semantic_planner.llm_module import LLMModule
+        from semantic.planner.llm_module import LLMModule
         return LLMModule(**kw)
 
     def test_preflight_mock_backend_ok(self):
@@ -81,7 +81,7 @@ class TestLLMCircuitBreaker(unittest.TestCase):
     """Test circuit breaker state transitions and health reporting."""
 
     def _make(self, **kw):
-        from semantic.planner.semantic_planner.llm_module import LLMModule
+        from semantic.planner.llm_module import LLMModule
         return LLMModule(backend="mock", **kw)
 
     def test_initial_circuit_closed(self):
@@ -146,7 +146,7 @@ class TestLLMTransientErrorClassification(unittest.TestCase):
     """Test _is_transient_error() classification logic."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.llm_module import LLMModule
+        from semantic.planner.llm_module import LLMModule
         return LLMModule(backend="mock")
 
     def test_timeout_is_transient(self):
@@ -190,31 +190,31 @@ class TestLLMRequestResponse(unittest.TestCase):
     """Test LLMRequest / LLMResponse data classes."""
 
     def test_simple_request_user_only(self):
-        from semantic.planner.semantic_planner.llm_module import LLMRequest
+        from semantic.planner.llm_module import LLMRequest
         r = LLMRequest.simple("hello")
         self.assertEqual(len(r.messages), 1)
         self.assertEqual(r.messages[0]["role"], "user")
 
     def test_simple_request_with_system(self):
-        from semantic.planner.semantic_planner.llm_module import LLMRequest
+        from semantic.planner.llm_module import LLMRequest
         r = LLMRequest.simple("hello", system="be helpful")
         self.assertEqual(len(r.messages), 2)
         self.assertEqual(r.messages[0]["role"], "system")
         self.assertEqual(r.messages[1]["role"], "user")
 
     def test_simple_request_preserves_id(self):
-        from semantic.planner.semantic_planner.llm_module import LLMRequest
+        from semantic.planner.llm_module import LLMRequest
         r = LLMRequest.simple("q", request_id="abc-123", caller="test")
         self.assertEqual(r.request_id, "abc-123")
         self.assertEqual(r.caller, "test")
 
     def test_response_ok_when_no_error(self):
-        from semantic.planner.semantic_planner.llm_module import LLMResponse
+        from semantic.planner.llm_module import LLMResponse
         r = LLMResponse(text="answer", request_id="1")
         self.assertTrue(r.ok)
 
     def test_response_not_ok_with_error(self):
-        from semantic.planner.semantic_planner.llm_module import LLMResponse
+        from semantic.planner.llm_module import LLMResponse
         r = LLMResponse(text="", request_id="1", error="timeout")
         self.assertFalse(r.ok)
 
@@ -223,11 +223,11 @@ class TestActionExecutor(unittest.TestCase):
     """Test ActionExecutor command generation and state management."""
 
     def _make(self, **kw):
-        from semantic.planner.semantic_planner.action_executor import ActionExecutor
+        from semantic.planner.action_executor import ActionExecutor
         return ActionExecutor(**kw)
 
     def test_initial_status_idle(self):
-        from semantic.planner.semantic_planner.action_executor import ActionStatus
+        from semantic.planner.action_executor import ActionStatus
         ex = self._make()
         self.assertEqual(ex.status, ActionStatus.IDLE)
 
@@ -248,7 +248,7 @@ class TestActionExecutor(unittest.TestCase):
         self.assertAlmostEqual(cmd.target_yaw, expected_yaw, places=5)
 
     def test_navigate_sets_executing(self):
-        from semantic.planner.semantic_planner.action_executor import ActionStatus
+        from semantic.planner.action_executor import ActionStatus
         ex = self._make()
         ex.generate_navigate_command({"x": 1.0, "y": 1.0})
         self.assertEqual(ex.status, ActionStatus.EXECUTING)
@@ -300,21 +300,21 @@ class TestActionExecutor(unittest.TestCase):
         self.assertAlmostEqual(cmd.target_y, 3.0)
 
     def test_mark_succeeded(self):
-        from semantic.planner.semantic_planner.action_executor import ActionStatus
+        from semantic.planner.action_executor import ActionStatus
         ex = self._make()
         ex.generate_navigate_command({"x": 1.0, "y": 1.0})
         ex.mark_succeeded()
         self.assertEqual(ex.status, ActionStatus.SUCCEEDED)
 
     def test_mark_failed(self):
-        from semantic.planner.semantic_planner.action_executor import ActionStatus
+        from semantic.planner.action_executor import ActionStatus
         ex = self._make()
         ex.generate_navigate_command({"x": 1.0, "y": 1.0})
         ex.mark_failed()
         self.assertEqual(ex.status, ActionStatus.FAILED)
 
     def test_reset(self):
-        from semantic.planner.semantic_planner.action_executor import ActionStatus
+        from semantic.planner.action_executor import ActionStatus
         ex = self._make()
         ex.generate_navigate_command({"x": 1.0, "y": 1.0})
         ex.reset()
@@ -351,7 +351,7 @@ class TestTargetBeliefManager(unittest.TestCase):
     """Test BA-HSG TargetBeliefManager posterior and selection logic."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.goal_resolver import TargetBeliefManager
+        from semantic.planner.goal_resolver import TargetBeliefManager
         return TargetBeliefManager()
 
     def _candidates(self):
@@ -435,7 +435,7 @@ class TestGoalResult(unittest.TestCase):
     """Test GoalResult data class."""
 
     def test_default_values(self):
-        from semantic.planner.semantic_planner.goal_resolver import GoalResult
+        from semantic.planner.goal_resolver import GoalResult
         r = GoalResult(action="navigate")
         self.assertFalse(r.is_valid)
         self.assertEqual(r.confidence, 0.0)
@@ -443,7 +443,7 @@ class TestGoalResult(unittest.TestCase):
         self.assertEqual(r.path, "")
 
     def test_populated_result(self):
-        from semantic.planner.semantic_planner.goal_resolver import GoalResult
+        from semantic.planner.goal_resolver import GoalResult
         r = GoalResult(
             action="navigate", target_x=1.0, target_y=2.0,
             confidence=0.95, is_valid=True, path="fast",

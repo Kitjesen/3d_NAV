@@ -103,7 +103,7 @@ class VectorMemoryModule(Module, layer=3):
         # Encoder constructors do not load weights; load_model() is required
         # before encode_text() can produce embeddings.
         try:
-            from semantic.perception.semantic_perception.mobileclip_encoder import MobileCLIPEncoder
+            from semantic.perception.mobileclip_encoder import MobileCLIPEncoder
 
             candidate = MobileCLIPEncoder(device="auto")
             candidate.load_model()
@@ -125,7 +125,7 @@ class VectorMemoryModule(Module, layer=3):
         # A smoke-test encode call verifies the model weights are actually usable,
         # not just that the class imports.
         try:
-            from semantic.perception.semantic_perception.clip_encoder import CLIPEncoder
+            from semantic.perception.clip_encoder import CLIPEncoder
             candidate = CLIPEncoder(model_name="ViT-B/32", device="auto")
             candidate.load_model()
             test_result = candidate.encode_text(["test"])

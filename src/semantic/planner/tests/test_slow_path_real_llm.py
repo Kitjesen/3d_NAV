@@ -23,8 +23,8 @@ import unittest
 
 import pytest
 
-from semantic.planner.semantic_planner.goal_resolver import GoalResolver
-from semantic.planner.semantic_planner.llm_client import LLMConfig
+from semantic.planner.goal_resolver import GoalResolver
+from semantic.planner.llm_client import LLMConfig
 
 
 def make_scene_graph(objects, relations=None):

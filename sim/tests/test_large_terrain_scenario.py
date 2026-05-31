@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import pickle
@@ -329,7 +329,7 @@ def test_large_terrain_pct_runtime_evidence_preserves_host_diagnostics(monkeypat
                 },
             ],
             "recommended_build_command": (
-                "bash src/global_planning/PCT_planner_runnable/build_host_x86_64.sh"
+                "bash src/global_planning/pct_planner_runnable/build_host_x86_64.sh"
             ),
             "error": "No runnable PCT native modules",
         },

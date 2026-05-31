@@ -17,8 +17,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic.perception.semantic_perception.polyhedron_expansion import Polyhedron
-from semantic.perception.semantic_perception.scg_builder import EdgeType, SCGBuilder, SCGConfig
+from semantic.perception.polyhedron_expansion import Polyhedron
+from semantic.perception.scg_builder import EdgeType, SCGBuilder, SCGConfig
 
 
 def create_test_polyhedra() -> list:

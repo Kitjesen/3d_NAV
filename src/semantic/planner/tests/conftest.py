@@ -125,7 +125,7 @@ def mock_llm_no_result():
 @pytest.fixture
 def mock_llm_error():
     """Return an LLM client whose chat always raises an exception."""
-    from semantic.planner.semantic_planner.llm_client import LLMError
+    from semantic.planner.llm_client import LLMError
     llm = mock.MagicMock()
     llm.chat = mock.AsyncMock(side_effect=LLMError("Mock API error"))
     return llm
@@ -152,7 +152,7 @@ def make_goal_resolver(mock_llm):
     """Return a factory that builds a GoalResolver pre-configured with a mock LLM."""
     def _factory(**kwargs):
         try:
-            from semantic.planner.semantic_planner.goal_resolver import GoalResolver
+            from semantic.planner.goal_resolver import GoalResolver
             resolver = GoalResolver(**kwargs)
             resolver._primary = mock_llm
             return resolver

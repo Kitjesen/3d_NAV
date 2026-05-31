@@ -19,14 +19,14 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='repla
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "semantic_planner"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "semantic_perception"))
 
-from semantic.planner.semantic_planner.llm_client import LLMConfig, create_llm_client
-from semantic.planner.semantic_planner.goal_resolver import GoalResolver
-from semantic.planner.semantic_planner.prompt_templates import (
+from semantic.planner.llm_client import LLMConfig, create_llm_client
+from semantic.planner.goal_resolver import GoalResolver
+from semantic.planner.prompt_templates import (
     build_goal_resolution_prompt,
     build_exploration_prompt,
 )
-from semantic.planner.semantic_planner.semantic_prior import SemanticPriorEngine
-from semantic.perception.semantic_perception.topology_graph import TopologySemGraph
+from semantic.planner.semantic_prior import SemanticPriorEngine
+from semantic.perception.topology_graph import TopologySemGraph
 
 import numpy as np
 

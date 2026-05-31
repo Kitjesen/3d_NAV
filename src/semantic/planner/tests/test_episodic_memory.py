@@ -4,7 +4,7 @@ import time
 import numpy as np
 import pytest
 
-from semantic.planner.semantic_planner.episodic_memory import EpisodicMemory, MemoryRecord
+from semantic.planner.episodic_memory import EpisodicMemory, MemoryRecord
 
 
 class TestEpisodicMemoryBasic:

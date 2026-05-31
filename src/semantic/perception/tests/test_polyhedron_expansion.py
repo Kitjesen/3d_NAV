@@ -16,7 +16,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic.perception.semantic_perception.polyhedron_expansion import (
+from semantic.perception.polyhedron_expansion import (
     CollisionChecker,
     ConvexHullComputer,
     PolyhedronExpander,

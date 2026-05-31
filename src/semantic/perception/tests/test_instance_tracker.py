@@ -15,14 +15,14 @@ import unittest
 import numpy as np
 import pytest
 
-from semantic.perception.semantic_perception.instance_tracker import (
+from semantic.perception.instance_tracker import (
     RELATION_NEAR_THRESHOLD,
     InstanceTracker,
     RoomNode,
     TrackedObject,
     infer_room_type,
 )
-from semantic.perception.semantic_perception.projection import Detection3D
+from semantic.perception.projection import Detection3D
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  辅助工厂

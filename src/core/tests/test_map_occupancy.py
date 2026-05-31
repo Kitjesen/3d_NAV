@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from nav.services.nav_services.map_manager_module import MapManagerModule
+from nav.services.map_manager_module import MapManagerModule
 
 # ── PCD helpers ────────────────────────────────────────────────────────────
 

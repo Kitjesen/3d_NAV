@@ -37,7 +37,7 @@ import pytest
 @pytest.fixture
 def make_detection():
     """返回 Detection3D 工厂函数。"""
-    from semantic.perception.semantic_perception.projection import Detection3D
+    from semantic.perception.projection import Detection3D
 
     def _factory(
         label: str = "chair",
@@ -101,7 +101,7 @@ def make_room_dict():
 @pytest.fixture(scope="module")
 def kg():
     """共享的 IndustrialKnowledgeGraph 实例 (模块范围)。"""
-    from semantic.perception.semantic_perception.knowledge_graph import IndustrialKnowledgeGraph
+    from semantic.perception.knowledge_graph import IndustrialKnowledgeGraph
     return IndustrialKnowledgeGraph()
 
 
@@ -112,7 +112,7 @@ def kg():
 @pytest.fixture
 def tracker():
     """新鲜的 InstanceTracker 实例。"""
-    from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
+    from semantic.perception.instance_tracker import InstanceTracker
     return InstanceTracker(merge_distance=0.5, clip_threshold=0.75)
 
 

@@ -15,11 +15,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from core import Blueprint, In, Module, Out, autoconnect
 from core.registry import register
-from semantic.perception.semantic_perception.detector_module import (
+from semantic.perception.detector_module import (
     DetectionResult,
     DetectorModule,
 )
-from semantic.perception.semantic_perception.encoder_module import (
+from semantic.perception.encoder_module import (
     EncoderModule,
     FeatureResult,
 )
@@ -245,7 +245,7 @@ class TestPluggableSwap(unittest.TestCase):
 
 class TestDetectorBackendConfiguration(unittest.TestCase):
 
-    @patch("semantic.perception.semantic_perception.yoloe_detector.YOLOEDetector")
+    @patch("semantic.perception.yoloe_detector.YOLOEDetector")
     def test_yoloe_backend_receives_recall_parameters(self, yoloe_cls):
         mod = DetectorModule(
             detector="yoloe",
@@ -267,7 +267,7 @@ class TestDetectorBackendConfiguration(unittest.TestCase):
         )
         self.assertIs(backend, yoloe_cls.return_value)
 
-    @patch("semantic.perception.semantic_perception.yolo_world_detector.YOLOWorldDetector")
+    @patch("semantic.perception.yolo_world_detector.YOLOWorldDetector")
     def test_yolo_world_backend_receives_iou_parameters(self, yolo_world_cls):
         mod = DetectorModule(
             detector="yolo_world",
@@ -287,7 +287,7 @@ class TestDetectorBackendConfiguration(unittest.TestCase):
         )
         self.assertIs(backend, yolo_world_cls.return_value)
 
-    @patch("semantic.perception.semantic_perception.bpu_detector.BPUDetector")
+    @patch("semantic.perception.bpu_detector.BPUDetector")
     def test_bpu_backend_receives_recall_parameters(self, bpu_cls):
         mod = DetectorModule(
             detector="bpu",
@@ -309,7 +309,7 @@ class TestDetectorBackendConfiguration(unittest.TestCase):
         )
         self.assertIs(backend, bpu_cls.return_value)
 
-    @patch("semantic.perception.semantic_perception.grounding_dino_detector.GroundingDINODetector")
+    @patch("semantic.perception.grounding_dino_detector.GroundingDINODetector")
     def test_grounding_dino_backend_receives_confidence_as_box_threshold(self, dino_cls):
         mod = DetectorModule(
             detector="grounding_dino",

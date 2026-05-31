@@ -162,7 +162,7 @@ def test_33_no_api_key_startup():
 # =========================================================================
 def test_34_no_clip_startup():
     from core.blueprints.full_stack import full_stack_blueprint
-    from semantic.perception.semantic_perception.encoder_module import EncoderModule
+    from semantic.perception.encoder_module import EncoderModule
     from unittest.mock import patch
 
     # Build dev profile — on Windows, open_clip is typically not installed.
@@ -208,7 +208,7 @@ def test_34_no_clip_startup():
 # =========================================================================
 def test_35_empty_scene_graph():
     from core.msgs.semantic import SceneGraph
-    from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
+    from semantic.planner.semantic_planner_module import SemanticPlannerModule
 
     mod = SemanticPlannerModule()
     mod.setup()

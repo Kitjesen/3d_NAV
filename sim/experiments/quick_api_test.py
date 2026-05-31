@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src" / "semantic_planner"))
 
-from semantic.planner.semantic_planner.llm_client import LLMConfig, create_llm_client
+from semantic.planner.llm_client import LLMConfig, create_llm_client
 
 
 async def main():

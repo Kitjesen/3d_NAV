@@ -155,26 +155,26 @@ class TestSemanticScoringWeightsConfig:
         import importlib
 
         # fast_path
-        if "semantic.planner.semantic_planner.fast_path" in sys.modules:
-            mod = sys.modules["semantic.planner.semantic_planner.fast_path"]
+        if "semantic.planner.fast_path" in sys.modules:
+            mod = sys.modules["semantic.planner.fast_path"]
             mod._fast_path_weights_loaded = False
 
         # sgnav_reasoner
-        if "semantic.planner.semantic_planner.sgnav_reasoner" in sys.modules:
-            mod = sys.modules["semantic.planner.semantic_planner.sgnav_reasoner"]
+        if "semantic.planner.sgnav_reasoner" in sys.modules:
+            mod = sys.modules["semantic.planner.sgnav_reasoner"]
             mod._sgnav_weights_loaded = False
             mod._SGNAV_WEIGHTS = dict(mod._DEFAULTS_SGNAV)
 
         # frontier_scorer
-        if "semantic.planner.semantic_planner.frontier_scorer" in sys.modules:
-            mod = sys.modules["semantic.planner.semantic_planner.frontier_scorer"]
+        if "semantic.planner.frontier_scorer" in sys.modules:
+            mod = sys.modules["semantic.planner.frontier_scorer"]
             mod._frontier_weights_loaded = False
             mod._frontier_config_weight = mod._DEFAULT_SEMANTIC_PRIOR_WEIGHT
 
     def test_fast_path_loads_weights_from_yaml(self) -> None:
         """fast_path module reads label/clip/detector/spatial from the YAML file."""
         self._reset_module_globals()
-        from semantic.planner.semantic_planner import fast_path as fp
+        from semantic.planner import fast_path as fp
 
         fp._fast_path_weights_loaded = False
         fake_yaml = {
@@ -195,7 +195,7 @@ class TestSemanticScoringWeightsConfig:
 
     def test_fast_path_uses_defaults_when_section_absent(self, caplog) -> None:
         """fast_path logs INFO and retains defaults when section is missing."""
-        from semantic.planner.semantic_planner import fast_path as fp
+        from semantic.planner import fast_path as fp
 
         # Fully reset module globals to defaults before testing the absent-section path
         fp._fast_path_weights_loaded = False
@@ -214,7 +214,7 @@ class TestSemanticScoringWeightsConfig:
     def test_sgnav_loads_weights_from_yaml(self) -> None:
         """sgnav_reasoner reads keyword/relation/distance/richness from YAML."""
         self._reset_module_globals()
-        from semantic.planner.semantic_planner import sgnav_reasoner as sr
+        from semantic.planner import sgnav_reasoner as sr
 
         sr._sgnav_weights_loaded = False
         sr._SGNAV_WEIGHTS = dict(sr._DEFAULTS_SGNAV)
@@ -235,7 +235,7 @@ class TestSemanticScoringWeightsConfig:
     def test_frontier_scorer_loads_weight_from_yaml(self) -> None:
         """FrontierScorer picks up semantic_prior_weight from YAML."""
         self._reset_module_globals()
-        from semantic.planner.semantic_planner import frontier_scorer as fs
+        from semantic.planner import frontier_scorer as fs
 
         fs._frontier_weights_loaded = False
         fs._frontier_config_weight = fs._DEFAULT_SEMANTIC_PRIOR_WEIGHT
@@ -248,7 +248,7 @@ class TestSemanticScoringWeightsConfig:
     def test_sgnav_audit_log_emitted_at_debug(self, caplog) -> None:
         """_score_subgraphs_heuristic emits a DEBUG audit entry per candidate."""
         self._reset_module_globals()
-        from semantic.planner.semantic_planner.sgnav_reasoner import (
+        from semantic.planner.sgnav_reasoner import (
             SGNavReasoner,
             SubgraphCandidate,
         )

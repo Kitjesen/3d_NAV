@@ -12,9 +12,9 @@ import asyncio
 import numpy as np
 import pytest
 
-from semantic.planner.semantic_planner.person_tracker import PersonTracker
-from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
-from semantic.planner.semantic_planner.visual_servo_module import VisualServoModule
+from semantic.planner.person_tracker import PersonTracker
+from semantic.planner.semantic_planner_module import SemanticPlannerModule
+from semantic.planner.visual_servo_module import VisualServoModule
 from core.msgs.geometry import Vector3
 from core.msgs.semantic import Detection3D, SceneGraph
 
@@ -50,7 +50,7 @@ class _TextOnlyClip:
 # ── CLIPEncoder.encode_image (interface-gap fix) ──────────────────────────────
 
 def test_clip_encoder_has_encode_image():
-    from semantic.perception.semantic_perception.clip_encoder import CLIPEncoder
+    from semantic.perception.clip_encoder import CLIPEncoder
 
     enc = CLIPEncoder()  # model not loaded
     assert hasattr(enc, "encode_image")

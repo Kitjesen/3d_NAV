@@ -1,4 +1,4 @@
-# Build Guide
+﻿# Build Guide
 
 What to install on a fresh machine before LingTu can compile and start.
 
@@ -6,9 +6,9 @@ What to install on a fresh machine before LingTu can compile and start.
 
 - Ubuntu 22.04 (aarch64 on the S100P; x86_64 supported for `dev` / `sim` /
   CI)
-- ROS 2 Humble Desktop (only required for the C++ stack — Python tests
+- ROS 2 Humble Desktop (only required for the C++ stack 鈥?Python tests
   do not need it)
-- ≥ 8 GB RAM, ≥ 4 CPU cores
+- 鈮?8 GB RAM, 鈮?4 CPU cores
 
 `$NAV_DIR` below stands for the workspace root. On the S100P it is
 typically `/home/sunrise/data/inovxio/lingtu` (kept reachable as
@@ -56,10 +56,10 @@ make -j$(nproc) && sudo make install
 
 ### 2. GTSAM 4.1.1 (PCT global planner, required)
 
-GTSAM is vendored under `src/global_planning/PCT_planner/planner/lib/3rdparty/`.
+GTSAM is vendored under `src/global_planning/pct_planner/planner/lib/3rdparty/`.
 
 ```bash
-cd $NAV_DIR/src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1
+cd $NAV_DIR/src/global_planning/pct_planner/planner/lib/3rdparty/gtsam-4.1.1
 mkdir build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=../install \
     -DGTSAM_BUILD_TESTS=OFF \
@@ -71,7 +71,7 @@ make -j$(nproc) && make install
 Add the install prefix to `LD_LIBRARY_PATH`:
 
 ```bash
-echo "export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$NAV_DIR/src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/install/lib" >> ~/.bashrc
+echo "export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$NAV_DIR/src/global_planning/pct_planner/planner/lib/3rdparty/gtsam-4.1.1/install/lib" >> ~/.bashrc
 source ~/.bashrc
 ```
 
@@ -157,7 +157,7 @@ colcon build --packages-select fastlio2 hba pgo
 ## Tests
 
 ```bash
-# Framework tests — Python only, no ROS2, no hardware
+# Framework tests 鈥?Python only, no ROS2, no hardware
 python -m pytest src/core/tests/ -q
 
 # Colcon tests
@@ -192,13 +192,13 @@ python lingtu.py stub
 
 | Symptom | Fix |
 |---------|-----|
-| `GTSAM not found` | `ls $NAV_DIR/src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/install/lib/libgtsam.so.4` and re-run the install step |
+| `GTSAM not found` | `ls $NAV_DIR/src/global_planning/pct_planner/planner/lib/3rdparty/gtsam-4.1.1/install/lib/libgtsam.so.4` and re-run the install step |
 | `libgtsam.so.4: cannot open shared object file` | `LD_LIBRARY_PATH` is missing the GTSAM install prefix; re-source `~/.bashrc` |
 | `ModuleNotFoundError: planner_py` | `colcon build --packages-select pct_planner` then `source install/setup.bash` |
 | `Livox SDK2 not found` | `ls /usr/local/lib/liblivox_lidar_sdk_shared.so`, rerun the SDK install |
 | Sophus complains about `fmt` | re-run `cmake .. -DSOPHUS_USE_BASIC_LOGGING=ON` and rebuild |
 | `tare_planner_node` missing on `tare_explore` start | Run `scripts/build/fetch_ortools.sh` and `scripts/build/build_tare.sh` |
-| `ele_planner.so` import fails on x86 | Expected — the binary is aarch64-only. Use `--planner astar` on dev machines. |
+| `ele_planner.so` import fails on x86 | Expected 鈥?the binary is aarch64-only. Use `--planner astar` on dev machines. |
 
 ## Approximate build times
 
@@ -216,7 +216,7 @@ python lingtu.py stub
 
 - `navigation_run.launch.py`, `navigation_bringup.launch.py`,
   `launch/subsystems/`, `scripts/legacy/`, `scripts/services/`, and any
-  systemd service installer that referred to those paths — they were
+  systemd service installer that referred to those paths 鈥?they were
   deleted and are no longer relevant.
 - A separate "deploy" path. Today the workflow is
   `make build && lingtu <profile>` (optionally `--daemon`). On the S100P

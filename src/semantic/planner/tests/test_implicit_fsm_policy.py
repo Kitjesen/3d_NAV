@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from semantic.planner.semantic_planner.implicit_fsm_policy import (
+from semantic.planner.implicit_fsm_policy import (
     ImplicitFSMObservation,
     ImplicitFSMPolicy,
 )

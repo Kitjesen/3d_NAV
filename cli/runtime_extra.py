@@ -1,4 +1,4 @@
-"""Pre-flight checks, port cleanup, health, daemon."""
+﻿"""Pre-flight checks, port cleanup, health, daemon."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from .profiles_data import _default_map_dir
 # Built-in sample tomogram (relative to project root, ships in repo)
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SAMPLE_TOMOGRAM = os.path.join(
-    _REPO_ROOT, "src", "global_planning", "PCT_planner",
+    _REPO_ROOT, "src", "global_planning", "pct_planner",
     "rsc", "tomogram", "building2_9.pickle",
 )
 
@@ -46,7 +46,7 @@ def _select_map_interactive(cfg: dict, map_dir: str) -> None:
     if not sys.stdin.isatty():
         return
 
-    # Current tomogram already valid → nothing to do
+    # Current tomogram already valid 鈫?nothing to do
     current = cfg.get("tomogram", "")
     if current and os.path.isfile(current):
         return
@@ -78,14 +78,14 @@ def _select_map_interactive(cfg: dict, map_dir: str) -> None:
         print()
 
     # Built-in sample option
-    sample_label = "Use built-in sample map (building2_9) — PCT test only, not your environment"
+    sample_label = "Use built-in sample map (building2_9) 鈥?PCT test only, not your environment"
     print(f"  {T.bold('Other options:')}")
     idx_sample = len(options) + 1
     print(f"    [{idx_sample}] {sample_label}")
     options.append(("sample", "building2_9", _SAMPLE_TOMOGRAM))
 
     idx_build = len(options) + 1
-    print(f"    [{idx_build}] Switch to 'map' profile — build a new map first")
+    print(f"    [{idx_build}] Switch to 'map' profile 鈥?build a new map first")
     options.append(("build", "", ""))
 
     idx_skip = len(options) + 1
@@ -122,14 +122,14 @@ def _select_map_interactive(cfg: dict, map_dir: str) -> None:
 
     elif action == "sample":
         cfg["tomogram"] = _SAMPLE_TOMOGRAM
-        print(f"  {T.yellow('Using sample map')} — results reflect demo environment, not yours.")
+        print(f"  {T.yellow('Using sample map')} 鈥?results reflect demo environment, not yours.")
         print("  Run 'lingtu map' on your robot to build a real map.")
 
     elif action == "build":
         print()
         print(f"  Run:  {T.green('python lingtu.py map')}")
         print("  Then: drive the robot around to build the map.")
-        print("  Then: map save <name>  →  map use <name>")
+        print("  Then: map save <name>  鈫? map use <name>")
         print()
         sys.exit(0)
 
@@ -170,14 +170,14 @@ def preflight(profile_name: str, cfg: dict) -> None:
     ) and os.name != "nt":
         import shutil
         if not shutil.which("ros2"):
-            print(f"  {T.yellow('!')} ros2 not in PATH — SLAM won't start")
+            print(f"  {T.yellow('!')} ros2 not in PATH 鈥?SLAM won't start")
             print(f"    Fix: {T.bold('source /opt/ros/humble/setup.bash')}")
             _bashrc_cmd = 'echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc'
             print(f"    Permanent: {T.dim(_bashrc_cmd)}")
 
     # Warn if _nav_core C++ extension is missing (affects terrain/local_planner/path_follower)
     if not _nav_core_available() and cfg.get("enable_native", False):
-        print(f"  {T.yellow('!')} C++ nav_core not compiled — terrain/local_planner will use Python fallbacks")
+        print(f"  {T.yellow('!')} C++ nav_core not compiled 鈥?terrain/local_planner will use Python fallbacks")
         print(f"    Fix: {T.bold('make build')}  (needs ROS2 + colcon on S100P)")
 
     # Check if gateway port will be reachable from LAN (firewall check)

@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 from core.registry import register, restore, snapshot
-from semantic.perception.semantic_perception.api.exceptions import ConfigurationError
-from semantic.perception.semantic_perception.api.factory import PerceptionFactory
+from semantic.perception.api.exceptions import ConfigurationError
+from semantic.perception.api.factory import PerceptionFactory
 
 
 def test_perception_factory_available_lists_come_from_registry():
@@ -14,7 +14,7 @@ def test_perception_factory_available_lists_come_from_registry():
 
 
 def test_perception_module_backend_status_uses_configured_names_before_setup():
-    from semantic.perception.semantic_perception.perception_module import PerceptionModule
+    from semantic.perception.perception_module import PerceptionModule
 
     module = PerceptionModule(detector_type="bpu", encoder_type="mobileclip")
     health = module.health()

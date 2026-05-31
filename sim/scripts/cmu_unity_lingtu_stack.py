@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Run LingTu against an external CMU Unity/TARE ROS graph.
 
 This is a simulation-only entry point. It does not start hardware drivers,
@@ -22,7 +22,7 @@ DEFAULT_TOMOGRAM = (
     ROOT
     / "src"
     / "global_planning"
-    / "PCT_planner"
+    / "pct_planner"
     / "rsc"
     / "tomogram"
     / "building2_9.pickle"

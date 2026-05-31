@@ -1,4 +1,4 @@
-"""Planner backends: A* (dev/sim fallback) and native PCT.
+﻿"""Planner backends: A* (dev/sim fallback) and native PCT.
 
 FROZEN: this module is stable and should not need changes.
 New planner backends (e.g. RRT*) should be registered in separate files
@@ -28,7 +28,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 from core.registry import register
-from global_planning.PCT_planner_runnable.runtime import load_tomogram_planner
+from global_planning.pct_planner_runnable.runtime import load_tomogram_planner
 
 logger = logging.getLogger(__name__)
 

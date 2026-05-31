@@ -62,9 +62,9 @@ class TestOSNetReIDEncoder(unittest.TestCase):
         with patch.dict(sys.modules, base):
             # Remove any cached import so patch takes effect
             sys.modules.pop(
-                "semantic.planner.semantic_planner.osnet_reid", None
+                "semantic.planner.osnet_reid", None
             )
-            from semantic.planner.semantic_planner.osnet_reid import OSNetReIDEncoder
+            from semantic.planner.osnet_reid import OSNetReIDEncoder
         return OSNetReIDEncoder
 
     def test_osnet_raises_when_no_backend(self):
@@ -94,9 +94,9 @@ class TestOSNetReIDEncoder(unittest.TestCase):
         stubs["PIL"] = pil_stub
         stubs["PIL.Image"] = pil_image_stub
 
-        sys.modules.pop("semantic.planner.semantic_planner.osnet_reid", None)
+        sys.modules.pop("semantic.planner.osnet_reid", None)
         with patch.dict(sys.modules, stubs):
-            from semantic.planner.semantic_planner.osnet_reid import OSNetReIDEncoder
+            from semantic.planner.osnet_reid import OSNetReIDEncoder
 
             # Create a temp file to simulate the .hbm existing
             with tempfile.NamedTemporaryFile(suffix=".hbm", delete=False) as tmp:
@@ -128,9 +128,9 @@ class TestPersonTrackerReID(unittest.TestCase):
             "qp_perception.tracking", "qp_perception.tracking.fusion",
             "qp_perception.selection", "qp_perception.selection.person_following",
         )
-        sys.modules.pop("semantic.planner.semantic_planner.person_tracker", None)
+        sys.modules.pop("semantic.planner.person_tracker", None)
         with patch.dict(sys.modules, stubs):
-            from semantic.planner.semantic_planner.person_tracker import PersonTracker
+            from semantic.planner.person_tracker import PersonTracker
         return PersonTracker()
 
     def test_person_tracker_adaptive_threshold_sparse(self):
@@ -164,7 +164,7 @@ class TestPersonTrackerReID(unittest.TestCase):
         tracker._osnet_encoder = mock_osnet
 
         # Set up a locked target with matching osnet_feat
-        from semantic.planner.semantic_planner.person_tracker import TrackedPerson
+        from semantic.planner.person_tracker import TrackedPerson
         tracker._person = TrackedPerson(
             position=[1.0, 1.0, 0.0],
             velocity=[0.0, 0.0],
@@ -197,7 +197,7 @@ class TestPersonTrackerReID(unittest.TestCase):
         """Motion prediction advances position by velocity * dt."""
         tracker = self._make_tracker()
 
-        from semantic.planner.semantic_planner.person_tracker import TrackedPerson
+        from semantic.planner.person_tracker import TrackedPerson
         tracker._person = TrackedPerson(
             position=[2.0, 3.0, 0.0],
             velocity=[1.0, -0.5],
@@ -233,8 +233,8 @@ class TestGainAutoTuner(unittest.TestCase):
         config_mock.camera.T_body_camera = np.eye(4)
         with patch.dict(sys.modules, stubs):
             with patch("core.config.get_config", return_value=config_mock):
-                sys.modules.pop("semantic.planner.semantic_planner.bbox_navigator", None)
-                from semantic.planner.semantic_planner.bbox_navigator import GainAutoTuner
+                sys.modules.pop("semantic.planner.bbox_navigator", None)
+                from semantic.planner.bbox_navigator import GainAutoTuner
         return GainAutoTuner(relay_amplitude=0.3)
 
     def test_zn_math_on_known_values(self):
@@ -290,8 +290,8 @@ class TestBBoxNavigatorGainPersistence(unittest.TestCase):
         config_mock.camera.T_body_camera = np.eye(4)
         with patch.dict(sys.modules, stubs):
             with patch("core.config.get_config", return_value=config_mock):
-                sys.modules.pop("semantic.planner.semantic_planner.bbox_navigator", None)
-                from semantic.planner.semantic_planner.bbox_navigator import (
+                sys.modules.pop("semantic.planner.bbox_navigator", None)
+                from semantic.planner.bbox_navigator import (
                     BBoxNavConfig,
                     BBoxNavigator,
                 )
@@ -313,8 +313,8 @@ class TestBBoxNavigatorGainPersistence(unittest.TestCase):
 
             with patch.dict(sys.modules, stubs):
                 with patch("core.config.get_config", return_value=config_mock):
-                    sys.modules.pop("semantic.planner.semantic_planner.bbox_navigator", None)
-                    from semantic.planner.semantic_planner.bbox_navigator import (
+                    sys.modules.pop("semantic.planner.bbox_navigator", None)
+                    from semantic.planner.bbox_navigator import (
                         BBoxNavConfig,
                         BBoxNavigator,
                     )
@@ -362,8 +362,8 @@ class TestBBoxNavigatorGainPersistence(unittest.TestCase):
 
             with patch.dict(sys.modules, stubs):
                 with patch("core.config.get_config", return_value=config_mock):
-                    sys.modules.pop("semantic.planner.semantic_planner.bbox_navigator", None)
-                    from semantic.planner.semantic_planner.bbox_navigator import (
+                    sys.modules.pop("semantic.planner.bbox_navigator", None)
+                    from semantic.planner.bbox_navigator import (
                         BBoxNavConfig,
                         BBoxNavigator,
                     )
@@ -398,7 +398,7 @@ class TestTuneBboxGainsSkillWired(unittest.TestCase):
                 for mod_name in list(sys.modules.keys()):
                     if "visual_servo_module" in mod_name or "bbox_navigator" in mod_name:
                         sys.modules.pop(mod_name, None)
-                from semantic.planner.semantic_planner.visual_servo_module import (
+                from semantic.planner.visual_servo_module import (
                     VisualServoModule,
                 )
 

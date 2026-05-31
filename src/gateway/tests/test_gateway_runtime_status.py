@@ -102,7 +102,7 @@ def test_diagnostics_plugin_catalog_exposes_registered_backends():
     from base_autonomy.modules.local_planner_module import LocalPlannerModule  # noqa: F401
     from base_autonomy.modules.path_follower_module import PathFollowerModule  # noqa: F401
     from gateway.routes.diagnostics import build_plugin_catalog, clear_diagnostics_cache
-    from semantic.planner.semantic_planner.llm_client import MockLLMClient  # noqa: F401
+    from semantic.planner.llm_client import MockLLMClient  # noqa: F401
     # ^ Cross-layer: gateway test imports from semantic/ for registry setup.
     #   Acceptable: test needs to register a semantic backend in the global
     #   registry so build_plugin_catalog() can detect it.  No production

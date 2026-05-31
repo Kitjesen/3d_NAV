@@ -1,4 +1,4 @@
-"""SLAM — build maps, localize, get odometry."""
+﻿"""SLAM 鈥?build maps, localize, get odometry."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def _default_map_dir() -> str:
-    """Resolve map dir: $NAV_MAP_DIR → existing ~/data/nova/maps → ~/data/lingtu/maps."""
+    """Resolve map dir: $NAV_MAP_DIR 鈫?existing ~/data/nova/maps 鈫?~/data/lingtu/maps."""
     env = os.environ.get("NAV_MAP_DIR")
     if env:
         return env
@@ -24,7 +24,7 @@ def _default_map_dir() -> str:
 
 
 class SLAM:
-    """SLAM / Localization — wraps SLAMModule + SlamBridgeModule.
+    """SLAM / Localization 鈥?wraps SLAMModule + SlamBridgeModule.
 
     Usage::
 
@@ -123,7 +123,7 @@ class SLAM:
             import sys
             sys.path.insert(0, os.path.join(
                 os.path.dirname(__file__), "..", "global_planning",
-                "PCT_planner", "tomography", "scripts"))
+                "pct_planner", "tomography", "scripts"))
             from build_tomogram import build_tomogram_from_pcd
             map_dir = os.path.join(_default_map_dir(), name)
             build_tomogram_from_pcd(

@@ -44,12 +44,12 @@ BUILTIN_PLUGIN_MODULES: Mapping[str, tuple[str, ...]] = {
         "nav.elevation_map_module",
         "nav.traversability_cost_module",
         "nav.ros2_grid_bridge_module",
-        "nav.services.nav_services.map_manager_module",
+        "nav.services.map_manager_module",
     ),
     "safety": (
         "nav.safety_ring_module",
         "nav.cmd_vel_mux_module",
-        "nav.services.nav_services.geofence_manager_module",
+        "nav.services.geofence_manager_module",
     ),
     "planner_backend": (
         "global_planning.pct_adapters.src.global_planner_module",
@@ -83,10 +83,10 @@ BUILTIN_PLUGIN_MODULES: Mapping[str, tuple[str, ...]] = {
         "exploration.exploration_supervisor_module",
     ),
     "perception": (
-        "semantic.perception.semantic_perception.perception_module",
-        "semantic.perception.semantic_perception.detector_module",
-        "semantic.perception.semantic_perception.encoder_module",
-        "semantic.perception.semantic_perception.api.factory",
+        "semantic.perception.perception_module",
+        "semantic.perception.detector_module",
+        "semantic.perception.encoder_module",
+        "semantic.perception.api.factory",
     ),
     "reconstruction": (
         "semantic.reconstruction.reconstruction_module",
@@ -94,12 +94,12 @@ BUILTIN_PLUGIN_MODULES: Mapping[str, tuple[str, ...]] = {
         "semantic.reconstruction.keyframe_exporter_module",
     ),
     "semantic": (
-        "semantic.planner.semantic_planner.semantic_planner_module",
-        "semantic.planner.semantic_planner.visual_servo_module",
+        "semantic.planner.semantic_planner_module",
+        "semantic.planner.visual_servo_module",
     ),
     "llm": (
-        "semantic.planner.semantic_planner.llm_client",
-        "semantic.planner.semantic_planner.llm_module",
+        "semantic.planner.llm_client",
+        "semantic.planner.llm_module",
     ),
     "memory": (
         "memory.modules.semantic_mapper_module",

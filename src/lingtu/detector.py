@@ -33,7 +33,7 @@ class Detector:
         if self._started:
             return self
         try:
-            from semantic.perception.semantic_perception.detector_module import DetectorModule
+            from semantic.perception.detector_module import DetectorModule
             self._module = DetectorModule(detector=self._backend)
             self._module.setup()
             self._module.start()

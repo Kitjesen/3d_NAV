@@ -1,13 +1,10 @@
-#!/bin/bash
+﻿#!/bin/bash
 # ============================================================
-# lingtu.sh — MapPilot 统一启动入口
+# lingtu.sh 鈥?MapPilot 缁熶竴鍚姩鍏ュ彛
 #
-# 用法:
-#   ./lingtu.sh map     建图模式（手柄遥控 + SLAM 建图）
-#   ./lingtu.sh save    保存地图（自动生成 .pcd + .pickle）
-#   ./lingtu.sh nav     导航模式（自动加载最新地图）
-#   ./lingtu.sh status  检查系统状态（话题、地图、TF）
-# ============================================================
+# 鐢ㄦ硶:
+#   ./lingtu.sh map     寤哄浘妯″紡锛堟墜鏌勯仴鎺?+ SLAM 寤哄浘锛?#   ./lingtu.sh save    淇濆瓨鍦板浘锛堣嚜鍔ㄧ敓鎴?.pcd + .pickle锛?#   ./lingtu.sh nav     瀵艰埅妯″紡锛堣嚜鍔ㄥ姞杞芥渶鏂板湴鍥撅級
+#   ./lingtu.sh status  妫€鏌ョ郴缁熺姸鎬侊紙璇濋銆佸湴鍥俱€乀F锛?# ============================================================
 
 set -e
 
@@ -22,8 +19,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LINGTU_PYTHON="${LINGTU_PYTHON:-python3}"
 LINGTU_CLI="$WORKSPACE_DIR/lingtu.py"
-TOMOGRAM_DIR="$WORKSPACE_DIR/src/global_planning/PCT_planner/rsc/tomogram"
-PCD_DIR="$WORKSPACE_DIR/src/global_planning/PCT_planner/rsc/pcd"
+TOMOGRAM_DIR="$WORKSPACE_DIR/src/global_planning/pct_planner/rsc/tomogram"
+PCD_DIR="$WORKSPACE_DIR/src/global_planning/pct_planner/rsc/pcd"
 MAP_DIR="$WORKSPACE_DIR/maps"
 
 _run_lingtu() {
@@ -31,11 +28,11 @@ _run_lingtu() {
     exec "$LINGTU_PYTHON" "$LINGTU_CLI" "$@"
 }
 
-# ── 通用初始化 ───────────────────────────────────────────────
+# 鈹€鈹€ 閫氱敤鍒濆鍖?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 _init() {
     cd "$WORKSPACE_DIR"
     if [ ! -f "install/setup.bash" ]; then
-        echo -e "${RED}错误: 未找到 install/setup.bash，请先 make build${NC}"
+        echo -e "${RED}閿欒: 鏈壘鍒?install/setup.bash锛岃鍏?make build${NC}"
         exit 1
     fi
     source install/setup.bash
@@ -43,7 +40,7 @@ _init() {
     export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 }
 
-# ── 自动检测最新地图 ──────────────────────────────────────────
+# 鈹€鈹€ 鑷姩妫€娴嬫渶鏂板湴鍥?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 _find_latest_map() {
     local LATEST_PICKLE
     LATEST_PICKLE=$(ls -t "$TOMOGRAM_DIR"/*.pickle 2>/dev/null | head -1)
@@ -60,32 +57,31 @@ _find_latest_map() {
     echo ""
 }
 
-# ── 子命令: map ───────────────────────────────────────────────
+# 鈹€鈹€ 瀛愬懡浠? map 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 cmd_map() {
-    echo -e "${BOLD}${BLUE}▶ 建图模式${NC}"
-    echo -e "  委托当前 Module-first CLI: ${GREEN}python lingtu.py map${NC}"
+    echo -e "${BOLD}${BLUE}鈻?寤哄浘妯″紡${NC}"
+    echo -e "  濮旀墭褰撳墠 Module-first CLI: ${GREEN}python lingtu.py map${NC}"
     echo ""
     _run_lingtu map
 }
 
-# ── 子命令: save ──────────────────────────────────────────────
+# 鈹€鈹€ 瀛愬懡浠? save 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 cmd_save() {
-    echo -e "${BOLD}${BLUE}▶ 保存地图${NC}"
+    echo -e "${BOLD}${BLUE}鈻?淇濆瓨鍦板浘${NC}"
     _init
     mkdir -p "$MAP_DIR" "$PCD_DIR" "$TOMOGRAM_DIR"
 
     local TIMESTAMP MAP_NAME
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
     MAP_NAME="map_${TIMESTAMP}"
-    echo -e "  地图名称: ${GREEN}${MAP_NAME}${NC}"
+    echo -e "  鍦板浘鍚嶇О: ${GREEN}${MAP_NAME}${NC}"
     echo ""
 
-    # Step 1: 保存 PCD
-    echo -e "${GREEN}[1/3] 调用 SLAM 保存服务...${NC}"
-    # 服务查找顺序：
-    #   /nav/save_map       — slam_fastlio2.launch.py remap 后的标准接口（首选）
-    #   /pgo/save_maps      — PGO 节点直接暴露（有回环优化时更准）
-    #   /fastlio2/save_map  — namespace 下的 Fast-LIO2 原始服务
+    # Step 1: 淇濆瓨 PCD
+    echo -e "${GREEN}[1/3] 璋冪敤 SLAM 淇濆瓨鏈嶅姟...${NC}"
+    # 鏈嶅姟鏌ユ壘椤哄簭锛?    #   /nav/save_map       鈥?slam_fastlio2.launch.py remap 鍚庣殑鏍囧噯鎺ュ彛锛堥閫夛級
+    #   /pgo/save_maps      鈥?PGO 鑺傜偣鐩存帴鏆撮湶锛堟湁鍥炵幆浼樺寲鏃舵洿鍑嗭級
+    #   /fastlio2/save_map  鈥?namespace 涓嬬殑 Fast-LIO2 鍘熷鏈嶅姟
     local SVC
     if ros2 service list 2>/dev/null | grep -q "^/nav/save_map$"; then
         SVC="/nav/save_map"
@@ -94,60 +90,60 @@ cmd_save() {
     elif ros2 service list 2>/dev/null | grep -q "^/fastlio2/save_map$"; then
         SVC="/fastlio2/save_map"
     else
-        echo -e "${RED}错误: 未找到地图保存服务${NC}"
-        echo -e "${YELLOW}已查找: /nav/save_map, /pgo/save_maps, /fastlio2/save_map${NC}"
-        echo -e "${YELLOW}请确认 ./lingtu.sh map 的节点仍在运行${NC}"
+        echo -e "${RED}閿欒: 鏈壘鍒板湴鍥句繚瀛樻湇鍔?{NC}"
+        echo -e "${YELLOW}宸叉煡鎵? /nav/save_map, /pgo/save_maps, /fastlio2/save_map${NC}"
+        echo -e "${YELLOW}璇风‘璁?./lingtu.sh map 鐨勮妭鐐逛粛鍦ㄨ繍琛?{NC}"
         exit 1
     fi
     ros2 service call "$SVC" interface/srv/SaveMaps \
         "{file_path: '$MAP_DIR/$MAP_NAME', save_patches: false}"
-    echo -e "${GREEN}✓ PCD 已保存: $MAP_DIR/${MAP_NAME}.pcd${NC}"
+    echo -e "${GREEN}鉁?PCD 宸蹭繚瀛? $MAP_DIR/${MAP_NAME}.pcd${NC}"
 
-    # Step 2: 复制到 PCT 工作目录
-    echo -e "${GREEN}[2/3] 复制到规划器工作目录...${NC}"
+    # Step 2: 澶嶅埗鍒?PCT 宸ヤ綔鐩綍
+    echo -e "${GREEN}[2/3] 澶嶅埗鍒拌鍒掑櫒宸ヤ綔鐩綍...${NC}"
     if [ ! -f "$MAP_DIR/${MAP_NAME}.pcd" ]; then
-        echo -e "${RED}错误: PCD 文件未生成，请检查 SLAM 服务输出${NC}"
+        echo -e "${RED}閿欒: PCD 鏂囦欢鏈敓鎴愶紝璇锋鏌?SLAM 鏈嶅姟杈撳嚭${NC}"
         exit 1
     fi
     cp "$MAP_DIR/${MAP_NAME}.pcd" "$PCD_DIR/${MAP_NAME}.pcd"
     ln -sf "$PCD_DIR/${MAP_NAME}.pcd" "$PCD_DIR/latest.pcd"
-    echo -e "${GREEN}✓ 已复制到 $PCD_DIR/${NC}"
+    echo -e "${GREEN}鉁?宸插鍒跺埌 $PCD_DIR/${NC}"
 
-    # Step 3: 生成 Tomogram
-    echo -e "${GREEN}[3/3] 生成 PCT Tomogram（2~5 分钟）...${NC}"
-    cd "$WORKSPACE_DIR/src/global_planning/PCT_planner/tomography/scripts"
+    # Step 3: 鐢熸垚 Tomogram
+    echo -e "${GREEN}[3/3] 鐢熸垚 PCT Tomogram锛?~5 鍒嗛挓锛?..${NC}"
+    cd "$WORKSPACE_DIR/src/global_planning/pct_planner/tomography/scripts"
     if python3 tomography.py --scene "$MAP_NAME"; then
         ln -sf "$TOMOGRAM_DIR/${MAP_NAME}.pickle" "$TOMOGRAM_DIR/latest.pickle"
         echo ""
-        echo -e "${BOLD}${GREEN}✓ 地图保存完成！${NC}"
+        echo -e "${BOLD}${GREEN}鉁?鍦板浘淇濆瓨瀹屾垚锛?{NC}"
         echo -e "  PCD:      ${BLUE}$PCD_DIR/${MAP_NAME}.pcd${NC}"
         echo -e "  Tomogram: ${BLUE}$TOMOGRAM_DIR/${MAP_NAME}.pickle${NC}"
         echo ""
-        echo -e "${YELLOW}下一步: ${GREEN}./lingtu.sh nav${NC}"
+        echo -e "${YELLOW}涓嬩竴姝? ${GREEN}./lingtu.sh nav${NC}"
     else
-        echo -e "${RED}错误: Tomogram 生成失败${NC}"
+        echo -e "${RED}閿欒: Tomogram 鐢熸垚澶辫触${NC}"
         exit 1
     fi
 }
 
-# ── 子命令: nav ───────────────────────────────────────────────
+# 鈹€鈹€ 瀛愬懡浠? nav 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 cmd_nav() {
-    echo -e "${BOLD}${BLUE}▶ 导航模式${NC}"
+    echo -e "${BOLD}${BLUE}鈻?瀵艰埅妯″紡${NC}"
     _init
 
     local MAP_PATH
     MAP_PATH=$(_find_latest_map)
     if [ -z "$MAP_PATH" ]; then
-        echo -e "${RED}错误: 未找到地图文件${NC}"
-        echo -e "${YELLOW}请先运行: ${GREEN}./lingtu.sh map${YELLOW} + ${GREEN}./lingtu.sh save${NC}"
+        echo -e "${RED}閿欒: 鏈壘鍒板湴鍥炬枃浠?{NC}"
+        echo -e "${YELLOW}璇峰厛杩愯: ${GREEN}./lingtu.sh map${YELLOW} + ${GREEN}./lingtu.sh save${NC}"
         exit 1
     fi
 
     local MAP_BASE
     MAP_BASE=$(basename "$MAP_PATH")
-    echo -e "  使用地图: ${GREEN}${MAP_BASE}${NC}"
+    echo -e "  浣跨敤鍦板浘: ${GREEN}${MAP_BASE}${NC}"
     if [[ "$MAP_PATH" == *.pickle ]]; then
-        echo -e "  ${YELLOW}注意: 未找到 .pickle，将从 .pcd 实时构建 Tomogram（较慢）${NC}"
+        echo -e "  ${YELLOW}娉ㄦ剰: 鏈壘鍒?.pickle锛屽皢浠?.pcd 瀹炴椂鏋勫缓 Tomogram锛堣緝鎱級${NC}"
     fi
     echo ""
 
@@ -155,36 +151,36 @@ cmd_nav() {
         _run_lingtu nav --tomogram "${MAP_PATH}.pickle"
     fi
     export NAV_MAP_PATH="$MAP_PATH"
-    echo -e "  委托当前 Module-first CLI: ${GREEN}python lingtu.py nav${NC}"
+    echo -e "  濮旀墭褰撳墠 Module-first CLI: ${GREEN}python lingtu.py nav${NC}"
     _run_lingtu nav
 }
 
-# ── 子命令: status ─────────────────────────────────────────────
+# 鈹€鈹€ 瀛愬懡浠? status 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 cmd_status() {
-    echo -e "${BOLD}${BLUE}▶ 系统状态检查${NC}"
-    echo -e "  委托当前 Module-first CLI: ${GREEN}python lingtu.py status${NC}"
+    echo -e "${BOLD}${BLUE}鈻?绯荤粺鐘舵€佹鏌?{NC}"
+    echo -e "  濮旀墭褰撳墠 Module-first CLI: ${GREEN}python lingtu.py status${NC}"
     echo ""
     _run_lingtu status
 }
 
-# ── 帮助 ──────────────────────────────────────────────────────
+# 鈹€鈹€ 甯姪 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 cmd_help() {
-    echo -e "${BOLD}lingtu.sh — MapPilot 统一启动入口${NC}"
+    echo -e "${BOLD}lingtu.sh 鈥?MapPilot 缁熶竴鍚姩鍏ュ彛${NC}"
     echo ""
-    echo -e "  ${GREEN}./lingtu.sh map${NC}     兼容入口，委托 python lingtu.py map"
-    echo -e "  ${GREEN}./lingtu.sh save${NC}    保存地图（PCD + Tomogram 全自动）"
-    echo -e "  ${GREEN}./lingtu.sh nav${NC}     兼容入口，委托 python lingtu.py nav"
-    echo -e "  ${GREEN}./lingtu.sh status${NC}  兼容入口，委托 python lingtu.py status"
+    echo -e "  ${GREEN}./lingtu.sh map${NC}     鍏煎鍏ュ彛锛屽鎵?python lingtu.py map"
+    echo -e "  ${GREEN}./lingtu.sh save${NC}    淇濆瓨鍦板浘锛圥CD + Tomogram 鍏ㄨ嚜鍔級"
+    echo -e "  ${GREEN}./lingtu.sh nav${NC}     鍏煎鍏ュ彛锛屽鎵?python lingtu.py nav"
+    echo -e "  ${GREEN}./lingtu.sh status${NC}  鍏煎鍏ュ彛锛屽鎵?python lingtu.py status"
     echo ""
-    echo -e "${YELLOW}典型流程:${NC}"
-    echo -e "  1. ${GREEN}./lingtu.sh map${NC}   遥控机器人建图"
-    echo -e "  2. Ctrl+C 停止建图"
-    echo -e "  3. ${GREEN}./lingtu.sh save${NC}  保存地图（等待 2~5 分钟）"
-    echo -e "  4. ${GREEN}./lingtu.sh nav${NC}   启动自主导航"
+    echo -e "${YELLOW}鍏稿瀷娴佺▼:${NC}"
+    echo -e "  1. ${GREEN}./lingtu.sh map${NC}   閬ユ帶鏈哄櫒浜哄缓鍥?
+    echo -e "  2. Ctrl+C 鍋滄寤哄浘"
+    echo -e "  3. ${GREEN}./lingtu.sh save${NC}  淇濆瓨鍦板浘锛堢瓑寰?2~5 鍒嗛挓锛?
+    echo -e "  4. ${GREEN}./lingtu.sh nav${NC}   鍚姩鑷富瀵艰埅"
     echo ""
 }
 
-# ── 入口 ──────────────────────────────────────────────────────
+# 鈹€鈹€ 鍏ュ彛 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 case "${1:-help}" in
     map)    cmd_map    ;;
     save)   cmd_save   ;;

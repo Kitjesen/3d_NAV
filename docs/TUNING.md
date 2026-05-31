@@ -1,4 +1,4 @@
-# LingTu Tuning Cheat Sheet
+﻿# LingTu Tuning Cheat Sheet
 
 > Edit YAML, restart the systemd service, no rebuild needed.
 
@@ -14,7 +14,7 @@ sudo systemctl restart robot-fastlio2  # SLAM only
 
 ---
 
-## 1. Robot kinematic limits — `config/robot_config.yaml`
+## 1. Robot kinematic limits 鈥?`config/robot_config.yaml`
 
 | Key                     | Default | Range     | Effect                                                       |
 |-------------------------|---------|-----------|--------------------------------------------------------------|
@@ -28,7 +28,7 @@ Tuning notes:
 - False stuck triggers in tight indoor turns -> raise `stuck_timeout` to 12-15.
 - Slow recovery in open terrain -> drop to 7-8.
 
-## 2. Local planner — `config/robot_config.yaml` `local_planner.*`
+## 2. Local planner 鈥?`config/robot_config.yaml` `local_planner.*`
 
 The C++ local planner lives in `src/nav/core/include/nav_core/local_planner_full.hpp`
 and is called from Python via `_nav_core` (nanobind). Parameters are read once at
@@ -49,7 +49,7 @@ Symptom -> change:
 - Cuts corners in narrow halls -> drop `adjacent_range` to 2.5.
 - Climbs ramps it should avoid -> set `slope_weight` to 4-6.
 
-## 3. Path follower — `config/robot_config.yaml` `path_follower.*`
+## 3. Path follower 鈥?`config/robot_config.yaml` `path_follower.*`
 
 The path follower is also `_nav_core` C++ (`PathFollowerCore`). Lookahead is adaptive:
 `L = base + ratio * speed`.
@@ -66,11 +66,11 @@ Symptom -> change:
 - Snaking left-right on straight path -> drop `yaw_rate_gain` to 5-6, raise `base_look_ahead`.
 - Sluggish turns -> raise `yaw_rate_gain` to 10-12.
 
-## 4. Global planner backend — `core.registry`
+## 4. Global planner backend 鈥?`core.registry`
 
 Two backends are registered in `src/global_planning/`:
-- `astar` — pure Python, default for `stub`/`dev`/`s100p` profiles.
-- `pct` — C++ `ele_planner.so` (PCT planner).
+- `astar` 鈥?pure Python, default for `stub`/`dev`/`s100p` profiles.
+- `pct` 鈥?C++ `ele_planner.so` (PCT planner).
 
 Switch via the profile flag or REPL:
 
@@ -78,9 +78,9 @@ Switch via the profile flag or REPL:
 python lingtu.py s100p --planner pct
 ```
 
-PCT-specific tuning lives in `src/global_planning/PCT_planner/config/params.yaml`.
+PCT-specific tuning lives in `src/global_planning/pct_planner/config/params.yaml`.
 
-## 5. Frontier exploration — `config/semantic_exploration.yaml`
+## 5. Frontier exploration 鈥?`config/semantic_exploration.yaml`
 
 Used only by the `explore` profile. Weights should sum to ~1.0.
 
@@ -94,7 +94,7 @@ Used only by the `explore` profile. Weights should sum to ~1.0.
 | `frontier_min_size`               | 5 cells | Minimum frontier patch size                         |
 | `confidence_threshold`            | 0.5     | Below this, drop into frontier mode                 |
 
-## 6. Semantic planner — `config/semantic_planner.yaml`
+## 6. Semantic planner 鈥?`config/semantic_planner.yaml`
 
 | Key                  | Default       | Effect                                                |
 |----------------------|---------------|-------------------------------------------------------|
@@ -105,7 +105,7 @@ Used only by the `explore` profile. Weights should sum to ~1.0.
 
 Offline mode: set `backend: mock` and unset `MOONSHOT_API_KEY`.
 
-## 7. Perception — `config/semantic_perception.yaml`
+## 7. Perception 鈥?`config/semantic_perception.yaml`
 
 | Key                            | Default | Effect                                          |
 |--------------------------------|---------|-------------------------------------------------|

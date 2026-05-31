@@ -6,8 +6,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
 
-from semantic.perception.semantic_perception.bpu_detector import BPUDetector
-from semantic.perception.semantic_perception.detector_base import Detection2D
+from semantic.perception.bpu_detector import BPUDetector
+from semantic.perception.detector_base import Detection2D
 
 
 class TestBPUDetectorRecallTuning(unittest.TestCase):

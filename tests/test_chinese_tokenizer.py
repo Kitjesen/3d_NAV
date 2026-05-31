@@ -5,7 +5,7 @@
 """
 
 import pytest
-from semantic.planner.semantic_planner.chinese_tokenizer import (
+from semantic.planner.chinese_tokenizer import (
     ChineseTokenizer,
     extract_keywords,
     simple_extract_keywords,

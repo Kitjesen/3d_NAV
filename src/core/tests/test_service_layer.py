@@ -131,8 +131,8 @@ class MockActionExecutor:
 class TestPerceptionService(unittest.TestCase):
 
     def _make_service(self, detector=True, encoder=True, tracker=True):
-        from semantic.perception.semantic_perception.projection import CameraIntrinsics
-        from semantic.perception.semantic_perception.service import PerceptionService
+        from semantic.perception.projection import CameraIntrinsics
+        from semantic.perception.service import PerceptionService
         svc = PerceptionService(
             detector=MockDetector() if detector else None,
             encoder=MockEncoder() if encoder else None,
@@ -200,7 +200,7 @@ class TestPerceptionService(unittest.TestCase):
         svc = self._make_service()
         svc.intrinsics = None
         self.assertIsNone(svc.intrinsics)
-        from semantic.perception.semantic_perception.projection import CameraIntrinsics
+        from semantic.perception.projection import CameraIntrinsics
         svc.set_intrinsics(CameraIntrinsics(600, 600, 320, 240, 640, 480))
         self.assertIsNotNone(svc.intrinsics)
 
@@ -220,27 +220,27 @@ class TestPerceptionService(unittest.TestCase):
 class TestGoalResolutionService(unittest.TestCase):
 
     def test_resolve_fast(self):
-        from semantic.planner.semantic_planner.service import GoalResolutionService
+        from semantic.planner.service import GoalResolutionService
         svc = GoalResolutionService(resolver=MockGoalResolver())
         result = svc.resolve_fast("find the chair", '{"objects":[]}')
         self.assertIsNotNone(result)
         self.assertEqual(result.confidence, 0.9)
 
     def test_resolve_auto(self):
-        from semantic.planner.semantic_planner.service import GoalResolutionService
+        from semantic.planner.service import GoalResolutionService
         svc = GoalResolutionService(resolver=MockGoalResolver())
         result = svc.resolve("find the chair", '{"objects":[]}')
         self.assertIsNotNone(result)
 
     def test_resolve_by_tag(self):
-        from semantic.planner.semantic_planner.service import GoalResolutionService
+        from semantic.planner.service import GoalResolutionService
         svc = GoalResolutionService(resolver=MockGoalResolver())
         result = svc.resolve_by_tag("go to the office")
         self.assertIsNotNone(result)
         self.assertEqual(result.label, "office")
 
     def test_resolve_by_tag_miss(self):
-        from semantic.planner.semantic_planner.service import GoalResolutionService
+        from semantic.planner.service import GoalResolutionService
         svc = GoalResolutionService(resolver=MockGoalResolver())
         result = svc.resolve_by_tag("find a dog")
         self.assertIsNone(result)
@@ -253,7 +253,7 @@ class TestGoalResolutionService(unittest.TestCase):
 class TestFrontierExplorationService(unittest.TestCase):
 
     def test_evaluate(self):
-        from semantic.planner.semantic_planner.service import FrontierExplorationService
+        from semantic.planner.service import FrontierExplorationService
         svc = FrontierExplorationService(scorer=MockFrontierScorer())
         costmap = np.zeros((100, 100), dtype=np.int8)
         best = svc.evaluate(costmap, 0.05, 0.0, 0.0,
@@ -262,7 +262,7 @@ class TestFrontierExplorationService(unittest.TestCase):
         self.assertAlmostEqual(best.score, 0.8)
 
     def test_record_failure(self):
-        from semantic.planner.semantic_planner.service import FrontierExplorationService
+        from semantic.planner.service import FrontierExplorationService
         svc = FrontierExplorationService(scorer=MockFrontierScorer())
         svc.record_failure(np.array([1.0, 2.0]))  # should not crash
 
@@ -274,19 +274,19 @@ class TestFrontierExplorationService(unittest.TestCase):
 class TestActionExecutionService(unittest.TestCase):
 
     def test_navigate(self):
-        from semantic.planner.semantic_planner.service import ActionExecutionService
+        from semantic.planner.service import ActionExecutionService
         svc = ActionExecutionService(executor=MockActionExecutor())
         cmd = svc.navigate(np.array([5, 3, 0]), np.array([0, 0, 0]))
         self.assertEqual(cmd.action_type, "navigate")
 
     def test_approach(self):
-        from semantic.planner.semantic_planner.service import ActionExecutionService
+        from semantic.planner.service import ActionExecutionService
         svc = ActionExecutionService(executor=MockActionExecutor())
         cmd = svc.approach(np.array([5, 3, 0]), np.array([0, 0, 0]))
         self.assertEqual(cmd.action_type, "approach")
 
     def test_look_around(self):
-        from semantic.planner.semantic_planner.service import ActionExecutionService
+        from semantic.planner.service import ActionExecutionService
         svc = ActionExecutionService(executor=MockActionExecutor())
         cmd = svc.look_around(np.array([0, 0, 0]))
         self.assertEqual(cmd.action_type, "look_around")

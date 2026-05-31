@@ -12,7 +12,7 @@ from core.msgs.semantic import Detection3D, SceneGraph
 from memory.modules.episodic_module import EpisodicMemoryModule
 from memory.modules.tagged_locations_module import TaggedLocationsModule
 from memory.modules.topological_module import TopologicalMemoryModule
-from semantic.planner.semantic_planner.frontier_module import FrontierModule
+from semantic.planner.frontier_module import FrontierModule
 
 
 def _make_odom(x, y, z=0.0):

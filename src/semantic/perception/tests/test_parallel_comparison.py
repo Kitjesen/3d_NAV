@@ -234,8 +234,8 @@ def _build_mock_scg_for_scenario(scenario: dict):
 
     返回已调用过 build_edges 的 SCGBuilder。
     """
-    from semantic.perception.semantic_perception.polyhedron_expansion import Polyhedron
-    from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
+    from semantic.perception.polyhedron_expansion import Polyhedron
+    from semantic.perception.scg_builder import SCGBuilder, SCGConfig
 
     start = scenario["start"]
     goal = scenario["goal"]
@@ -320,7 +320,7 @@ class PCTBaselineWrapper:
         self._planner = None
         self._available = False
         try:
-            from semantic.perception.semantic_perception.baseline_wrappers import PCTAStarPlanner
+            from semantic.perception.baseline_wrappers import PCTAStarPlanner
             self._planner = PCTAStarPlanner()
             # 使用足够大的栅格覆盖所有测试场景（25m × 20m，分辨率 0.5m）
             self._planner.initialize(
@@ -393,7 +393,7 @@ class HybridPlannerWrapper:
     def __init__(self):
         self._available = False
         try:
-            from semantic.perception.semantic_perception.hybrid_planner import (
+            from semantic.perception.hybrid_planner import (
                 HybridPlanner,
             )
             self._available = True
@@ -416,7 +416,7 @@ class HybridPlannerWrapper:
 
         t0 = time.perf_counter()
         try:
-            from semantic.perception.semantic_perception.hybrid_planner import HybridPlanner
+            from semantic.perception.hybrid_planner import HybridPlanner
 
             tsg = _build_mock_tsg_for_scenario(scenario)
             mock_tomo = MockTomogram()
@@ -471,8 +471,8 @@ class SCGPlannerWrapper:
     def __init__(self):
         self._available = False
         try:
-            from semantic.perception.semantic_perception.scg_builder import SCGBuilder
-            from semantic.perception.semantic_perception.scg_path_planner import (
+            from semantic.perception.scg_builder import SCGBuilder
+            from semantic.perception.scg_path_planner import (
                 SCGPathPlanner,
             )
             self._available = True
@@ -495,7 +495,7 @@ class SCGPlannerWrapper:
 
         t0 = time.perf_counter()
         try:
-            from semantic.perception.semantic_perception.scg_path_planner import SCGPathPlanner
+            from semantic.perception.scg_path_planner import SCGPathPlanner
 
             scg = _build_mock_scg_for_scenario(scenario)
             planner = SCGPathPlanner(scg)

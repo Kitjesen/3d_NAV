@@ -4,7 +4,7 @@ from drivers.sim.mujoco_scene_metadata import extract_robot_height_obstacle_boxe
 
 
 def test_industrial_park_scene_metadata_extracts_robot_height_obstacles():
-    scene = Path("sim/worlds/industrial_park_scene.xml")
+    scene = Path("sim/worlds/mujoco/industrial_park_scene.xml")
 
     obstacles = extract_robot_height_obstacle_boxes(scene)
     names = {item["name"] for item in obstacles}

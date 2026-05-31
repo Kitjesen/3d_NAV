@@ -13,7 +13,7 @@ import pytest
 
 from core.msgs.nav import Odometry
 from core.msgs.geometry import Pose
-from nav.services.nav_services.patrol_manager_module import PatrolManagerModule
+from nav.services.patrol_manager_module import PatrolManagerModule
 
 
 # -- fixtures ------------------------------------------------------------------

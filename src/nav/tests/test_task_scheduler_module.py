@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from nav.services.nav_services.task_scheduler_module import TaskSchedulerModule
+from nav.services.task_scheduler_module import TaskSchedulerModule
 
 
 # -- fixtures ------------------------------------------------------------------

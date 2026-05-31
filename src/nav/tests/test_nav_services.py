@@ -44,7 +44,7 @@ class TestMapManagerModule(unittest.TestCase):
         self._tmpdir = tempfile.mkdtemp()
         self._map_dir = os.path.join(self._tmpdir, "maps")
         self._data_dir = os.path.join(self._tmpdir, "data")
-        from nav.services.nav_services.map_manager_module import MapManagerModule
+        from nav.services.map_manager_module import MapManagerModule
         self.mod = MapManagerModule(
             map_dir=self._map_dir,
             data_dir=self._data_dir,
@@ -617,7 +617,7 @@ class TestMapManagerModule(unittest.TestCase):
             f.write(pcd_content)
             fname = f.name
         try:
-            from nav.services.nav_services.map_manager_module import MapManagerModule
+            from nav.services.map_manager_module import MapManagerModule
             pts = MapManagerModule._load_pcd_points(fname)
             self.assertIsNotNone(pts)
             self.assertEqual(pts.shape, (3, 3))
@@ -1200,7 +1200,7 @@ class TestPatrolManagerModule(unittest.TestCase):
 
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp()
-        from nav.services.nav_services.patrol_manager_module import PatrolManagerModule
+        from nav.services.patrol_manager_module import PatrolManagerModule
         self.mod = PatrolManagerModule(routes_dir=os.path.join(self._tmpdir, "routes"))
         self.mod.setup()
         self._statuses: list[str] = []
@@ -1297,7 +1297,7 @@ class TestTaskSchedulerModule(unittest.TestCase):
 
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp()
-        from nav.services.nav_services.task_scheduler_module import TaskSchedulerModule
+        from nav.services.task_scheduler_module import TaskSchedulerModule
         self.mod = TaskSchedulerModule(
             schedule_file=os.path.join(self._tmpdir, "sched.yaml")
         )
@@ -1424,7 +1424,7 @@ class TestGeofenceManagerModule(unittest.TestCase):
 
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp()
-        from nav.services.nav_services.geofence_manager_module import GeofenceManagerModule
+        from nav.services.geofence_manager_module import GeofenceManagerModule
         self.mod = GeofenceManagerModule(
             geofence_file=os.path.join(self._tmpdir, "fences.yaml")
         )
@@ -1504,17 +1504,17 @@ class TestGeofenceManagerModule(unittest.TestCase):
     # -- point-in-polygon --
 
     def test_point_in_polygon_inside(self):
-        from nav.services.nav_services.geofence_manager_module import GeofenceManagerModule
+        from nav.services.geofence_manager_module import GeofenceManagerModule
         poly = [[0, 0], [10, 0], [10, 10], [0, 10]]
         self.assertTrue(GeofenceManagerModule._point_in_polygon(5, 5, poly))
 
     def test_point_in_polygon_outside(self):
-        from nav.services.nav_services.geofence_manager_module import GeofenceManagerModule
+        from nav.services.geofence_manager_module import GeofenceManagerModule
         poly = [[0, 0], [10, 0], [10, 10], [0, 10]]
         self.assertFalse(GeofenceManagerModule._point_in_polygon(15, 15, poly))
 
     def test_point_in_polygon_too_few(self):
-        from nav.services.nav_services.geofence_manager_module import GeofenceManagerModule
+        from nav.services.geofence_manager_module import GeofenceManagerModule
         self.assertFalse(GeofenceManagerModule._point_in_polygon(0, 0, [[0, 0]]))
 
     # -- intrusion detection --

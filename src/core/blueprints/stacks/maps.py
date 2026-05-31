@@ -129,7 +129,7 @@ def maps(**config) -> Blueprint:
             "map",
             "manager",
             seed_group="map",
-            fallback="nav.services.nav_services.map_manager_module.MapManagerModule",
+            fallback="nav.services.map_manager_module.MapManagerModule",
         )
         map_dir = config.get(
             "map_dir",

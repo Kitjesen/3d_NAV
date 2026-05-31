@@ -20,8 +20,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from semantic.perception.semantic_perception.detector_base import Detection2D
-from semantic.perception.semantic_perception.yolo_world_detector import YOLOWorldDetector
+from semantic.perception.detector_base import Detection2D
+from semantic.perception.yolo_world_detector import YOLOWorldDetector
 
 
 class TestYOLOWorldDetectorInit(unittest.TestCase):

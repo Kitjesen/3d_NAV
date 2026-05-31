@@ -7,7 +7,7 @@
 
 import pytest
 
-from semantic.planner.semantic_planner.vlm_bbox_query import (
+from semantic.planner.vlm_bbox_query import (
     _build_bbox_prompt,
     _extract_bbox_from_response,
     _parse_json_tolerant,

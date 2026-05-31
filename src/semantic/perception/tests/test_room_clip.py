@@ -19,7 +19,7 @@ for _pkg in ("semantic_perception",):
 import numpy as np
 import pytest
 
-from semantic.perception.semantic_perception.instance_tracker import (
+from semantic.perception.instance_tracker import (
     InstanceTracker,
     Region,
     RoomNode,

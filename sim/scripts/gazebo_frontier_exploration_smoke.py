@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """ROS 2 smoke test for Gazebo-backed frontier exploration.
 
 The script starts LingTu's in-process WavefrontFrontierExplorer, builds a
@@ -291,7 +291,7 @@ def _build_tomogram_from_pcd(
 ) -> dict[str, Any]:
     import numpy as np
 
-    from global_planning.PCT_planner.tomography.scripts.build_tomogram import (
+    from global_planning.pct_planner.tomography.scripts.build_tomogram import (
         build_tomogram_from_pcd,
     )
 

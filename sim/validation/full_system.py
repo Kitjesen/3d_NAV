@@ -107,10 +107,10 @@ def _geom_names(root: ET.Element) -> set[str]:
 
 def validate_scene_catalog(repo_root: Path) -> list[ValidationCheck]:
     worlds = {
-        "open_field": repo_root / "sim/worlds/open_field.xml",
-        "building_scene": repo_root / "sim/worlds/building_scene.xml",
-        "factory_scene": repo_root / "sim/worlds/factory_scene.xml",
-        "spiral_terrain": repo_root / "sim/worlds/spiral_terrain.xml",
+        "open_field": repo_root / "sim/worlds/mujoco/open_field.xml",
+        "building_scene": repo_root / "sim/worlds/mujoco/building_scene.xml",
+        "factory_scene": repo_root / "sim/worlds/mujoco/factory_scene.xml",
+        "spiral_terrain": repo_root / "sim/worlds/mujoco/spiral_terrain.xml",
     }
     checks: list[ValidationCheck] = []
     missing = [name for name, path in worlds.items() if not path.exists()]

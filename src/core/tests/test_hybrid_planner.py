@@ -15,7 +15,7 @@ import math
 import numpy as np
 import pytest
 
-from semantic.perception.semantic_perception.hybrid_planner import (
+from semantic.perception.hybrid_planner import (
     HybridPath,
     HybridPlanner,
     _astar_on_grid,

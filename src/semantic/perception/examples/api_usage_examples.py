@@ -6,7 +6,7 @@ Semantic Perception API - 使用示例
 
 import numpy as np
 
-from semantic.perception.semantic_perception.api import (
+from semantic.perception.api import (
     CameraInfo,
     PerceptionConfig,
     PerceptionFactory,
@@ -164,7 +164,7 @@ def example_6_error_handling():
     """示例6: 错误处理"""
     print("\n=== 示例6: 错误处理 ===")
 
-    from semantic.perception.semantic_perception.api.exceptions import (
+    from semantic.perception.api.exceptions import (
         DetectorError,
         InvalidImageError,
         PerceptionAPIError,

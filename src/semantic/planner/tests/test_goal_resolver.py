@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from semantic.planner.semantic_planner.goal_resolver import GoalResolver, GoalResult
-from semantic.planner.semantic_planner.llm_client import (
+from semantic.planner.goal_resolver import GoalResolver, GoalResult
+from semantic.planner.llm_client import (
     ClaudeClient,
     LLMClientBase,
     LLMConfig,
@@ -21,7 +21,7 @@ from semantic.planner.semantic_planner.llm_client import (
     QwenClient,
     create_llm_client,
 )
-from semantic.planner.semantic_planner.prompt_templates import (
+from semantic.planner.prompt_templates import (
     build_exploration_prompt,
     build_goal_resolution_prompt,
 )

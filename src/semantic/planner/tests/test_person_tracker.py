@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from semantic.planner.semantic_planner.person_tracker import PersonTracker, TrackedPerson
+from semantic.planner.person_tracker import PersonTracker, TrackedPerson
 
 # ── helpers ──
 

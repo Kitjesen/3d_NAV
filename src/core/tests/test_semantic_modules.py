@@ -22,7 +22,7 @@ class TestVisualServoModuleInstantiation(unittest.TestCase):
     """Test VisualServoModule creation and initial state."""
 
     def _make(self, **kw):
-        from semantic.planner.semantic_planner.visual_servo_module import (
+        from semantic.planner.visual_servo_module import (
             VisualServoModule,
         )
         return VisualServoModule(**kw)
@@ -48,7 +48,7 @@ class TestVisualServoModeTransitions(unittest.TestCase):
     """Test VisualServoModule mode transitions via _on_servo_target."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.visual_servo_module import (
+        from semantic.planner.visual_servo_module import (
             VisualServoModule,
         )
         m = VisualServoModule()
@@ -94,7 +94,7 @@ class TestVisualServoHealth(unittest.TestCase):
     """Test VisualServoModule.health() output."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.visual_servo_module import (
+        from semantic.planner.visual_servo_module import (
             VisualServoModule,
         )
         return VisualServoModule()
@@ -133,7 +133,7 @@ class TestVisualServoSkills(unittest.TestCase):
     """Test @skill methods on VisualServoModule."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.visual_servo_module import (
+        from semantic.planner.visual_servo_module import (
             VisualServoModule,
         )
         m = VisualServoModule()
@@ -176,7 +176,7 @@ class TestGoalResolverModuleInstantiation(unittest.TestCase):
     """Test GoalResolverModule creation and config."""
 
     def _make(self, **kw):
-        from semantic.planner.semantic_planner.goal_resolver_module import (
+        from semantic.planner.goal_resolver_module import (
             GoalResolverModule,
         )
         return GoalResolverModule(**kw)
@@ -208,7 +208,7 @@ class TestGoalResolverOfflineFastPath(unittest.TestCase):
     """Test GoalResolverModule._offline_fast_path (keyword matching)."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.goal_resolver_module import (
+        from semantic.planner.goal_resolver_module import (
             GoalResolverModule,
         )
         return GoalResolverModule()
@@ -271,7 +271,7 @@ class TestGoalResolverHealth(unittest.TestCase):
     """Test GoalResolverModule.health() output."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.goal_resolver_module import (
+        from semantic.planner.goal_resolver_module import (
             GoalResolverModule,
         )
         return GoalResolverModule()
@@ -295,7 +295,7 @@ class TestGoalResolverSlowPathFallback(unittest.TestCase):
     """Test GoalResolverModule._resolve falls back properly."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.goal_resolver_module import (
+        from semantic.planner.goal_resolver_module import (
             GoalResolverModule,
         )
         m = GoalResolverModule(use_slow_path=False)
@@ -316,7 +316,7 @@ class TestActionExecutorModuleInstantiation(unittest.TestCase):
     """Test ActionExecutorModule creation and config."""
 
     def _make(self, **kw):
-        from semantic.planner.semantic_planner.action_executor_module import (
+        from semantic.planner.action_executor_module import (
             ActionExecutorModule,
         )
         return ActionExecutorModule(**kw)
@@ -346,7 +346,7 @@ class TestActionExecutorModuleErrorCounting(unittest.TestCase):
     """Test ActionExecutorModule.lera_recover and failure counting."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.action_executor_module import (
+        from semantic.planner.action_executor_module import (
             ActionExecutorModule,
         )
         return ActionExecutorModule(max_lera_retries=3)
@@ -385,7 +385,7 @@ class TestActionExecutorModuleHealth(unittest.TestCase):
     """Test ActionExecutorModule.health() output."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.action_executor_module import (
+        from semantic.planner.action_executor_module import (
             ActionExecutorModule,
         )
         return ActionExecutorModule()
@@ -422,7 +422,7 @@ class TestActionExecutorModuleGoalRejection(unittest.TestCase):
     """Test that invalid goals are rejected."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.action_executor_module import (
+        from semantic.planner.action_executor_module import (
             ActionExecutorModule,
         )
         return ActionExecutorModule()
@@ -445,7 +445,7 @@ class TestFrontierModuleInstantiation(unittest.TestCase):
     """Test FrontierModule creation and config."""
 
     def _make(self, **kw):
-        from semantic.planner.semantic_planner.frontier_module import FrontierModule
+        from semantic.planner.frontier_module import FrontierModule
         return FrontierModule(**kw)
 
     def test_default_score_threshold(self):
@@ -474,7 +474,7 @@ class TestFrontierModuleOdomFiltering(unittest.TestCase):
     """Test FrontierModule._on_odom filters non-finite values."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.frontier_module import FrontierModule
+        from semantic.planner.frontier_module import FrontierModule
         return FrontierModule()
 
     def _odom(self, x, y):
@@ -506,7 +506,7 @@ class TestFrontierModuleHealth(unittest.TestCase):
     """Test FrontierModule.health() output."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.frontier_module import FrontierModule
+        from semantic.planner.frontier_module import FrontierModule
         return FrontierModule()
 
     def test_health_returns_dict(self):
@@ -537,7 +537,7 @@ class TestFrontierModuleEvaluation(unittest.TestCase):
     """Test FrontierModule._evaluate requires all inputs."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.frontier_module import FrontierModule
+        from semantic.planner.frontier_module import FrontierModule
         return FrontierModule()
 
     def test_evaluate_no_odom_returns_early(self):
@@ -568,7 +568,7 @@ class TestTaskDecomposerModuleInstantiation(unittest.TestCase):
     """Test TaskDecomposerModule creation."""
 
     def _make(self, **kw):
-        from semantic.planner.semantic_planner.task_decomposer_module import (
+        from semantic.planner.task_decomposer_module import (
             TaskDecomposerModule,
         )
         return TaskDecomposerModule(**kw)
@@ -586,7 +586,7 @@ class TestTaskDecomposerOfflineDecompose(unittest.TestCase):
     """Test TaskDecomposerModule._offline_decompose (rule-based fallback)."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.task_decomposer_module import (
+        from semantic.planner.task_decomposer_module import (
             TaskDecomposerModule,
         )
         return TaskDecomposerModule()
@@ -635,7 +635,7 @@ class TestTaskDecomposerEmptyInput(unittest.TestCase):
     """Test TaskDecomposerModule handles empty input."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.task_decomposer_module import (
+        from semantic.planner.task_decomposer_module import (
             TaskDecomposerModule,
         )
         return TaskDecomposerModule()
@@ -653,7 +653,7 @@ class TestTaskDecomposerHealth(unittest.TestCase):
     """Test TaskDecomposerModule.health() output."""
 
     def _make(self):
-        from semantic.planner.semantic_planner.task_decomposer_module import (
+        from semantic.planner.task_decomposer_module import (
             TaskDecomposerModule,
         )
         return TaskDecomposerModule()

@@ -30,7 +30,7 @@ def safety() -> Blueprint:
         "safety",
         "geofence",
         seed_group="safety",
-        fallback="nav.services.nav_services.geofence_manager_module.GeofenceManagerModule",
+        fallback="nav.services.geofence_manager_module.GeofenceManagerModule",
     )
     if GeofenceManagerModule is not None:
         bp.add(GeofenceManagerModule, alias="GeofenceManagerModule")

@@ -18,7 +18,7 @@ for _pkg in ("semantic_planner",):
 import numpy as np
 import pytest
 
-from semantic.planner.semantic_planner.frontier_scorer import Frontier, FrontierScorer
+from semantic.planner.frontier_scorer import Frontier, FrontierScorer
 
 
 def _make_scorer(**kwargs) -> FrontierScorer:

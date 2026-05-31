@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from core.registry import list_plugins, register, restore, snapshot
-from semantic.planner.semantic_planner.llm_client import (
+from semantic.planner.llm_client import (
     LLMConfig,
     MockLLMClient,
     available_llm_backends,

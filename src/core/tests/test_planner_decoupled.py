@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "semantic", "planner"))
 
 from core import Blueprint, In, Module, Out
-from semantic.planner.semantic_planner.llm_module import LLMModule, LLMRequest, LLMResponse
+from semantic.planner.llm_module import LLMModule, LLMRequest, LLMResponse
 
 # ---------------------------------------------------------------------------
 # LLMRequest / LLMResponse
@@ -172,7 +172,7 @@ class TestFullDecoupledPipeline(unittest.TestCase):
         """Image → Detector → GoalResolver → LLM → Goal, all via Blueprint."""
         import numpy as np
 
-        from semantic.perception.semantic_perception.detector_module import (
+        from semantic.perception.detector_module import (
             DetectionResult,
             DetectorModule,
         )

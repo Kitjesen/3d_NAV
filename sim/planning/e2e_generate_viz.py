@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-建筑2_9 全栈导航 — 论文可视化图生成器
-Generates publication-quality figures for the advisor demo:
+寤虹瓚2_9 鍏ㄦ爤瀵艰埅 鈥?璁烘枃鍙鍖栧浘鐢熸垚鍣?Generates publication-quality figures for the advisor demo:
   1. 3D building cloud + navigation trajectory (perspective)
   2. Top-down floor plan + trajectory heatmap
   3. Velocity time series (vx, wz, |v|) with event markers
@@ -32,15 +31,15 @@ try:
 except (ImportError, AttributeError):
     _HAS_3D = False
 
-# ── 默认路径 ────────────────────────────────────────────────────────────────
+# 鈹€鈹€ 榛樿璺緞 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 _PCD_CANDIDATES = [
     os.environ.get('SIM_PCD_PATH', ''),
     '/home/sunrise/data/SLAM/navigation/install/pct_planner/share/pct_planner/rsc/pcd/building2_9.pcd',
-    '/home/sunrise/data/SLAM/navigation/src/global_planning/PCT_planner/rsc/pcd/building2_9.pcd',
+    '/home/sunrise/data/SLAM/navigation/src/global_planning/pct_planner/rsc/pcd/building2_9.pcd',
 ]
 _RESULT_DEFAULT = '/tmp/sim_result.json'
 
-# ── 样式 ─────────────────────────────────────────────────────────────────────
+# 鈹€鈹€ 鏍峰紡 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 plt.rcParams.update({
     'font.family':      'DejaVu Sans',
     'font.size':        11,
@@ -55,7 +54,7 @@ CMAP_CLOUD = 'rainbow'     # building Z-height coloring
 CMAP_TRAJ  = 'plasma'      # trajectory time coloring
 
 
-# ── 数据加载 ─────────────────────────────────────────────────────────────────
+# 鈹€鈹€ 鏁版嵁鍔犺浇 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 def find_pcd() -> Optional[str]:
     for p in _PCD_CANDIDATES:
@@ -108,7 +107,7 @@ def load_result(path: str) -> Optional[Dict]:
         return json.load(f)
 
 
-# ── Figure 1 — 3D 透视图 (建筑点云 + 轨迹) ────────────────────────────────────
+# 鈹€鈹€ Figure 1 鈥?3D 閫忚鍥?(寤虹瓚鐐逛簯 + 杞ㄨ抗) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 def _fig_3d_fallback(pts: np.ndarray, result: Dict, out_path: str):
     """Fallback when Axes3D unavailable: XZ + XY side-by-side pseudo-3D."""
@@ -134,7 +133,7 @@ def _fig_3d_fallback(pts: np.ndarray, result: Dict, out_path: str):
     ax2.text(-7.5, 0.2, 'Ground Floor', color='lime', fontsize=9)
     ax2.text(-7.5, 3.7, '2nd Floor',    color='orange', fontsize=9)
     ax2.set_xlabel('X (m)'); ax2.set_ylabel('Z Height (m)')
-    ax2.set_title(f'(b) Side Elevation — {z_min:.1f}m~{z_max:.1f}m')
+    ax2.set_title(f'(b) Side Elevation 鈥?{z_min:.1f}m~{z_max:.1f}m')
     sm = ScalarMappable(cmap=CMAP_CLOUD, norm=norm_z); sm.set_array([])
     fig.colorbar(sm, ax=ax2, label='Height Z (m)')
 
@@ -157,8 +156,7 @@ def fig_3d_perspective(pts: np.ndarray, result: Dict, out_path: str,
     z_min, z_max = float(pts[:, 2].min()), float(pts[:, 2].max())
     norm_bld = Normalize(vmin=z_min, vmax=z_max)
 
-    # 分层透明度: 地面轻 → 墙壁重 → 上层轻
-    floor_m = pts[:, 2] < 0.3
+    # 鍒嗗眰閫忔槑搴? 鍦伴潰杞?鈫?澧欏閲?鈫?涓婂眰杞?    floor_m = pts[:, 2] < 0.3
     wall1_m = (pts[:, 2] >= 0.3) & (pts[:, 2] < 2.5)
     wall2_m = (pts[:, 2] >= 2.5) & (pts[:, 2] < 4.5)
     upper_m = pts[:, 2] >= 4.5
@@ -171,7 +169,7 @@ def fig_3d_perspective(pts: np.ndarray, result: Dict, out_path: str,
         ax.scatter(pts[mask, 0], pts[mask, 1], pts[mask, 2],
                    c=cols, s=sz, alpha=alpha, rasterized=True)
 
-    # 导航轨迹
+    # 瀵艰埅杞ㄨ抗
     traj = result['trajectory']
     ts   = np.array([p['t'] for p in traj])
     txs  = np.array([p['x'] for p in traj])
@@ -191,7 +189,7 @@ def fig_3d_perspective(pts: np.ndarray, result: Dict, out_path: str,
     ax.text(sx, sy, 0.3, ' Start', color='lime',  fontsize=9, fontweight='bold')
     ax.text(gx, gy, 0.3, ' Goal',  color='red',   fontsize=9, fontweight='bold')
 
-    # 色条 — 建筑高度
+    # 鑹叉潯 鈥?寤虹瓚楂樺害
     sm_z = ScalarMappable(cmap=CMAP_CLOUD, norm=norm_bld)
     sm_z.set_array([])
     cbar = fig.colorbar(sm_z, ax=ax, pad=0.12, shrink=0.55, aspect=20, location='right')
@@ -199,11 +197,11 @@ def fig_3d_perspective(pts: np.ndarray, result: Dict, out_path: str,
 
     ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)'); ax.set_zlabel('Z (m)')
     ax.set_xlim(-8, 11); ax.set_ylim(-10, 9); ax.set_zlim(0, 8)
-    status = '✓ Goal Reached' if result['goal_reached'] else '✗ Timeout'
+    status = '鉁?Goal Reached' if result['goal_reached'] else '鉁?Timeout'
     ax.set_title(
-        f'Building2_9 — 3D Environment + Navigation Trajectory  ({status})\n'
-        f'Blue→Red: floor→ceiling (Z: {z_min:.1f}~{z_max:.1f}m) | '
-        f'Purple→Yellow: trajectory start→end',
+        f'Building2_9 鈥?3D Environment + Navigation Trajectory  ({status})\n'
+        f'Blue鈫扲ed: floor鈫抍eiling (Z: {z_min:.1f}~{z_max:.1f}m) | '
+        f'Purple鈫扽ellow: trajectory start鈫抏nd',
         pad=10, fontsize=11,
     )
     ax.view_init(elev=elev, azim=azim)
@@ -213,7 +211,7 @@ def fig_3d_perspective(pts: np.ndarray, result: Dict, out_path: str,
     print(f'[fig1] 3D perspective saved: {out_path}')
 
 
-# ── Figure 2 — 俯视地图 + 轨迹热图 ──────────────────────────────────────────
+# 鈹€鈹€ Figure 2 鈥?淇鍦板浘 + 杞ㄨ抗鐑浘 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 def fig_topdown(pts: np.ndarray, result: Dict, out_path: str):
     """Top-down view: floor-level point cloud + trajectory colored by speed."""
@@ -225,7 +223,7 @@ def fig_topdown(pts: np.ndarray, result: Dict, out_path: str):
 
     ax.scatter(floor[:, 0], floor[:, 1], s=0.2, c='#2a3a5b', alpha=0.35, rasterized=True)
     ax.scatter(wall[:,  0], wall[:,  1],  s=0.5, c='#5a8aab', alpha=0.65, rasterized=True,
-               label='Wall cross-section (0.5–3.0m)')
+               label='Wall cross-section (0.5鈥?.0m)')
 
     traj = result['trajectory']
     txs  = np.array([p['x']  for p in traj])
@@ -255,8 +253,8 @@ def fig_topdown(pts: np.ndarray, result: Dict, out_path: str):
     ax.tick_params(colors='white')
     for sp in ax.spines.values():
         sp.set_edgecolor('#5a8aab')
-    status = '✓ Goal Reached' if result['goal_reached'] else '✗ Timeout'
-    ax.set_title(f'Building2_9 — Floor Plan Navigation  ({status})\n'
+    status = '鉁?Goal Reached' if result['goal_reached'] else '鉁?Timeout'
+    ax.set_title(f'Building2_9 鈥?Floor Plan Navigation  ({status})\n'
                  f'Trajectory colored by speed (blue wall cross-sections visible)',
                  color='white', pad=12)
     ax.legend(loc='lower right', fontsize=9,
@@ -268,7 +266,7 @@ def fig_topdown(pts: np.ndarray, result: Dict, out_path: str):
     print(f'[fig2] Top-down saved: {out_path}')
 
 
-# ── Figure 3 — 速度时序图 ────────────────────────────────────────────────────
+# 鈹€鈹€ Figure 3 鈥?閫熷害鏃跺簭鍥?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 def fig_velocity(result: Dict, out_path: str):
     """Speed profile: vx, wz, and distance-to-goal."""
@@ -280,14 +278,14 @@ def fig_velocity(result: Dict, out_path: str):
 
     fig, axes = plt.subplots(3, 1, figsize=(13, 10), sharex=True)
     fig.suptitle(
-        'MapPilot — Navigation Velocity Profile & Convergence\n'
-        'Full Stack: PCT A* → pct_path_adapter (8 waypoints) → localPlanner → pathFollower',
+        'MapPilot 鈥?Navigation Velocity Profile & Convergence\n'
+        'Full Stack: PCT A* 鈫?pct_path_adapter (8 waypoints) 鈫?localPlanner 鈫?pathFollower',
         fontsize=12, y=1.01,
     )
 
     # Panel 1: linear speed
     ax = axes[0]
-    ax.plot(ts, vxs, color='#1e90ff', lw=2.5, label='vx — Forward speed (m/s)')
+    ax.plot(ts, vxs, color='#1e90ff', lw=2.5, label='vx 鈥?Forward speed (m/s)')
     ax.fill_between(ts, 0, vxs, where=(vxs > 0), alpha=0.18, color='#1e90ff')
     ax.axhline(0.8, color='#ff6600', ls=':', lw=1.5, alpha=0.7, label='max_speed = 0.8 m/s')
     ax.set_ylabel('Forward Speed vx (m/s)')
@@ -298,11 +296,11 @@ def fig_velocity(result: Dict, out_path: str):
 
     # Panel 2: angular rate
     ax2 = axes[1]
-    ax2.plot(ts, wzs, color='#ff8c00', lw=2.2, label='ωz — Angular rate (rad/s)')
+    ax2.plot(ts, wzs, color='#ff8c00', lw=2.2, label='蠅z 鈥?Angular rate (rad/s)')
     ax2.fill_between(ts, 0, wzs, where=(wzs > 0), alpha=0.2, color='#ff8c00', label='Left turn')
     ax2.fill_between(ts, wzs, 0, where=(wzs < 0), alpha=0.2, color='#9b59b6', label='Right turn')
     ax2.axhline(0, color='gray', lw=0.8)
-    ax2.set_ylabel('Angular Rate ωz (rad/s)')
+    ax2.set_ylabel('Angular Rate 蠅z (rad/s)')
     ax2.legend(loc='upper right', framealpha=0.85)
     ax2.grid(True, alpha=0.3)
     ax2.set_title('(b) Angular Velocity (Turning)', loc='left', fontsize=10)
@@ -314,7 +312,7 @@ def fig_velocity(result: Dict, out_path: str):
     ax3.axhline(0.5, color='#27ae60', ls='--', lw=1.8, label='Goal threshold = 0.5m')
     if result['goal_reached']:
         ax3.axvline(ts[-1], color='#2ecc71', ls='--', lw=1.5, alpha=0.9)
-        ax3.annotate(f'✓ Reached\nt = {ts[-1]:.1f}s',
+        ax3.annotate(f'鉁?Reached\nt = {ts[-1]:.1f}s',
                      xy=(ts[-1], 0.5), xytext=(ts[-1] - 2.5, ds.max() * 0.7),
                      arrowprops=dict(arrowstyle='->', color='#2ecc71'),
                      color='#2ecc71', fontsize=10, fontweight='bold')
@@ -331,7 +329,7 @@ def fig_velocity(result: Dict, out_path: str):
     print(f'[fig3] Velocity profile saved: {out_path}')
 
 
-# ── Figure 4 — 综合 dashboard ────────────────────────────────────────────────
+# 鈹€鈹€ Figure 4 鈥?缁煎悎 dashboard 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 def fig_dashboard(pts: np.ndarray, result: Dict, out_path: str):
     """4-panel publication dashboard."""
@@ -346,7 +344,7 @@ def fig_dashboard(pts: np.ndarray, result: Dict, out_path: str):
     fig = plt.figure(figsize=(16, 12))
     gs  = gridspec.GridSpec(2, 2, hspace=0.42, wspace=0.35)
 
-    # ── Panel A: 俯视轨迹 ──────────────────────────────────────────────────
+    # 鈹€鈹€ Panel A: 淇杞ㄨ抗 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
     ax_a = fig.add_subplot(gs[0, 0])
     floor = pts[pts[:, 2] < 0.5]
     wall  = pts[(pts[:, 2] >= 0.5) & (pts[:, 2] < 2.5)]
@@ -367,7 +365,7 @@ def fig_dashboard(pts: np.ndarray, result: Dict, out_path: str):
     sm = ScalarMappable(cmap=CMAP_TRAJ, norm=norm_t); sm.set_array([])
     fig.colorbar(sm, ax=ax_a, label='Time (s)', shrink=0.85)
 
-    # ── Panel B: 3D 透视 or side elevation ────────────────────────────────
+    # 鈹€鈹€ Panel B: 3D 閫忚 or side elevation 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
     z_min, z_max = float(pts[:, 2].min()), float(pts[:, 2].max())
     if _HAS_3D:
         ax_b = fig.add_subplot(gs[0, 1], projection='3d')
@@ -391,19 +389,19 @@ def fig_dashboard(pts: np.ndarray, result: Dict, out_path: str):
         ax_b.scatter(pts[:, 0], pts[:, 2], s=0.3, c=get_cmap(CMAP_CLOUD)(norm_z(pts[:, 2])),
                      alpha=0.25, rasterized=True)
         ax_b.set_xlabel('X (m)'); ax_b.set_ylabel('Z (m)')
-        ax_b.annotate('↑ 2nd floor', xy=(0, 3.5), fontsize=9, color='orange')
-        ax_b.annotate('↑ Ground floor', xy=(0, 0.3), fontsize=9, color='lime')
-    ax_b.set_title(f'(B) Building Profile (Z∈[{z_min:.1f},{z_max:.1f}]m)')
+        ax_b.annotate('鈫?2nd floor', xy=(0, 3.5), fontsize=9, color='orange')
+        ax_b.annotate('鈫?Ground floor', xy=(0, 0.3), fontsize=9, color='lime')
+    ax_b.set_title(f'(B) Building Profile (Z鈭圼{z_min:.1f},{z_max:.1f}]m)')
 
-    # ── Panel C: 速度时序 ────────────────────────────────────────────────────
+    # 鈹€鈹€ Panel C: 閫熷害鏃跺簭 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
     ax_c = fig.add_subplot(gs[1, 0])
     color_vx = '#1e90ff'; color_wz = '#ff8c00'
     ax_c.plot(ts, vxs, color=color_vx, lw=2.5, label='vx (m/s)')
     ax_c.fill_between(ts, 0, vxs, alpha=0.15, color=color_vx)
     ax_c.axhline(0.8, color='gray', ls=':', lw=1.0, alpha=0.6)
     ax_c2 = ax_c.twinx()
-    ax_c2.plot(ts, wzs, color=color_wz, lw=2.0, ls='--', alpha=0.85, label='ωz (rad/s)')
-    ax_c2.set_ylabel('ωz (rad/s)', color=color_wz)
+    ax_c2.plot(ts, wzs, color=color_wz, lw=2.0, ls='--', alpha=0.85, label='蠅z (rad/s)')
+    ax_c2.set_ylabel('蠅z (rad/s)', color=color_wz)
     ax_c2.tick_params(axis='y', labelcolor=color_wz)
     ax_c.set_xlabel('Time (s)'); ax_c.set_ylabel('vx (m/s)', color=color_vx)
     ax_c.tick_params(axis='y', labelcolor=color_vx)
@@ -413,7 +411,7 @@ def fig_dashboard(pts: np.ndarray, result: Dict, out_path: str):
     l2, lb2 = ax_c2.get_legend_handles_labels()
     ax_c.legend(l1 + l2, lb1 + lb2, loc='lower right', fontsize=9)
 
-    # ── Panel D: 收敛曲线 ────────────────────────────────────────────────────
+    # 鈹€鈹€ Panel D: 鏀舵暃鏇茬嚎 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
     ax_d = fig.add_subplot(gs[1, 1])
     ax_d.plot(ts, ds, color='#e74c3c', lw=2.5, label='Distance to goal')
     ax_d.fill_between(ts, 0, ds, alpha=0.12, color='#e74c3c')
@@ -421,18 +419,18 @@ def fig_dashboard(pts: np.ndarray, result: Dict, out_path: str):
     if result['goal_reached']:
         ax_d.axvline(ts[-1], color='#2ecc71', ls='--', lw=1.5, alpha=0.8)
         ax_d.text(ts[-1] - 0.8, ds.max() * 0.75,
-                  f'✓ {ts[-1]:.1f}s', color='#2ecc71',
+                  f'鉁?{ts[-1]:.1f}s', color='#2ecc71',
                   fontsize=11, ha='right', fontweight='bold')
     ax_d.set_xlabel('Time (s)'); ax_d.set_ylabel('Distance (m)')
     ax_d.set_title('(D) Navigation Convergence')
     ax_d.legend(fontsize=9); ax_d.grid(True, alpha=0.3); ax_d.set_ylim(bottom=0)
 
-    # ── 总标题 ──────────────────────────────────────────────────────────────
-    status = '✓ GOAL REACHED' if result['goal_reached'] else '✗ TIMEOUT'
+    # 鈹€鈹€ 鎬绘爣棰?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    status = '鉁?GOAL REACHED' if result['goal_reached'] else '鉁?TIMEOUT'
     fig.suptitle(
-        f'MapPilot (灵途) — Building2_9 Full-Stack Navigation SITL\n'
-        f'PCT A* Global Planner → pct_path_adapter → localPlanner → pathFollower → sim_robot\n'
-        f'{status}  |  Time: {ts[-1]:.1f}s  |  Path: (-5.5,7.3)→(5.0,7.3)  |  8 Waypoints  |  10.6m',
+        f'MapPilot (鐏甸€? 鈥?Building2_9 Full-Stack Navigation SITL\n'
+        f'PCT A* Global Planner 鈫?pct_path_adapter 鈫?localPlanner 鈫?pathFollower 鈫?sim_robot\n'
+        f'{status}  |  Time: {ts[-1]:.1f}s  |  Path: (-5.5,7.3)鈫?5.0,7.3)  |  8 Waypoints  |  10.6m',
         fontsize=11, y=1.008,
     )
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
@@ -440,7 +438,7 @@ def fig_dashboard(pts: np.ndarray, result: Dict, out_path: str):
     print(f'[fig4] Dashboard saved: {out_path}')
 
 
-# ── main ─────────────────────────────────────────────────────────────────────
+# 鈹€鈹€ main 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 def main():
     ap = argparse.ArgumentParser()
@@ -463,9 +461,9 @@ def main():
         pts = load_pcd(pcd_path, max_pts=120000)
         if pts is not None:
             print(f'PCD loaded: {len(pts)} pts, '
-                  f'Z∈[{pts[:,2].min():.2f},{pts[:,2].max():.2f}]m')
+                  f'Z鈭圼{pts[:,2].min():.2f},{pts[:,2].max():.2f}]m')
     if pts is None:
-        print('[warn] No PCD — using empty cloud')
+        print('[warn] No PCD 鈥?using empty cloud')
         pts = np.zeros((100, 3), dtype=np.float32)
 
     out = args.outdir

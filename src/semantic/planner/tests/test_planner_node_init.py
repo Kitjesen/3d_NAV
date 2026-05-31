@@ -37,8 +37,8 @@ from core.msgs.geometry import PoseStamped, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.semantic import Detection3D, Region, SceneGraph
 from core.stream import In, Out
-from semantic.planner.semantic_planner.agent_loop import AGENT_TOOLS, AgentLoop
-from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
+from semantic.planner.agent_loop import AGENT_TOOLS, AgentLoop
+from semantic.planner.semantic_planner_module import SemanticPlannerModule
 
 # ---------------------------------------------------------------------------
 # Helpers

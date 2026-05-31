@@ -1,4 +1,4 @@
-"""Same-source map artifact writer shared by simulation and map services.
+﻿"""Same-source map artifact writer shared by simulation and map services.
 
 The writer persists a point cloud and optional PCT tomogram with enough
 provenance metadata to prove both artifacts came from the same live mapping
@@ -438,7 +438,7 @@ def build_tomogram_artifact(
     slice_dh: float,
     ground_h: float,
 ) -> dict[str, Any]:
-    from global_planning.PCT_planner.tomography.scripts.build_tomogram import (
+    from global_planning.pct_planner.tomography.scripts.build_tomogram import (
         build_tomogram_from_pcd,
     )
 

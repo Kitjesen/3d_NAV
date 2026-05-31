@@ -1,4 +1,4 @@
-"""Profile and robot-preset tables for the LingTu CLI."""
+﻿"""Profile and robot-preset tables for the LingTu CLI."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def _resolve_tomogram() -> str:
 
     Priority:
       1. $NAV_MAP_DIR/active/tomogram.pickle  (user's real map, built via 'map build')
-      2. src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle  (sample)
+      2. src/global_planning/pct_planner/rsc/tomogram/building2_9.pickle  (sample)
 
     The fallback lets the nav profile start without a user-built map so PCT
     can be verified. In production the real map should be in place.
@@ -51,7 +51,7 @@ def _resolve_tomogram() -> str:
     _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sample = os.path.join(
         _repo,
-        "src", "global_planning", "PCT_planner",
+        "src", "global_planning", "pct_planner",
         "rsc", "tomogram", "building2_9.pickle",
     )
     return sample
@@ -189,7 +189,7 @@ PROFILES = {
         enable_semantic=True,
         enable_gateway=True,
         # WavefrontFrontierExplorer is provided by navigation() stack (via
-        # enable_frontier=True), not by exploration() stack — the latter is
+        # enable_frontier=True), not by exploration() stack 鈥?the latter is
         # TARE-only since 1c457f3. Keep exploration_backend="none" so we
         # don't try to spawn a TARE NativeModule on top of wavefront.
         enable_frontier=True,
@@ -209,7 +209,7 @@ PROFILES = {
         enable_native=False,
         enable_semantic=True,
         enable_gateway=True,
-        # Don't add wavefront explorer — TARE stack handles goal generation.
+        # Don't add wavefront explorer 鈥?TARE stack handles goal generation.
         enable_frontier=False,
         exploration_backend="tare",
         tare_scenario="forest",
@@ -221,7 +221,7 @@ PROFILES = {
         _default_robot="sim",
         llm="mock",
         planner="astar",
-        tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
+        tomogram="src/global_planning/pct_planner/rsc/tomogram/building2_9.pickle",
         # Simulation can safely exercise fallback behavior without changing
         # the hardware navigation profile.
         plan_safety_policy="fallback_astar",
@@ -279,7 +279,7 @@ PROFILES = {
         slam_profile="none",
         llm="mock",
         planner="astar",
-        tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
+        tomogram="src/global_planning/pct_planner/rsc/tomogram/building2_9.pickle",
         plan_safety_policy="fallback_astar",
         fallback_planner_name="astar",
         enable_semantic=True,
@@ -306,7 +306,7 @@ PROFILES = {
         slam_profile="none",
         llm="mock",
         planner="astar",
-        tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
+        tomogram="src/global_planning/pct_planner/rsc/tomogram/building2_9.pickle",
         plan_safety_policy="fallback_astar",
         fallback_planner_name="astar",
         enable_semantic=True,
@@ -383,7 +383,7 @@ PROFILES = {
         slam_profile="none",
         llm="mock",
         planner="astar",
-        scene_xml="sim/worlds/building_scene.xml",
+        scene_xml="sim/worlds/mujoco/building_scene.xml",
         plan_safety_policy="fallback_astar",
         fallback_planner_name="astar",
         enable_native=False,

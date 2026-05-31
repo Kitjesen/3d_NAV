@@ -54,14 +54,14 @@ _REAL_IMPORT = __builtins__.__import__ if hasattr(__builtins__, "__import__") el
 
 def _block_clip_import(name, *args, **kwargs):
     """Block the CLIP encoder import path; allow everything else."""
-    if name.startswith("semantic.perception.semantic_perception"):
+    if name.startswith("semantic.perception"):
         raise ImportError(f"blocked for test: {name}")
     return _REAL_IMPORT(name, *args, **kwargs)
 
 
 def _block_all_encoders_import(name, *args, **kwargs):
     """Block both CLIP and sentence-transformers imports."""
-    if name.startswith("semantic.perception.semantic_perception"):
+    if name.startswith("semantic.perception"):
         raise ImportError(f"blocked for test: {name}")
     if name == "sentence_transformers":
         raise ImportError("blocked for test: sentence_transformers")
@@ -69,7 +69,7 @@ def _block_all_encoders_import(name, *args, **kwargs):
 
 
 def _make_mobileclip_module(fail_load: bool = False):
-    mod = types.ModuleType("semantic.perception.semantic_perception.mobileclip_encoder")
+    mod = types.ModuleType("semantic.perception.mobileclip_encoder")
     mod.instances = []
 
     class FakeMobileCLIPEncoder:
@@ -95,7 +95,7 @@ def _make_mobileclip_module(fail_load: bool = False):
 
 
 def _make_clip_module():
-    mod = types.ModuleType("semantic.perception.semantic_perception.clip_encoder")
+    mod = types.ModuleType("semantic.perception.clip_encoder")
     mod.instances = []
 
     class FakeCLIPEncoder:
@@ -135,7 +135,7 @@ class TestVectorMemorySemanticEncoderSelection(unittest.TestCase):
         with patch.dict(
             sys.modules,
             {
-                "semantic.perception.semantic_perception.mobileclip_encoder": fake_mobileclip,
+                "semantic.perception.mobileclip_encoder": fake_mobileclip,
             },
         ):
             mod._init_encoder()
@@ -153,8 +153,8 @@ class TestVectorMemorySemanticEncoderSelection(unittest.TestCase):
         with patch.dict(
             sys.modules,
             {
-                "semantic.perception.semantic_perception.mobileclip_encoder": fake_mobileclip,
-                "semantic.perception.semantic_perception.clip_encoder": fake_clip,
+                "semantic.perception.mobileclip_encoder": fake_mobileclip,
+                "semantic.perception.clip_encoder": fake_clip,
             },
         ):
             mod._init_encoder()

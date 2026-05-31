@@ -1,9 +1,9 @@
-# Parameter Tuning Guide
+﻿# Parameter Tuning Guide
 
 Detailed tuning notes for the four performance-critical layers. The runtime entry is
 `python lingtu.py <profile>` (managed by `lingtu.service`); all parameters are read from
 `config/robot_config.yaml` at module start. There are no per-launch XML files in the current
-codebase — restart the service to pick up changes.
+codebase 鈥?restart the service to pick up changes.
 
 For a one-page cheat sheet see `docs/TUNING.md`. For symptom-based diagnostics see
 `TROUBLESHOOTING.md`.
@@ -129,12 +129,12 @@ terrain:
 
 Two backends registered in `core.registry` (`src/core/registry.py`):
 
-- **`astar`** — pure Python, `src/nav/global_planner_service.py`, default in
+- **`astar`** 鈥?pure Python, `src/nav/global_planner_service.py`, default in
   `stub`/`dev`/`s100p` profiles.
-- **`pct`** — C++ PCT planner (`ele_planner.so`), used by the `explore` profile and
+- **`pct`** 鈥?C++ PCT planner (`ele_planner.so`), used by the `explore` profile and
   selectable via `--planner pct`.
 
-PCT tuning: `src/global_planning/PCT_planner/config/params.yaml`.
+PCT tuning: `src/global_planning/pct_planner/config/params.yaml`.
 
 ```yaml
 w_traversability: 1.0
@@ -154,8 +154,8 @@ Off-road -> raise `w_traversability`. Smoother paths -> raise `w_smoothness`.
 ### Robot too slow
 
 1. Raise `path_follower.max_speed`.
-2. Verify `safety_ring_module` is not throttling — `lingtu log error | grep safety`.
-3. Check terrain analysis is publishing — `lingtu status` `[2] SLAM hz`.
+2. Verify `safety_ring_module` is not throttling 鈥?`lingtu log error | grep safety`.
+3. Check terrain analysis is publishing 鈥?`lingtu status` `[2] SLAM hz`.
 
 ### Robot cuts corners
 
@@ -173,9 +173,9 @@ Off-road -> raise `w_traversability`. Smoother paths -> raise `w_smoothness`.
 
 ### Global planner returns empty path
 
-1. Goal outside loaded map — check `lingtu status` `[1] Session map=`.
+1. Goal outside loaded map 鈥?check `lingtu status` `[1] Session map=`.
 2. Drop `w_traversability` (too picky on cost).
-3. Rebuild tomogram (`lingtu map save <name>` then `build_tomogram` POST — see
+3. Rebuild tomogram (`lingtu map save <name>` then `build_tomogram` POST 鈥?see
    `docs/04-deployment/lingtu_cli.md`).
 
 ---
@@ -235,6 +235,6 @@ Behavior:
 
 ## Related
 
-- `docs/TUNING.md` — one-page cheat sheet
-- `docs/03-development/TROUBLESHOOTING.md` — diagnostics
-- `docs/04-deployment/lingtu_cli.md` — `lingtu` operations CLI
+- `docs/TUNING.md` 鈥?one-page cheat sheet
+- `docs/03-development/TROUBLESHOOTING.md` 鈥?diagnostics
+- `docs/04-deployment/lingtu_cli.md` 鈥?`lingtu` operations CLI

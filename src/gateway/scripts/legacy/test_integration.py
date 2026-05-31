@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Integration test suite for remote_monitoring <-> navigation stack.
 
@@ -594,7 +594,7 @@ def _parse_json_stream(text):
 def _find_pcd_file():
     """Try to find an existing PCD file for relocalize test."""
     candidates = [
-        "/home/sunrise/data/SLAM/navigation/src/global_planning/PCT_planner/rsc/pcd",
+        "/home/sunrise/data/SLAM/navigation/src/global_planning/pct_planner/rsc/pcd",
         "/home/sunrise/data/maps",
         "/tmp",
     ]

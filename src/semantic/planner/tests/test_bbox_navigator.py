@@ -10,7 +10,7 @@ import time
 import numpy as np
 import pytest
 
-from semantic.planner.semantic_planner.bbox_navigator import (
+from semantic.planner.bbox_navigator import (
     STATE_ARRIVED,
     STATE_IDLE,
     STATE_LOST,

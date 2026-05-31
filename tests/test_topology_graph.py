@@ -326,7 +326,7 @@ class TestInformationGain:
         sys.path.insert(0, str(
             Path(__file__).resolve().parent.parent / "src" / "semantic_planner"
         ))
-        from semantic.planner.semantic_planner.semantic_prior import SemanticPriorEngine
+        from semantic.planner.semantic_prior import SemanticPriorEngine
         engine = SemanticPriorEngine()
 
         ig_with_engine = tsg.compute_information_gain(

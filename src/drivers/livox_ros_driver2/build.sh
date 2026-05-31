@@ -48,7 +48,7 @@ elif [ ${ROS_VERSION} = ${VERSION_ROS2} ]; then
         rm package.xml
     fi
     cp -f package_ROS2.xml package.xml
-    cp -rf launch_ROS2/ launch/
+    # launch/ already exists (was renamed from launch_ROS2)
 fi
 
 # build
