@@ -343,7 +343,7 @@ class Module:
             ))
         return infos
 
-    def call_rpc(self, method_name: str, **kwargs: Any):
+    def call_rpc(self, method_name: str, **kwargs: Any) -> Any:
         """Call an RPC method by name. Returns the method result."""
         rpcs = self.rpcs
         if method_name not in rpcs:

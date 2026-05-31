@@ -3,6 +3,11 @@
 Builds the sim_nav blueprint (StubDogModule + SimPointCloudProvider +
 OccupancyGridModule + NavigationModule A* + PathFollowerModule pid),
 sends a goal, and verifies the robot moves toward it.
+
+TODO: Replace time.sleep with threading.Event for costmap readiness
+      synchronization. SimPointCloudProvider publishes at 2Hz; the
+      costmap-arrived event can gate test progression.
+      The poll loop in test_robot_moves_toward_goal is acceptable.
 """
 
 from __future__ import annotations
@@ -68,7 +73,7 @@ class TestSimNavEndToEnd:
         og.costmap.subscribe(lambda c: costmaps.append(c))
 
         system.start()
-        time.sleep(1.5)
+        time.sleep(1.2)
         system.stop()
 
         assert len(costmaps) > 0, "No costmap produced by OccupancyGridModule"
@@ -89,7 +94,7 @@ class TestSimNavEndToEnd:
         nav.global_path.subscribe(lambda p: paths.append(p))
 
         system.start()
-        time.sleep(1.5)  # wait for costmap
+        time.sleep(1.2)  # wait for costmap
 
         # Inject goal directly into NavigationModule's In port
         from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
@@ -98,7 +103,7 @@ class TestSimNavEndToEnd:
             ts=time.time(), frame_id="map",
         )
         nav.goal_pose._deliver(goal)
-        time.sleep(2.0)  # allow planning
+        time.sleep(1.2)  # allow planning
         system.stop()
 
         assert len(paths) > 0, "No path planned — A* did not produce output"
@@ -118,7 +123,7 @@ class TestSimNavEndToEnd:
         drv.odometry.subscribe(lambda o: positions.append(np.array([o.x, o.y])))
 
         system.start()
-        time.sleep(1.5)
+        time.sleep(1.2)
 
         from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
         goal = PoseStamped(

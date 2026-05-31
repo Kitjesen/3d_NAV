@@ -27,7 +27,7 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Set, Type
+from typing import Any, Callable, Dict, List, Optional, Set, Type
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ def register(
     priority: int = 0,
     platforms: set[str] | None = None,
     description: str = "",
-):
+) -> Callable[[type], type]:
     """Decorator: register a class under category/name.
 
     Args:
@@ -106,7 +106,7 @@ def get_metadata(category: str, name: str) -> dict[str, Any]:
     return {}
 
 
-def clear():
+def clear() -> None:
     """Clear all registrations (for testing only)."""
     _registry.clear()
 

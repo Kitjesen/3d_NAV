@@ -1,4 +1,9 @@
-"""Full integration verification — 36 tests across all new modules."""
+"""Full integration verification — 36 tests across all new modules.
+
+TODO: Replace time.sleep with threading.Event for module output
+      synchronization. Many sleeps wait for module threads to produce
+      results; using Events would be faster and more deterministic.
+"""
 import io
 import logging
 import os
@@ -180,7 +185,7 @@ bp = full_stack_blueprint(robot="stub", slam_profile="none",
                           enable_native=False, enable_semantic=True, enable_gateway=True)
 system = bp.build()
 system.start()
-time.sleep(0.3)
+time.sleep(0.1)
 
 planner = system.modules["SemanticPlannerModule"]
 nav = system.modules["NavigationModule"]
@@ -190,7 +195,7 @@ conns = system.connections
 # 21
 planner.scene_graph._deliver(SceneGraph(objects=[Detection3D(id="1", label="x")],
     regions=[Region(name="r", object_ids=["1"], center=Vector3(0, 0, 0))]))
-time.sleep(0.1)
+time.sleep(0.05)
 T("21.SG delivered", planner.scene_graph.msg_count > 0)
 
 # 22
@@ -215,10 +220,10 @@ for mod in system.modules.values():
 chair = Detection3D(id="c", label="chair", confidence=0.9)
 chair.position = Vector3(8, 2, 0)
 planner.scene_graph._deliver(SceneGraph(objects=[chair]))
-time.sleep(0.15)
+time.sleep(0.08)
 prev = nav.goal_pose.msg_count
 planner.instruction._deliver("go to the chair")
-time.sleep(0.3)
+time.sleep(0.1)
 T("26.FastPath->Nav", nav.goal_pose.msg_count - prev > 0)
 
 # 27 Vector Memory
@@ -226,7 +231,7 @@ vmem2._robot_xy = (20, 10)
 vmem2._store_snapshot(["fire extinguisher", "hose"])
 prev = nav.goal_pose.msg_count
 planner.instruction._deliver("find fire extinguisher")
-time.sleep(0.3)
+time.sleep(0.1)
 T(
     "27.VectorMem->Nav",
     nav.goal_pose.msg_count - prev > 0
@@ -274,11 +279,11 @@ from nav.waypoint_tracker import EV_STUCK, EV_STUCK_WARN, WaypointTracker
 
 wt = WaypointTracker(stuck_timeout=0.05, stuck_dist=0.01)
 wt.reset([np.array([5, 5, 0]), np.array([10, 10, 0])], np.array([0, 0, 0]))
-time.sleep(0.06)
+time.sleep(0.04)
 s = wt.update(np.array([0.0, 0.0, 0.0]))
 got_stuck = s.event in (EV_STUCK, EV_STUCK_WARN)
 if not got_stuck:
-    time.sleep(0.06)
+    time.sleep(0.04)
     s = wt.update(np.array([0.0, 0.0, 0.0]))
     got_stuck = s.event in (EV_STUCK, EV_STUCK_WARN)
 T("36.WaypointTracker stuck", got_stuck)

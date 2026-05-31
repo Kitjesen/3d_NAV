@@ -78,7 +78,21 @@ class GlobalPlannerService:
         goal: np.ndarray,
         safe_goal_tolerance: float = 4.0,
     ) -> tuple[list[np.ndarray], float]:
-        """Plan a path from start to goal.
+        """Plan a path from start to goal — multi-stage with safety fallbacks.
+
+        Algorithm flow:
+          1. Input validation     — backend readiness + map artifact gate
+          2. Goal safety check    — BFS nearest free cell within safe_goal_tolerance
+          3. Primary planning     — call the configured backend (PCT / A*)
+          4. Empty path recovery  — if the primary returned no path, try safe replan
+                                    to a nearby reachable cell
+          5. Path safety eval     — if non-empty, evaluate against live obstacles;
+                                    on failure either replan to a nearby goal
+                                    (_try_primary_safe_replan) or take the safe
+                                    prefix of the original path (_try_primary_safe_prefix)
+          6. Fallback planner     — if safety still fails, try fallback backend
+                                    (policy: reject / observe / fallback_astar)
+          7. Downsample + return  — thin waypoints to minimum spacing, log stats
 
         If the goal lands on an obstacle, BFS-searches the nearest free cell
         within safe_goal_tolerance meters (reference: dimos _find_safe_goal).
@@ -109,6 +123,7 @@ class GlobalPlannerService:
             }
             raise RuntimeError(f"GlobalPlannerService: {reason}")
 
+        # --- Phase 2: Goal safety adjustment (BFS nearest free cell) ---
         requested_goal = np.asarray(goal[:3], dtype=float).copy()
 
         # Goal safety: if backend exposes a costmap, verify goal is in free space
@@ -147,6 +162,7 @@ class GlobalPlannerService:
             }
             raise RuntimeError(f"GlobalPlannerService: {reason}")
 
+        # --- Phase 3: Primary planning ---
         raw_path, plan_ms = self._plan_with_backend(self._backend, start, goal)
 
         selected_backend = self._backend
@@ -158,6 +174,7 @@ class GlobalPlannerService:
         rejected_plans: list[dict[str, Any]] = []
         primary_replan: dict[str, Any] | None = None
         fallback_reason = ""
+        # --- Phase 4: Empty path recovery (replan to nearby safe goal) ---
         if not raw_path:
             backend_plan_error = str(
                 getattr(self._backend, "_last_plan_error", "") or ""
@@ -232,6 +249,7 @@ class GlobalPlannerService:
                 repaired_goal[1],
                 repaired_goal[2],
             )
+        # --- Phase 5: Path safety evaluation + repair ---
         else:
             selected_safety = self._evaluate_path_safety(selected_backend, selected_path)
         if selected_safety is not None and not selected_safety.get("ok", True):
@@ -312,6 +330,7 @@ class GlobalPlannerService:
                             repaired_goal[2],
                         )
 
+        # --- Phase 6: Fallback planner decision ---
         if fallback_reason:
             if self._plan_safety_policy == "reject":
                 self._last_plan_report = {
@@ -373,6 +392,7 @@ class GlobalPlannerService:
             elif self._plan_safety_policy == "observe":
                 logger.warning("GlobalPlannerService: %s", fallback_reason)
 
+        # --- Phase 7: Downsample and return ---
         downsample_goal = goal
         if not selected_reached_goal and selected_path:
             endpoint = np.array(selected_path[-1][:3], dtype=float)
@@ -652,10 +672,20 @@ class GlobalPlannerService:
     ) -> tuple[np.ndarray, list, float, dict[str, Any], bool, dict[str, Any]] | None:
         """Retry the primary planner to a nearby goal when live safety rejects a path.
 
+        Algorithm flow:
+          1. Grid validation       — extract costmap grid, resolution, origin
+          2. Helper closures       — is_clear, world_to_cell, reachable_component BFS
+          3. Seed goal preparation — deduplicate alternate goals
+          4. Candidate generation  — spiral outward from seed goals + line_back
+                                    interpolation + reachable component sweeping
+          5. Plan + safety check   — for each candidate, call backend.plan() then
+                                    evaluate_backend_path_safety; return first safe path
+
         This keeps PCT as the selected planner for exploration targets that are
         close to an obstacle edge. A* fallback remains the last resort when the
         primary planner cannot find any path-safe nearby goal.
         """
+        # --- Phase 1: Grid validation and param extraction ---
         grid = getattr(backend, "_grid", None)
         resolution = float(getattr(backend, "_resolution", 0.2))
         origin = getattr(backend, "_origin", None)
@@ -701,6 +731,7 @@ class GlobalPlannerService:
                 int(round((float(world[1]) - oy) / resolution)),
             )
 
+        # --- Phase 2: Candidate generation (line_back + nearby_ring + reachable_component) ---
         candidate_cells: list[tuple[float, int, int, str]] = []
         seen_cells: set[tuple[int, int]] = set()
 
@@ -836,6 +867,7 @@ class GlobalPlannerService:
             for score, cx, cy in component_ranked[:remaining]:
                 add_candidate(score, cx, cy, "reachable_component")
 
+        # --- Phase 3: Candidate evaluation — plan + safety-check each ---
         candidate_cells.sort(key=lambda item: item[0])
         for _score, cx, cy, source in candidate_cells[:max_candidates]:
             candidates_checked += 1

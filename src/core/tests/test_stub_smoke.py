@@ -7,6 +7,10 @@ Builds the stub blueprint (no SLAM, no semantic, no gateway) and verifies:
   4. Odometry flows from driver to navigation
   5. Safety stop_cmd reaches driver and navigation
   6. Goal injection produces a mission status change
+
+TODO: Replace time.sleep with threading.Event for module output
+      synchronization. Module start/stop and data flow assertions
+      can use subscriber callbacks with Events instead of fixed waits.
 """
 
 from __future__ import annotations
@@ -53,7 +57,7 @@ class TestStubSmoke(unittest.TestCase):
         bp = _build_stub()
         system = bp.build()
         system.start()
-        time.sleep(0.1)
+        time.sleep(0.05)
         system.stop()
 
     def test_odometry_flows_to_navigation(self):
@@ -73,7 +77,7 @@ class TestStubSmoke(unittest.TestCase):
         nav.odometry.subscribe(_capture_odom)
 
         system.start()
-        time.sleep(0.3)  # stub driver publishes odom at ~10Hz
+        time.sleep(0.1)  # stub driver publishes odom at ~10Hz
         system.stop()
 
         self.assertGreater(len(odom_received), 0,
@@ -90,13 +94,13 @@ class TestStubSmoke(unittest.TestCase):
             drv.stop_signal.subscribe(lambda msg: stops.append(msg))
 
         system.start()
-        time.sleep(0.05)
+        time.sleep(0.03)
 
         # Inject a stop command
         safety = system.get_module("SafetyRingModule")
         safety.stop_cmd.publish(2)  # STOP level
 
-        time.sleep(0.05)
+        time.sleep(0.03)
         system.stop()
 
         self.assertGreater(len(stops), 0,
@@ -112,7 +116,7 @@ class TestStubSmoke(unittest.TestCase):
         nav.mission_status.subscribe(lambda s: statuses.append(s))
 
         system.start()
-        time.sleep(0.15)  # let odom arrive
+        time.sleep(0.08)  # let odom arrive
 
         from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
         goal = PoseStamped(
@@ -121,7 +125,7 @@ class TestStubSmoke(unittest.TestCase):
             ts=time.time(), frame_id="map",
         )
         nav.goal_pose._deliver(goal)
-        time.sleep(0.3)
+        time.sleep(0.1)
         system.stop()
 
         self.assertGreater(len(statuses), 0,
@@ -132,7 +136,7 @@ class TestStubSmoke(unittest.TestCase):
         bp = _build_stub()
         system = bp.build()
         system.start()
-        time.sleep(0.05)
+        time.sleep(0.03)
 
         for name, mod in system._modules.items():
             if hasattr(mod, "health"):

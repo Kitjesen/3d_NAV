@@ -1,6 +1,10 @@
 """Tests for NativeModule — subprocess lifecycle management.
 
 Uses mock subprocess to avoid needing real C++ binaries.
+
+TODO: Replace time.sleep with threading.Event for watchdog detection
+      synchronization. The watchdog periodic check can use an Event
+      fired on process status change instead of fixed waits.
 """
 
 import os
@@ -138,7 +142,7 @@ class TestNativeModuleLifecycle(unittest.TestCase):
         mod._shutdown_event.set()
         mod._process = proc
         proc.poll.return_value = 0
-        time.sleep(0.1)
+        time.sleep(0.05)
         mod.stop()
 
     @patch("core.native_module.subprocess.Popen")
@@ -196,12 +200,12 @@ class TestNativeModuleLifecycle(unittest.TestCase):
         # Simulate crash
         proc.poll.return_value = 1
         proc.returncode = 1
-        time.sleep(0.15)  # let watchdog detect
+        time.sleep(0.08)  # let watchdog detect
 
         # Should have published False
         self.assertIn(False, alive_values)
         mod._shutdown_event.set()
-        time.sleep(0.1)
+        time.sleep(0.05)
 
     @patch("core.native_module.subprocess.Popen")
     def test_watchdog_auto_restart(self, mock_popen):

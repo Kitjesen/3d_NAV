@@ -2405,9 +2405,42 @@ class SlamBridgeModule(Module, layer=1):
     # Localization health watchdog.
 
     def _watchdog_loop(self) -> None:
-        """Periodic localization health check."""
+        """Periodic localization health check with automatic recovery.
+
+        Runs at self._watchdog_hz Hz. Each cycle evaluates 11 phases:
+
+        Phase  1 — Sample timestamps and compute effective timeouts
+        Phase  2 — Localization state machine
+                  UNINIT (no data) -> LOST (odom timeout) -> DEGRADED (cloud
+                  timeout or CRITICAL degeneracy) -> TRACKING (healthy)
+        Phase  3 — Promote sustained DEGRADED to FALLBACK_GNSS_ONLY when GNSS
+                  is healthy (Navigation runs cautiously)
+        Phase  4 — Degeneracy-based confidence adjustment (SEVERE/CRITICAL
+                  degrades trust; visual odom fusion can boost it back)
+        Phase  5 — Assemble localization_status dict fields
+        Phase  6 — Log state transitions, track recovery, reset counters
+                  on recovery to TRACKING
+        Phase  7 — Detect completion of localizer odom-loss recovery when
+                  fresh odometry arrives
+        Phase  8 — Trigger localizer chain restart if odometry has been
+                  absent while localizer health says LOCKED/RECOVERED
+        Phase  9 — Auto-reconnect DDS/rclpy reader when LOST exceeds
+                  reconnect_timeout (exponential backoff)
+        Phase 10 — Gate pose_fresh and auto_resume_blocked flags while
+                  recovery is in-flight
+        Phase 11 — Publish localization_status dict and update scene_mode
+                  detector (indoor/outdoor) when GNSS is silent
+
+        Recovery triggers:
+        - Drift divergence (LOC_DIVERGED): auto-relocalize via ROS2 service
+          call or systemctl restart slam
+        - Localizer odom loss: restart Fast-LIO2 + localizer chain via
+          service_manager (preferred) or systemctl (fallback)
+        - Prolonged LOST: stop + recreate DDS/rclpy reader with backoff
+        """
         interval = 1.0 / self._watchdog_hz
         while not self._shutdown_event.is_set():
+            # --- Phase 1: Sample timestamps and compute effective timeouts ---
             now = _time.time()
             now_mono = _time.monotonic()
             odom_age = self._odom_age_s(mono_now=now_mono)
@@ -2421,6 +2454,7 @@ class SlamBridgeModule(Module, layer=1):
                 localizer_health_grace=localizer_health_grace
             )
 
+            # --- Phase 2: Localization state machine ---
             if self._loc_state == LOC_DIVERGED:
                 # Drift guard set this — keep it until drift clears
                 new_state = LOC_DIVERGED
@@ -2441,10 +2475,10 @@ class SlamBridgeModule(Module, layer=1):
                 new_state = LOC_TRACKING
                 confidence = max(0.0, 1.0 - odom_age / effective_odom_timeout)
 
-            # Promote sustained DEGRADED to FALLBACK_GNSS_ONLY when GNSS is
-            # healthy. Today this only changes the published state so
-            # NavigationModule can run cautiously; the GNSS+IMU dead-reckoning
-            # takeover lands in S2.5 once fault-injection tooling exists.
+            # --- Phase 3: Promote sustained DEGRADED to FALLBACK_GNSS_ONLY ---
+            # Today this only changes the published state so NavigationModule
+            # can run cautiously; the GNSS+IMU dead-reckoning takeover lands
+            # in S2.5 once fault-injection tooling exists.
             if new_state == LOC_DEGRADED:
                 if self._degraded_since == 0.0:
                     self._degraded_since = now
@@ -2455,8 +2489,7 @@ class SlamBridgeModule(Module, layer=1):
             else:
                 self._degraded_since = 0.0
 
-            # Reduce confidence based on degeneracy
-            # Boost confidence when visual fusion is active
+            # --- Phase 4: Degeneracy-based confidence adjustment + GNSS backstop ---
             visual_active = (self._last_visual_odom is not None
                              and self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL))
             if self._degen_level == DEGEN_SEVERE:
@@ -2468,6 +2501,7 @@ class SlamBridgeModule(Module, layer=1):
                     # Visual fusion compensates for CRITICAL — upgrade to DEGRADED not LOST
                     confidence = max(confidence, 0.3)
 
+            # --- Phase 5: Assemble localization status fields ---
             health_source = (
                 "localizer_health_topic"
                 if localizer_topic_fresh
@@ -2512,6 +2546,7 @@ class SlamBridgeModule(Module, layer=1):
                 else None
             )
 
+            # --- Phase 6: State transition logging and recovery tracking ---
             if new_state != self._loc_state:
                 if new_state == LOC_LOST:
                     logger.warning("Localization LOST: no odometry for %.1fs", odom_age)
@@ -2547,6 +2582,7 @@ class SlamBridgeModule(Module, layer=1):
                     )
                 self._loc_state = new_state
 
+            # --- Phase 7: Check if recovery completed (fresh odometry back) ---
             if (
                 self._last_recovery_signal
                 == LOCALIZER_ODOM_LOSS_RECOVERY_SIGNAL
@@ -2566,6 +2602,7 @@ class SlamBridgeModule(Module, layer=1):
                     "unsupported" if not relocalization_supported else "idle"
                 )
 
+            # --- Phase 8: Trigger localizer odom-loss recovery if due ---
             if self._localizer_odom_loss_recovery_due(
                 backend=str(contract["backend"]),
                 localizer_topic_fresh=localizer_topic_fresh,
@@ -2582,13 +2619,14 @@ class SlamBridgeModule(Module, layer=1):
                 )
                 self._start_localizer_odom_loss_recovery(now=now)
 
-            # Auto-recovery: reconnect DDS/rclpy if LOST for too long
+            # --- Phase 9: Auto-reconnect DDS/rclpy for prolonged LOST ---
             if (new_state == LOC_LOST
                     and odom_age > self._reconnect_timeout
                     and not self._localizer_odom_loss_recovery_inflight
                     and self._reconnect_count < self._max_reconnects):
                 self._attempt_reconnect()
 
+            # --- Phase 10: Gate pose freshness and auto-resume ---
             odom_loss_recovery_waiting_new_odom = (
                 self._localizer_odom_loss_recovery_waiting_new_odom
             )
@@ -2606,6 +2644,7 @@ class SlamBridgeModule(Module, layer=1):
                 and not odom_loss_recovery_waiting_new_odom
             )
 
+            # --- Phase 11: Publish status and update scene mode ---
             self.localization_status.publish({
                 **self._backend_health_fields(contract=contract),
                 "state": self._loc_state,

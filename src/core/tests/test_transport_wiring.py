@@ -95,8 +95,8 @@ class TestSHMTransportWiring(unittest.TestCase):
         cons = handle.get_module("Consumer")
 
         prod.data.publish(123)
-        # SHM: subscriber retries attach + polling delay
-        time.sleep(0.3)
+        # SHM: subscriber retries attach + polling delay (poll_interval=0.002s)
+        time.sleep(0.1)
         self.assertEqual(cons.data.latest, 123)
         handle.stop()
 

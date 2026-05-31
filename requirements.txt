@@ -32,6 +32,7 @@ scikit-learn>=1.0
 
 # LLM
 openai>=1.0
+anthropic
 
 # NLP
 jieba>=0.42

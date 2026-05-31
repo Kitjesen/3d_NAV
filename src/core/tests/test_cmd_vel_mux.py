@@ -80,7 +80,7 @@ class TestCmdVelMux(unittest.TestCase):
         mux._on_source("teleop", _twist(0.5))
         self.assertEqual(mux._active, "teleop")
 
-        time.sleep(0.15)  # teleop times out
+        time.sleep(0.1)  # teleop times out (release_timeout=0.05)
 
         # Path follower publishes
         published = []
@@ -252,7 +252,7 @@ class TestTeleopModule(unittest.TestCase):
 
         tm._on_joy({"lx": 0.3})
         self.assertTrue(tm._active)
-        time.sleep(0.3)  # > release_timeout (0.2)
+        time.sleep(0.25)  # > release_timeout (0.2)
         # Simulate idle check (normally runs in background thread)
         if (tm._active
                 and time.monotonic() - tm._last_joy_time > tm._release_timeout):
