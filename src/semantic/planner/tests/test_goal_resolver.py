@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_goal_resolver.py — 目标解析器单元测试
 
 注: LLM 调用使用 mock, 不发起真实 API 请求。

@@ -1,4 +1,4 @@
-﻿"""Tests for FrontierModule, TopologicalMemoryModule, EpisodicMemoryModule,
+"""Tests for FrontierModule, TopologicalMemoryModule, EpisodicMemoryModule,
 TaggedLocationsModule -- frontier exploration and memory Module conversions.
 """
 

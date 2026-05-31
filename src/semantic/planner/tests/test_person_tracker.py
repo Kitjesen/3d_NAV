@@ -1,4 +1,4 @@
-﻿"""PersonTracker 单元测试。"""
+"""PersonTracker 单元测试。"""
 import math
 import time
 

@@ -1,4 +1,4 @@
-﻿"""
+"""
 YOLO-World检测器单元测试 (与实际 yolo_world_detector.py API 对齐)
 
 测试内容:

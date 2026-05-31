@@ -1,4 +1,4 @@
-﻿"""Tests for 7 new unified modules — NavigationModule, SafetyRingModule,
+"""Tests for 7 new unified modules — NavigationModule, SafetyRingModule,
 AutonomyModule, GatewayModule, MCPServerModule, RerunModule, SemanticPlannerModule.
 
 All external deps mocked. No GPU/FastAPI/Rerun/C++ required.

@@ -1,4 +1,4 @@
-﻿"""
+"""
 sanitize.py — NaN 清理 / JSON 安全序列化
 
 Canonical location: core.utils.sanitize

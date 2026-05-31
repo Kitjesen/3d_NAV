@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_knowledge_graph.py — 工业知识图谱单元测试
 
 覆盖:

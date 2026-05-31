@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_semantic_prior.py — SemanticPriorEngine 单元测试
 
 覆盖:

@@ -1,4 +1,4 @@
-﻿"""
+"""
 robustness.py — 超时 / 重试 / GPU 安全装饰器
 
 Canonical location: core.utils.robustness

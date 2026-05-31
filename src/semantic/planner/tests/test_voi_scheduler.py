@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_voi_scheduler.py — VoIScheduler 单元测试 (Shannon 信息论版本)
 
 覆盖:

@@ -1,4 +1,4 @@
-﻿"""Planner backends: A* (dev/sim fallback) and native PCT.
+"""Planner backends: A* (dev/sim fallback) and native PCT.
 
 FROZEN: this module is stable and should not need changes.
 New planner backends (e.g. RRT*) should be registered in separate files

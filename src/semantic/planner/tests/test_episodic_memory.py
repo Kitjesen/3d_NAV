@@ -1,4 +1,4 @@
-﻿"""测试 EpisodicMemory"""
+"""测试 EpisodicMemory"""
 import time
 
 import numpy as np

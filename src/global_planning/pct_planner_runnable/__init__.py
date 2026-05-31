@@ -1,4 +1,4 @@
-﻿"""Runnable PCT adapter package.
+"""Runnable PCT adapter package.
 
 This package intentionally sits next to the original pct_planner checkout.
 It does not fork planner code; it only prepares the Python/native runtime so

@@ -1,4 +1,4 @@
-﻿"""
+"""
 CLIP编码器单元测试 (与实际 clip_encoder.py API 对齐)
 
 测试内容:

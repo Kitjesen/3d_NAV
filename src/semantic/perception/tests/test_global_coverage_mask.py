@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_global_coverage_mask.py — GlobalCoverageMask 单元测试
 
 覆盖:

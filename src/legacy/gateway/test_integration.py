@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Integration test suite for remote_monitoring <-> navigation stack.
 

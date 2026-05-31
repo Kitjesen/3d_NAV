@@ -1,4 +1,4 @@
-﻿"""Runtime loader for the original PCT planner.
+"""Runtime loader for the original PCT planner.
 
 The original wrapper imports native modules with ``from lib import ...``.
 That works on S100P when the extension modules live directly under

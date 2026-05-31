@@ -1,4 +1,4 @@
-﻿"""test_mcp_server.py — MCPServerModule unit tests (Module-First / @skill dispatch)
+"""test_mcp_server.py — MCPServerModule unit tests (Module-First / @skill dispatch)
 
 Coverage
 --------

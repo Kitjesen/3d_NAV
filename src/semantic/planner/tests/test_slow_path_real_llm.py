@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_slow_path_real_llm.py — Slow Path真实LLM测试
 
 目标:

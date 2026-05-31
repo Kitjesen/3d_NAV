@@ -1,4 +1,4 @@
-﻿"""VLM BBox Query 单元测试 — JSON 解析容错。
+"""VLM BBox Query 单元测试 — JSON 解析容错。
 不依赖 ROS2，不需要网络/LLM，纯 Python 可运行。
 
 运行:

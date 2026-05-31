@@ -1,4 +1,4 @@
-﻿"""VoI 调度策略对比实验 — FixedInterval vs OldVoI vs NewVoI (Shannon 熵)。
+"""VoI 调度策略对比实验 — FixedInterval vs OldVoI vs NewVoI (Shannon 熵)。
 
 模拟 50 步导航场景，对比三种策略的触发效率。
 PYTHONPATH: src/semantic_planner

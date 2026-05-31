@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_frontier_scorer.py — Frontier 评分器单元测试
 
 覆盖:

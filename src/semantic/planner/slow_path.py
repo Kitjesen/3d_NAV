@@ -1,4 +1,4 @@
-﻿"""
+"""
 slow_path.py — Slow Path (System 2) LLM 推理 Mixin。
 
 从 goal_resolver.py 提取，GoalResolver 通过多继承使用:

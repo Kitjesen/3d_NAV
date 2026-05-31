@@ -1,4 +1,4 @@
-﻿"""ActionExecutorModule -- action execution as independent Module.
+"""ActionExecutorModule -- action execution as independent Module.
 
 Wraps ActionExecutor into lingtu.core.Module with In/Out ports.
 Converts GoalResult into PoseStamped (goal_pose) or Twist (cmd_vel).

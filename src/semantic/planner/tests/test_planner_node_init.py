@@ -1,4 +1,4 @@
-﻿"""test_planner_node_init.py — SemanticPlannerModule init and port regression tests
+"""test_planner_node_init.py — SemanticPlannerModule init and port regression tests
 
 The original test_planner_node_init.py tested the deleted ROS2 SemanticPlannerNode.
 This file has been rewritten to test the Module-First SemanticPlannerModule.

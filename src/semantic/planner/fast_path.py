@@ -1,4 +1,4 @@
-﻿"""
+"""
 fast_path.py — Fast Path (System 1) 目标解析 Mixin。
 
 从 goal_resolver.py 提取，GoalResolver 通过多继承使用:

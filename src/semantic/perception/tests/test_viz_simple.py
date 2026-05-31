@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 简化的可视化工具测试 - 验证核心功能
 """

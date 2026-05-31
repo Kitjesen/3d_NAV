@@ -1,4 +1,4 @@
-﻿"""MapManagerModule -- hive Module version of MapManager.
+"""MapManagerModule -- hive Module version of MapManager.
 
 Manages map listing/saving/deleting/renaming/activation and POI CRUD.
 

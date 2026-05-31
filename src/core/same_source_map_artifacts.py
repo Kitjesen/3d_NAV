@@ -1,4 +1,4 @@
-﻿"""Same-source map artifact writer shared by simulation and map services.
+"""Same-source map artifact writer shared by simulation and map services.
 
 The writer persists a point cloud and optional PCT tomogram with enough
 provenance metadata to prove both artifacts came from the same live mapping

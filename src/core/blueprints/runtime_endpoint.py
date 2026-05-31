@@ -1,4 +1,4 @@
-﻿"""Runtime endpoint definitions for Dimos-style task/connection split.
+"""Runtime endpoint definitions for Dimos-style task/connection split.
 
 Profiles describe what LingTu should do: map, navigate, explore, or run TARE.
 Runtime endpoints describe where sensor/state data and command sinks come from:

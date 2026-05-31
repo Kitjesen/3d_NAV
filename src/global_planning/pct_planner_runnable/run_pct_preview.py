@@ -1,4 +1,4 @@
-﻿"""CLI smoke test for the original PCT planner runtime.
+"""CLI smoke test for the original PCT planner runtime.
 
 Example:
     python -m global_planning.pct_planner_runnable.run_pct_preview \

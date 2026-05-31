@@ -1,4 +1,4 @@
-﻿"""GoalResolverModule -- Fast-Slow goal resolution as independent Module.
+"""GoalResolverModule -- Fast-Slow goal resolution as independent Module.
 
 Wraps GoalResolver (mixin-based) into lingtu.core.Module with In/Out ports.
 Does NOT rewrite GoalResolver logic -- imports and delegates to goal_resolver.py.

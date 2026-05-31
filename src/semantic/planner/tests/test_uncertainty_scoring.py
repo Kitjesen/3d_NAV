@@ -1,4 +1,4 @@
-﻿"""语义不确定性驱动 frontier 评分测试。
+"""语义不确定性驱动 frontier 评分测试。
 
 验证:
 1. 高 entropy 方向的 frontier 得分更高

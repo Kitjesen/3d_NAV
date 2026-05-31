@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """S100P full pipeline test: MuJoCo + terrain_core + PCT/A* + navigation.
 
 Run on S100P:

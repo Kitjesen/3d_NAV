@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_fast_slow_efficiency.py — Fast-Slow 双进程推理效率量化
 
 量化指标 (论文 Table 用):

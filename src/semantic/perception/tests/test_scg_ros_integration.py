@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 SCG ROS2 集成测试 — 纯 Python，无需 ROS2 运行时。
 

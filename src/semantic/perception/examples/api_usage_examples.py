@@ -1,4 +1,4 @@
-﻿"""
+"""
 Semantic Perception API - 使用示例
 
 展示如何使用新的API接口

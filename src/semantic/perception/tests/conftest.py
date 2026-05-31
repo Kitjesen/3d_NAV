@@ -1,4 +1,4 @@
-﻿"""
+"""
 conftest.py — semantic_perception 测试共享夹具
 
 提供:

@@ -1,4 +1,4 @@
-﻿"""SLAM 鈥?build maps, localize, get odometry."""
+"""SLAM 鈥?build maps, localize, get odometry."""
 
 from __future__ import annotations
 

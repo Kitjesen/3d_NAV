@@ -1,4 +1,4 @@
-﻿"""
+"""
 validation.py — 图像 / 深度 / 内参 / 四元数校验器
 
 Canonical location: core.utils.validation

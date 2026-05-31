@@ -1,4 +1,4 @@
-﻿"""
+"""
 conftest.py — shared fixtures for semantic_planner tests
 
 Provides:

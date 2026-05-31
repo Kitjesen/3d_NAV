@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_fast_slow_benchmark.py \u2014 Fast-Slow \u53cc\u8fdb\u7a0b\u8bda\u5b9e\u6027\u80fd\u57fa\u51c6\u6d4b\u8bd5
 
 \u6838\u5fc3\u539f\u5219:

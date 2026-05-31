@@ -1,4 +1,4 @@
-﻿"""Scene graph data types — shared between semantic/ and memory/.
+"""Scene graph data types — shared between semantic/ and memory/.
 
 Pure data classes + constants. No algorithm logic, no external dependencies.
 Extracted from semantic/perception/tracked_objects.py for cross-module sharing.

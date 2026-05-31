@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_task_decomposer.py — 任务分解器单元测试
 
 覆盖:

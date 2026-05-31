@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Intent Parsing 全覆盖测试 — 验证 task_decomposer 的意图识别和槽位提取。
 

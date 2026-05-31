@@ -1,4 +1,4 @@
-﻿"""
+"""
 Frontier 数据类型 + 常量 + 纯函数辅助 — 供 frontier_scorer.py 和其他模块共享。
 
 从 frontier_scorer.py 中提取, 保持向后兼容。

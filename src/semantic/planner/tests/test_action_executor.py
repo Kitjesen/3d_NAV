@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_action_executor.py — 动作执行器单元测试
 
 覆盖:

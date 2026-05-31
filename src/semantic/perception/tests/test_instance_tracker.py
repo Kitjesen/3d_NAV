@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_instance_tracker.py — 实例追踪器单元测试
 
 覆盖:

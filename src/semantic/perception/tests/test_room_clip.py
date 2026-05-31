@@ -1,4 +1,4 @@
-﻿"""OneMap Room 级 CLIP 特征聚合测试。
+"""OneMap Room 级 CLIP 特征聚合测试。
 
 验证:
 1. compute_rooms 正确聚合物体 CLIP 特征到 RoomNode

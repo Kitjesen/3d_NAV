@@ -1,4 +1,4 @@
-﻿"""测试 InstanceTracker 增量更新功能 (DovSG 局部更新)。
+"""测试 InstanceTracker 增量更新功能 (DovSG 局部更新)。
 
 覆盖:
   - update_local(): 只处理 robot_pos 附近 update_radius 范围内的物体

@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_sgnav_reasoner.py — SG-Nav 对齐推理器测试
 """
 

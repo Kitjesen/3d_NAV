@@ -1,4 +1,4 @@
-﻿"""Tests for semantic planner Module conversions.
+"""Tests for semantic planner Module conversions.
 
 Covers:
 - GoalResolverModule: instruction + scene graph -> GoalResult (offline mode)

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 并行对比测试框架 — 在相同场景下对比三套路径规划器。
 

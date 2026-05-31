@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_llm_client_async.py — LLM 客户端异步调用回归测试 (Round 14)
 
 验证 asyncio 事件循环使用的正确性，防止 DeprecationWarning 和死锁。

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 全局覆盖掩码 (GCM) 测试脚本
 

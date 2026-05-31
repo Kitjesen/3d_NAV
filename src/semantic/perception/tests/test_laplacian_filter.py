@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_laplacian_filter.py — Laplacian 模糊检测单元测试
 """
 

@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 
 def test_pct_planner_cmake_installs_existing_legacy_scripts() -> None:

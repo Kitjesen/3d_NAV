@@ -1,4 +1,4 @@
-﻿"""TaskDecomposerModule -- task decomposition as independent Module.
+"""TaskDecomposerModule -- task decomposition as independent Module.
 
 Wraps TaskDecomposer into lingtu.core.Module with In/Out ports.
 Uses decompose_with_rules() for offline rule-based decomposition.

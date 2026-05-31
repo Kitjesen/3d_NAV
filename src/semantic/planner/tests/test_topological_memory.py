@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_topological_memory.py — 拓扑记忆单元测试
 
 覆盖:

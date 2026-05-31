@@ -1,4 +1,4 @@
-﻿"""
+"""
 Frontier 评分探索 — 统一目标 Grounding 与 Frontier 选择。
 
 参考论文:
