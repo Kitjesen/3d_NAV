@@ -116,10 +116,12 @@ class Vector3:
     # -- vector math ---------------------------------------------------------
 
     def dot(self, other: Any) -> float:
+        """Dot product with another vector."""
         o = _to_vec3(other)
         return self.x * o.x + self.y * o.y + self.z * o.z
 
     def cross(self, other: Any) -> Vector3:
+        """Cross product with another vector."""
         o = _to_vec3(other)
         return Vector3(
             self.y * o.z - self.z * o.y,
@@ -128,18 +130,22 @@ class Vector3:
         )
 
     def length(self) -> float:
+        """Euclidean norm (L2 norm)."""
         return math.sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
 
     def length_squared(self) -> float:
+        """Squared Euclidean norm (avoids sqrt)."""
         return self.x * self.x + self.y * self.y + self.z * self.z
 
     def normalize(self) -> Vector3:
+        """Return unit vector. Returns zero vector if length is near zero."""
         n = self.length()
         if n < 1e-12:
             return Vector3()
         return Vector3(self.x / n, self.y / n, self.z / n)
 
     def distance(self, other: Any) -> float:
+        """Euclidean distance to another vector."""
         return (self - _to_vec3(other)).length()
 
     def angle(self, other: Any) -> float:
@@ -152,21 +158,26 @@ class Vector3:
         return math.acos(cos_a)
 
     def is_zero(self) -> bool:
+        """True if all components are approximately zero."""
         return bool(np.allclose([self.x, self.y, self.z], 0.0))
 
     # -- conversions ---------------------------------------------------------
 
     def to_list(self) -> list[float]:
+        """Return components as a Python list."""
         return [self.x, self.y, self.z]
 
     def to_tuple(self) -> tuple:
+        """Return components as a tuple."""
         return (self.x, self.y, self.z)
 
     def to_numpy(self) -> np.ndarray:
+        """Return as a float64 numpy array."""
         return np.array([self.x, self.y, self.z], dtype=np.float64)
 
     @classmethod
     def from_numpy(cls, arr: np.ndarray) -> Vector3:
+        """Construct from a numpy array (padded with zeros if < 3 elements)."""
         arr = np.asarray(arr, dtype=float).ravel()
         if arr.size < 3:
             padded = np.zeros(3)
@@ -175,19 +186,23 @@ class Vector3:
         return cls(float(arr[0]), float(arr[1]), float(arr[2]))
 
     def to_dict(self) -> dict[str, float]:
+        """Serialize to a dict with keys x, y, z."""
         return {"x": self.x, "y": self.y, "z": self.z}
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Vector3:
+        """Construct from a dict with keys x, y, z (defaults to 0)."""
         return cls(d.get("x", 0.0), d.get("y", 0.0), d.get("z", 0.0))
 
     # -- binary --------------------------------------------------------------
 
     def encode(self) -> bytes:
+        """Binary encode (24 bytes, little-endian doubles)."""
         return self._FMT.pack(self.x, self.y, self.z)
 
     @classmethod
     def decode(cls, data: bytes) -> Vector3:
+        """Binary decode from 24-byte little-endian double buffer."""
         x, y, z = cls._FMT.unpack(data[: cls._FMT.size])
         return cls(x, y, z)
 
@@ -263,9 +278,11 @@ class Quaternion:
         return Quaternion(x, y, z, w)
 
     def conjugate(self) -> Quaternion:
+        """Return conjugate (negate x, y, z)."""
         return Quaternion(-self.x, -self.y, -self.z, self.w)
 
     def inverse(self) -> Quaternion:
+        """Return multiplicative inverse. Raises ZeroDivisionError if zero."""
         ns = self.x ** 2 + self.y ** 2 + self.z ** 2 + self.w ** 2
         if ns < 1e-15:
             raise ZeroDivisionError("Cannot invert zero quaternion")
@@ -275,6 +292,7 @@ class Quaternion:
         return Quaternion(c.x / ns, c.y / ns, c.z / ns, c.w / ns)
 
     def normalize(self) -> Quaternion:
+        """Return unit quaternion. Raises ZeroDivisionError if zero."""
         n = math.sqrt(self.x ** 2 + self.y ** 2 + self.z ** 2 + self.w ** 2)
         if n < 1e-15:
             raise ZeroDivisionError("Cannot normalize zero quaternion")
@@ -332,6 +350,7 @@ class Quaternion:
 
     @property
     def yaw(self) -> float:
+        """Extract yaw (Z rotation) in radians."""
         return self.to_euler().z
 
     # -- comparison / repr ---------------------------------------------------
@@ -353,16 +372,20 @@ class Quaternion:
     # -- conversions ---------------------------------------------------------
 
     def to_list(self) -> list[float]:
+        """Return components as a Python list [x, y, z, w]."""
         return [self.x, self.y, self.z, self.w]
 
     def to_tuple(self) -> tuple:
+        """Return components as a tuple (x, y, z, w)."""
         return (self.x, self.y, self.z, self.w)
 
     def to_numpy(self) -> np.ndarray:
+        """Return as a float64 numpy array."""
         return np.array([self.x, self.y, self.z, self.w], dtype=np.float64)
 
     @classmethod
     def from_numpy(cls, arr: np.ndarray) -> Quaternion:
+        """Construct from a 4-element numpy array."""
         arr = np.asarray(arr, dtype=float).ravel()
         if arr.size != 4:
             raise ValueError("Quaternion requires exactly 4 components [x,y,z,w]")
@@ -370,23 +393,28 @@ class Quaternion:
 
     @classmethod
     def identity(cls) -> Quaternion:
+        """Return the identity quaternion (0, 0, 0, 1)."""
         return cls(0.0, 0.0, 0.0, 1.0)
 
     def to_dict(self) -> dict[str, float]:
+        """Serialize to a dict with keys x, y, z, w."""
         return {"x": self.x, "y": self.y, "z": self.z, "w": self.w}
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Quaternion:
+        """Construct from a dict (defaults to identity)."""
         return cls(d.get("x", 0.0), d.get("y", 0.0),
                    d.get("z", 0.0), d.get("w", 1.0))
 
     # -- binary --------------------------------------------------------------
 
     def encode(self) -> bytes:
+        """Binary encode (32 bytes, little-endian doubles)."""
         return self._FMT.pack(self.x, self.y, self.z, self.w)
 
     @classmethod
     def decode(cls, data: bytes) -> Quaternion:
+        """Binary decode from 32-byte little-endian double buffer."""
         x, y, z, w = cls._FMT.unpack(data[: cls._FMT.size])
         return cls(x, y, z, w)
 
@@ -459,18 +487,22 @@ class Pose:
 
     @property
     def x(self) -> float:
+        """Position X coordinate."""
         return self.position.x
 
     @property
     def y(self) -> float:
+        """Position Y coordinate."""
         return self.position.y
 
     @property
     def z(self) -> float:
+        """Position Z coordinate."""
         return self.position.z
 
     @property
     def yaw(self) -> float:
+        """Extract yaw (Z rotation) from orientation in radians."""
         return self.orientation.yaw
 
     # -- composition ---------------------------------------------------------
@@ -512,6 +544,7 @@ class Pose:
     # -- serialisation -------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize to a dict with position and orientation."""
         return {
             "position": self.position.to_dict(),
             "orientation": self.orientation.to_dict(),
@@ -519,6 +552,7 @@ class Pose:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Pose:
+        """Construct from a dict with position and orientation keys."""
         p = d.get("position", {})
         o = d.get("orientation", {})
         return cls(
@@ -530,6 +564,7 @@ class Pose:
     _FMT = struct.Struct("<7d")
 
     def encode(self) -> bytes:
+        """Binary encode (56 bytes, little-endian doubles)."""
         return self._FMT.pack(
             self.position.x, self.position.y, self.position.z,
             self.orientation.x, self.orientation.y,
@@ -538,6 +573,7 @@ class Pose:
 
     @classmethod
     def decode(cls, data: bytes) -> Pose:
+        """Binary decode from 56-byte little-endian double buffer."""
         px, py, pz, qx, qy, qz, qw = cls._FMT.unpack(data[: cls._FMT.size])
         return cls(Vector3(px, py, pz), Quaternion(qx, qy, qz, qw))
 
@@ -566,26 +602,32 @@ class PoseStamped:
 
     @property
     def x(self) -> float:
+        """Position X coordinate."""
         return self.pose.x
 
     @property
     def y(self) -> float:
+        """Position Y coordinate."""
         return self.pose.y
 
     @property
     def z(self) -> float:
+        """Position Z coordinate."""
         return self.pose.z
 
     @property
     def yaw(self) -> float:
+        """Extract yaw (Z rotation) in radians."""
         return self.pose.yaw
 
     @property
     def position(self) -> Vector3:
+        """Position as a Vector3."""
         return self.pose.position
 
     @property
     def orientation(self) -> Quaternion:
+        """Orientation as a Quaternion."""
         return self.pose.orientation
 
     def __eq__(self, other: object) -> bool:
@@ -614,10 +656,12 @@ class PoseStamped:
     # -- serialisation -------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize to a dict with pose, ts, and frame_id."""
         return {"pose": self.pose.to_dict(), "ts": self.ts, "frame_id": self.frame_id}
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> PoseStamped:
+        """Construct from a dict with pose, ts, and frame_id keys."""
         return cls(
             pose=Pose.from_dict(d.get("pose", {})),
             ts=float(d.get("ts", 0)),
@@ -628,11 +672,13 @@ class PoseStamped:
     _META = struct.Struct("<dI")
 
     def encode(self) -> bytes:
+        """Binary encode with header: ts + frame_id length + frame_id + pose."""
         frame_bytes = self.frame_id.encode("utf-8")
         return self._META.pack(self.ts, len(frame_bytes)) + frame_bytes + self.pose.encode()
 
     @classmethod
     def decode(cls, data: bytes) -> PoseStamped:
+        """Binary decode from encoded bytes."""
         ts, flen = cls._META.unpack(data[: cls._META.size])
         off = cls._META.size
         frame_id = data[off : off + flen].decode("utf-8")
@@ -664,9 +710,11 @@ class Twist:
 
     @classmethod
     def zero(cls) -> Twist:
+        """Return a zero-velocity twist."""
         return cls()
 
     def is_zero(self) -> bool:
+        """True if both linear and angular velocities are zero."""
         return self.linear.is_zero() and self.angular.is_zero()
 
     def __add__(self, other: Any) -> Twist:
@@ -693,6 +741,7 @@ class Twist:
     # -- serialisation -------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize to a dict with linear and angular keys."""
         return {
             "linear": self.linear.to_dict(),
             "angular": self.angular.to_dict(),
@@ -700,6 +749,7 @@ class Twist:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Twist:
+        """Construct from a dict with linear and angular keys."""
         li = d.get("linear", {})
         an = d.get("angular", {})
         return cls(Vector3.from_dict(li), Vector3.from_dict(an))
@@ -707,6 +757,7 @@ class Twist:
     _FMT = struct.Struct("<6d")  # 48 bytes
 
     def encode(self) -> bytes:
+        """Binary encode (48 bytes, little-endian doubles)."""
         return self._FMT.pack(
             self.linear.x, self.linear.y, self.linear.z,
             self.angular.x, self.angular.y, self.angular.z,
@@ -714,6 +765,7 @@ class Twist:
 
     @classmethod
     def decode(cls, data: bytes) -> Twist:
+        """Binary decode from 48-byte little-endian double buffer."""
         lx, ly, lz, ax, ay, az = cls._FMT.unpack(data[: cls._FMT.size])
         return cls(Vector3(lx, ly, lz), Vector3(ax, ay, az))
 
@@ -758,6 +810,7 @@ class TwistStamped(Twist):
         return self.__repr__()
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize to a dict with linear, angular, ts, and frame_id."""
         d = super().to_dict()
         d["ts"] = self.ts
         d["frame_id"] = self.frame_id
@@ -765,6 +818,7 @@ class TwistStamped(Twist):
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> TwistStamped:
+        """Construct from a dict with linear, angular, ts, and frame_id keys."""
         return cls(
             Vector3.from_dict(d.get("linear", {})),
             Vector3.from_dict(d.get("angular", {})),
@@ -775,12 +829,14 @@ class TwistStamped(Twist):
     _HEADER = struct.Struct("<dH")  # ts (8) + frame_id len (2) = 10 bytes
 
     def encode(self) -> bytes:
+        """Binary encode with header: ts + frame_id length + frame_id + velocities."""
         fid = self.frame_id.encode("utf-8")
         header = self._HEADER.pack(self.ts, len(fid)) + fid
         return header + self.linear.encode() + self.angular.encode()
 
     @classmethod
     def decode(cls, data: bytes) -> TwistStamped:
+        """Binary decode from encoded bytes."""
         ts, fid_len = cls._HEADER.unpack(data[: cls._HEADER.size])
         off = cls._HEADER.size
         frame_id = data[off : off + fid_len].decode("utf-8")
@@ -825,6 +881,7 @@ class Transform:
 
     @classmethod
     def identity(cls) -> Transform:
+        """Return the identity transform (zero translation, identity rotation)."""
         return cls()
 
     # -- composition ---------------------------------------------------------
@@ -885,6 +942,7 @@ class Transform:
     # -- serialisation -------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize to a dict with translation, rotation, and frame metadata."""
         return {
             "translation": self.translation.to_dict(),
             "rotation": self.rotation.to_dict(),
@@ -895,6 +953,7 @@ class Transform:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Transform:
+        """Construct from a dict with translation, rotation, and frame metadata."""
         return cls(
             translation=Vector3.from_dict(d.get("translation", {})),
             rotation=Quaternion.from_dict(d.get("rotation", {})),
@@ -906,6 +965,7 @@ class Transform:
     _HEADER = struct.Struct("<dHH")  # ts (8) + frame_id len (2) + child len (2) = 12
 
     def encode(self) -> bytes:
+        """Binary encode with header: ts + frame_id + child_frame_id + translation + rotation."""
         fid = self.frame_id.encode("utf-8")
         cid = self.child_frame_id.encode("utf-8")
         header = self._HEADER.pack(self.ts, len(fid), len(cid)) + fid + cid
@@ -913,6 +973,7 @@ class Transform:
 
     @classmethod
     def decode(cls, data: bytes) -> Transform:
+        """Binary decode from encoded bytes."""
         ts, fid_len, cid_len = cls._HEADER.unpack(data[: cls._HEADER.size])
         off = cls._HEADER.size
         frame_id = data[off : off + fid_len].decode("utf-8")

@@ -44,10 +44,9 @@ from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.registry import register
 from core.runtime_interface import (
-    TOPICS,
     map_frame_id,
-    normalize_frame_id,
 )
+from nav.services.frame_contract import FrameContract
 from core.stream import In, Out
 from nav.global_planner_service import GlobalPlannerService
 from nav.waypoint_tracker import (
@@ -217,10 +216,13 @@ class NavigationModule(Module, layer=5):
         self._robot_pos = np.zeros(3)
         self._robot_yaw = 0.0
         self._planning_frame_id = str(kw.get("planning_frame_id", PLANNING_FRAME_ID))
+        self._frame_contract = FrameContract(
+            planning_frame_id=self._planning_frame_id,
+            publish_adapter_status=self.adapter_status.publish,
+        )
         self._odom_frame_id = "unknown"
         self._costmap_frame_id = "unknown"
         self._goal_frame_id: str | None = None
-        self._reported_frame_mismatches: set[tuple[str, str]] = set()
         self._goal: np.ndarray | None = None
         self._active_path_terminal_goal: np.ndarray | None = None
         self._partial_progress_completed_goal: np.ndarray | None = None
@@ -411,73 +413,8 @@ class NavigationModule(Module, layer=5):
 
     # ── Input handlers ────────────────────────────────────────────────────
 
-    def _goal_frame(self, goal: PoseStamped) -> str:
-        return str(getattr(goal, "frame_id", "") or self._planning_frame_id)
-
-    def _runtime_contract(self) -> str | None:
-        return (
-            os.environ.get("LINGTU_RUNTIME_CONTRACT")
-            or os.environ.get("LINGTU_DATA_SOURCE")
-        )
-
-    def _expected_frames_for_source(self, source: str) -> tuple[str, ...]:
-        planning_frame = (
-            normalize_frame_id(self._planning_frame_id)
-            or PLANNING_FRAME_ID
-        )
-        return (planning_frame,)
-
-    def _expected_frame_label(self, source: str) -> str:
-        return ",".join(self._expected_frames_for_source(source))
-
-    def _report_frame_mismatch(self, source: str, frame_id: str) -> None:
-        if not self._is_frame_mismatch(frame_id, source=source):
-            return
-        key = (source, frame_id)
-        if key in self._reported_frame_mismatches:
-            return
-        self._reported_frame_mismatches.add(key)
-        self.adapter_status.publish({
-            "event": "frame_mismatch",
-            "reason": "unsupported_frame",
-            "source": source,
-            "expected_frame": self._expected_frame_label(source),
-            "received_frame": frame_id,
-            "ts": time.time(),
-        })
-
-    def _is_frame_mismatch(self, frame_id: str, *, source: str) -> bool:
-        normalized = normalize_frame_id(frame_id)
-        return bool(
-            normalized
-            and normalized != "unknown"
-            and normalized not in self._expected_frames_for_source(source)
-        )
-
-    def _planning_frame_blocker(self) -> tuple[str, str] | None:
-        for source, frame_id in (
-            ("odometry", self._odom_frame_id),
-            ("costmap", self._costmap_frame_id),
-        ):
-            if self._is_frame_mismatch(frame_id, source=source):
-                return source, frame_id
-        return None
-
-    def _has_motion_artifacts(self) -> bool:
-        return (
-            self._state in (
-                MissionState.PLANNING,
-                MissionState.EXECUTING,
-                MissionState.PATROLLING,
-                MissionState.STUCK,
-            )
-            or self._tracker.path_length > 0
-            or self._goal is not None
-            or bool(self._patrol_goals)
-        )
-
     def _block_for_frame_mismatch(self, source: str, frame_id: str) -> None:
-        expected_frame = self._expected_frame_label(source)
+        expected_frame = self._frame_contract.expected_frame_label(source)
         self._failure_reason = (
             f"unsupported {source} frame {frame_id!r}; expected "
             f"{expected_frame!r}"
@@ -560,7 +497,7 @@ class NavigationModule(Module, layer=5):
             self._set_state(self._state)
 
     def _on_goal(self, goal: PoseStamped) -> None:
-        frame_id = self._goal_frame(goal)
+        frame_id = self._frame_contract.goal_frame(goal, self._planning_frame_id)
         if frame_id != self._planning_frame_id:
             self._reject_goal_frame(frame_id, source="goal_pose")
             return
@@ -741,9 +678,11 @@ class NavigationModule(Module, layer=5):
 
     def _on_costmap(self, data: dict) -> None:
         self._costmap_frame_id = str(data.get("frame_id") or self._planning_frame_id)
-        self._report_frame_mismatch("costmap", self._costmap_frame_id)
-        if self._is_frame_mismatch(self._costmap_frame_id, source="costmap"):
-            if self._has_motion_artifacts():
+        self._frame_contract.report_frame_mismatch("costmap", self._costmap_frame_id)
+        if self._frame_contract.is_frame_mismatch(self._costmap_frame_id, source="costmap"):
+            if self._frame_contract.has_motion_artifacts(
+                self._state, self._tracker.path_length, self._goal, self._patrol_goals,
+            ):
                 self._block_for_frame_mismatch("costmap", self._costmap_frame_id)
             return
         grid = data.get("grid")
@@ -1123,9 +1062,11 @@ class NavigationModule(Module, layer=5):
 
     def _on_odom(self, odom: Odometry) -> None:
         self._odom_frame_id = str(getattr(odom, "frame_id", "") or "unknown")
-        self._report_frame_mismatch("odometry", self._odom_frame_id)
-        if self._is_frame_mismatch(self._odom_frame_id, source="odometry"):
-            if self._has_motion_artifacts():
+        self._frame_contract.report_frame_mismatch("odometry", self._odom_frame_id)
+        if self._frame_contract.is_frame_mismatch(self._odom_frame_id, source="odometry"):
+            if self._frame_contract.has_motion_artifacts(
+                self._state, self._tracker.path_length, self._goal, self._patrol_goals,
+            ):
                 self._block_for_frame_mismatch("odometry", self._odom_frame_id)
             return
         self._robot_pos = np.array([
@@ -1513,7 +1454,9 @@ class NavigationModule(Module, layer=5):
             result["reasons"] = ["odometry_invalid"]
             result["error"] = "current robot position is not finite"
             return result
-        frame_blocker = self._planning_frame_blocker()
+        frame_blocker = self._frame_contract.planning_frame_blocker(
+            self._odom_frame_id, self._costmap_frame_id,
+        )
         if frame_blocker is not None:
             source, frame_id = frame_blocker
             result["reasons"] = ["frame_mismatch"]
@@ -1755,7 +1698,9 @@ class NavigationModule(Module, layer=5):
             self._set_state(MissionState.FAILED)
             return
 
-        frame_blocker = self._planning_frame_blocker()
+        frame_blocker = self._frame_contract.planning_frame_blocker(
+            self._odom_frame_id, self._costmap_frame_id,
+        )
         if frame_blocker is not None:
             self._block_for_frame_mismatch(*frame_blocker)
             return

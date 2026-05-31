@@ -201,6 +201,9 @@ Note: `calibration/` and `sim/` live at repo root (not under `src/`). See [Senso
 # Framework tests (primary, no ROS2 needed)
 python -m pytest src/core/tests/ -q                    # 1226 tests, ~5s
 
+# Fast tests (no ROS2, no sim, no slow — skip heavy markers)
+python -m pytest src/core/tests/ src/nav/tests/ src/gateway/tests/ src/memory/tests/ -q -m "not slow and not ros2 and not sim"
+
 # Simulation tests (MuJoCo/Gazebo contract validation, no robot needed)
 python -m pytest sim/tests/ -q                         # ~20 scenario-level tests
 

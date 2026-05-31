@@ -103,12 +103,13 @@ class SHMPublisher(Publisher):
         self._event.set()  # Notify subscribers: new data available
 
     def close(self) -> None:
+        """Close shared memory handle and unlink if owner."""
         try:
             self._shm.close()
             if self._owner:
                 self._shm.unlink()
         except Exception:
-            pass
+            logger.debug("[SHM-Pub] error closing shared memory", exc_info=True)
 
 
 class SHMSubscriber(Subscriber):
@@ -173,6 +174,7 @@ class SHMSubscriber(Subscriber):
             self._event.clear()
 
     def close(self) -> None:
+        """Stop polling thread and close shared memory."""
         self._running = False
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1.0)
@@ -180,7 +182,7 @@ class SHMSubscriber(Subscriber):
             try:
                 self._shm.close()
             except Exception:
-                pass
+                logger.debug("[SHM-Sub] error closing shared memory", exc_info=True)
 
 
 class SHMTransport(TransportABC):
@@ -191,17 +193,20 @@ class SHMTransport(TransportABC):
         self._subscribers: list = []
 
     def create_publisher(self, topic: TopicConfig) -> SHMPublisher:
+        """Create a shared memory publisher for the given topic."""
         pub = SHMPublisher(topic)
         self._publishers.append(pub)
         return pub
 
     def create_subscriber(self, topic: TopicConfig, callback: Callable) -> SHMSubscriber:
+        """Create and start a shared memory subscriber for the given topic."""
         sub = SHMSubscriber(topic, callback)
         sub.start()
         self._subscribers.append(sub)
         return sub
 
     def close(self) -> None:
+        """Close all publishers and subscribers."""
         for s in self._subscribers:
             s.close()
         for p in self._publishers:
@@ -211,4 +216,5 @@ class SHMTransport(TransportABC):
 
     @property
     def name(self) -> str:
+        """Transport backend name."""
         return "shm"

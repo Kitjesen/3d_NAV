@@ -167,18 +167,22 @@ class Out(Generic[T]):
 
     @property
     def name(self) -> str:
+        """Port name."""
         return self._name
 
     @property
     def msg_type(self) -> type:
+        """Message type of this port."""
         return self._msg_type
 
     @property
     def msg_count(self) -> int:
+        """Total number of messages published."""
         return self._msg_count
 
     @property
     def last_ts(self) -> float:
+        """Timestamp of last publish (Unix epoch)."""
         return self._last_ts
 
     @property
@@ -193,6 +197,7 @@ class Out(Generic[T]):
 
     @property
     def callback_count(self) -> int:
+        """Number of registered local callbacks."""
         with self._lock:
             return len(self._callbacks)
 
@@ -453,18 +458,22 @@ class In(Generic[T]):
 
     @property
     def name(self) -> str:
+        """Port name."""
         return self._name
 
     @property
     def msg_type(self) -> type:
+        """Message type of this port."""
         return self._msg_type
 
     @property
     def msg_count(self) -> int:
+        """Total number of messages received."""
         return self._msg_count
 
     @property
     def last_ts(self) -> float:
+        """Timestamp of last message (Unix epoch)."""
         return self._last_ts
 
     @property

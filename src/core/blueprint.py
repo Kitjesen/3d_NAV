@@ -716,20 +716,24 @@ class SystemHandle:
     # -- access -------------------------------------------------------------
 
     def get_module(self, name: str) -> Module:
+        """Get a module instance by name. Raises KeyError if not found."""
         if name not in self._modules:
             raise KeyError(f"Unknown module: '{name}'")
         return self._modules[name]
 
     @property
     def modules(self) -> dict[str, Module]:
+        """Return a snapshot of all modules keyed by name."""
         return dict(self._modules)
 
     @property
     def connections(self) -> list[tuple[str, str, str, str]]:
+        """Return a snapshot of all wire connections."""
         return list(self._connections)
 
     @property
     def started(self) -> bool:
+        """True if the system has been started."""
         return self._started
 
     # -- health -------------------------------------------------------------
@@ -856,6 +860,7 @@ class WorkerSystemHandle:
         self._started = False
 
     def get_module(self, name: str) -> Any:
+        """Get a worker or local module by name. Raises KeyError if not found."""
         if name in self._proxies:
             return self._proxies[name]
         if name in self._local:
@@ -864,17 +869,21 @@ class WorkerSystemHandle:
 
     @property
     def modules(self) -> dict[str, Any]:
+        """Return all modules (worker proxies + local instances)."""
         return {**self._proxies, **self._local}
 
     @property
     def connections(self) -> list[tuple[str, str, str, str]]:
+        """Return a snapshot of all wire connections."""
         return list(self._connections)
 
     @property
     def started(self) -> bool:
+        """True if the system has been started."""
         return self._started
 
     def health(self) -> dict[str, Any]:
+        """Return a health summary dict across all worker and local modules."""
         modules: dict[str, Any] = {}
         for name, proxy in self._proxies.items():
             try:

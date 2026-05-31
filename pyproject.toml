@@ -1,4 +1,4 @@
-﻿[build-system]
+[build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
@@ -8,28 +8,30 @@ version = "2.2.0"
 description = "LingTu 鈥?autonomous navigation for quadruped robots"
 requires-python = ">=3.10"
 dependencies = [
+    # Core (always needed)
     "numpy>=1.24,<2.0",
     "scipy>=1.10",
-    "opencv-python-headless>=4.5",
     "PyYAML>=6.0",
-    "scikit-learn>=1.0",
     "pydantic>=2.0",
-    "requests>=2.28",
-    "jieba>=0.42",
     "fastapi",
     "uvicorn",
     "websockets",
 ]
 
 [project.optional-dependencies]
+vision = ["opencv-python-headless>=4.5"]
+ml = ["scikit-learn>=1.0"]
+llm = ["openai>=1.0", "anthropic"]
+nlp = ["jieba>=0.42"]
+agent = ["langchain-core>=0.2", "langchain-openai>=0.1", "langchain>=0.2"]
 perception = ["torch", "ultralytics", "open-clip-torch"]
-llm = ["openai", "anthropic"]
 vector = ["chromadb"]
-dev = ["pytest", "pytest-cov", "ruff", "mypy"]
-# ThunderDriver 渚濊禆 brainstem 鐨?gRPC 濂戠害鍖?brainstem_api (v2.0.0)銆?
-# 鐪熸満 / sunrise 閮ㄧ讲鏃跺畨瑁? pip install -e '.[thunder]'
-# stub / sim 妯″紡涓嶉渶瑕佽銆?
+dev = ["pytest", "pytest-cov", "pytest-asyncio", "ruff", "mypy"]
+# ThunderDriver requires brainstem gRPC contract package brainstem_api (v2.0.0).
+# Install on real robot / sunrise deploy: pip install -e '.[thunder]'
+# stub / sim mode does not need this.
 thunder = ["brainstem-api @ git+https://github.com/Kitjesen/brainstem_api.git@v2.0.0#subdirectory=python"]
+all = ["lingtu[vision,ml,llm,nlp,agent,perception,vector]"]
 
 [project.scripts]
 lingtu = "lingtu_cli:main"
@@ -61,6 +63,10 @@ select = [
     "B",     # flake8-bugbear
     "UP",    # pyupgrade
     "RUF",   # ruff-specific
+    "D101",  # pydocstyle: missing docstring in public class
+    "D102",  # pydocstyle: missing docstring in public method
+    "D103",  # pydocstyle: missing docstring in public function
+    "S",     # flake8-bandit: security lints
 ]
 ignore = [
     "E501",  # line too long (handled by formatter)
@@ -86,10 +92,22 @@ known-first-party = ["core", "nav", "semantic", "drivers", "gateway", "memory", 
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
-"src/core/tests/*" = ["F811", "E402"]
-"src/semantic/*/test*" = ["F811", "E402"]
+"src/core/tests/*" = ["F811", "E402", "D"]
+"src/semantic/*/test*" = ["F811", "E402", "D"]
+"src/*/tests/*" = ["D"]
+"sim/tests/*" = ["D"]
+"scripts/*" = ["D"]
+"third_party/*" = ["D", "B", "S"]
 "calibration/**" = ["W191", "E731", "F821"]
 "docs/**" = ["E702", "E701"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false  # gradual adoption
+ignore_missing_imports = true   # many deps lack stubs
+exclude = ["src/global_planning/pct_planner/planner/lib/3rdparty/", "third_party/", "research/"]
 
 [tool.pytest.ini_options]
 testpaths = [
@@ -105,6 +123,23 @@ testpaths = [
 ]
 # tests/ directory has root-level integration tests run separately:
 #   python -m pytest tests/ -q
+norecursedirs = [
+    "src/global_planning/pct_planner/planner/lib/3rdparty",
+    "third_party",
+    "research",
+    ".venv",
+    "venv",
+    ".omc",
+    "artifacts",
+    "build",
+]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "ros2: tests that require ROS2 runtime",
+    "slow: tests that take >5 seconds",
+    "sim: tests that require MuJoCo simulation",
+]
+
+
