@@ -670,7 +670,7 @@ class MuJoCoEngine(SimEngine):
     # State reading
     # ──────────────────────────────────────────────────────────────
 
-    def get_robot_state(self) -> RobotState:
+    def get_robot_state(self, robot_id: str = "robot_0") -> RobotState:
         """Read current robot state snapshot."""
         qadr = self._root_qposadr
         dadr = self._root_dofadr
@@ -753,7 +753,7 @@ class MuJoCoEngine(SimEngine):
     # Control interface
     # ──────────────────────────────────────────────────────────────
 
-    def set_cmd_vel(self, cmd: VelocityCommand) -> None:
+    def set_cmd_vel(self, cmd: VelocityCommand, robot_id: str = "robot_0") -> None:
         """Set velocity command (thread-safe)."""
         with self._lock:
             self._cmd_vel[0] = np.clip(cmd.linear_x,

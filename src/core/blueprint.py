@@ -193,6 +193,33 @@ class Blueprint:
         self._auto_wired = True
         return self
 
+    # -- namespace ----------------------------------------------------------
+
+    def namespace(self, prefix: str) -> Blueprint:
+        """Prefix all module aliases and wire module names with ``prefix/``.
+
+        This lets multiple copies of the same module classes coexist
+        in a merged Blueprint without name collisions::
+
+            bp_a = Blueprint().add(NavigationModule, alias="NavigationModule")
+            bp_b = Blueprint().add(NavigationModule, alias="NavigationModule")
+            bp_a.namespace("robot_0").merge(bp_b.namespace("robot_1"))
+        """
+        pfx = prefix.rstrip("/") + "/"
+        for ent in self._entries:
+            ent.alias = pfx + ent.name
+        self._wires = [
+            _WireSpec(pfx + w.out_module, w.out_port,
+                      pfx + w.in_module, w.in_port, w.transport)
+            for w in self._wires
+        ]
+        if self._swap_config is not None:
+            self._swap_config = {
+                k: (pfx + v if isinstance(v, str) else v)
+                for k, v in self._swap_config.items()
+            }
+        return self
+
     # -- merge --------------------------------------------------------------
 
     def merge(self, other: Blueprint) -> Blueprint:

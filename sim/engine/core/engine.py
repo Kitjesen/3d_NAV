@@ -68,6 +68,7 @@ class SimEngine(ABC):
     def __init__(self) -> None:
         self._running: bool = False
         self._sim_time: float = 0.0
+        self._state: Optional[RobotState] = None
 
     # ──────────────────────────────────────────────────────────────
     # Lifecycle
@@ -117,9 +118,20 @@ class SimEngine(ABC):
     # State reading
     # ──────────────────────────────────────────────────────────────
 
-    @abstractmethod
-    def get_robot_state(self) -> RobotState:
-        """Read current robot state."""
+    def get_robot_state(self, robot_id: str = "robot_0") -> RobotState:
+        """Read current robot state.
+
+        Args:
+            robot_id: robot identifier (defaults to "robot_0" for single-robot)
+
+        Returns:
+            RobotState for the given robot
+        """
+        if robot_id == "robot_0":
+            if self._state is None:
+                raise RuntimeError("No state available. Call reset() or step() first.")
+            return self._state
+        raise ValueError(f"Unknown robot_id: {robot_id}")
 
     @abstractmethod
     def get_camera_data(self, camera_name: str = "front_camera") -> Optional[CameraData]:
@@ -145,7 +157,7 @@ class SimEngine(ABC):
     # ──────────────────────────────────────────────────────────────
 
     @abstractmethod
-    def set_cmd_vel(self, cmd: VelocityCommand) -> None:
+    def set_cmd_vel(self, cmd: VelocityCommand, robot_id: str = "robot_0") -> None:
         """Set velocity command (async, applied on next step())."""
 
     @abstractmethod
@@ -181,6 +193,48 @@ class SimEngine(ABC):
             position: [x, y, z]
             rgba: color [r, g, b, a], defaults to gray
         """
+
+    # ──────────────────────────────────────────────────────────────
+    # Multi-robot management
+    # ──────────────────────────────────────────────────────────────
+
+    def add_robot(self, robot_model: Any, init_pose: Optional[Any] = None,
+                  robot_id: Optional[str] = None) -> str:
+        """Add a robot to the simulation.
+
+        Args:
+            robot_model: robot model/configuration identifier or object
+            init_pose: initial pose (engine-specific format); None uses default
+            robot_id: optional explicit identifier; auto-generated if None
+
+        Returns:
+            robot_id assigned to the added robot
+
+        Raises:
+            NotImplementedError: if the engine does not support multi-robot
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support add_robot"
+        )
+
+    @abstractmethod
+    def remove_robot(self, robot_id: str) -> None:
+        """Remove a robot from the simulation.
+
+        Args:
+            robot_id: robot identifier to remove
+
+        Raises:
+            ValueError: if robot_id does not exist
+        """
+
+    def list_robots(self) -> list[str]:
+        """List all active robot identifiers.
+
+        Returns:
+            list of active robot IDs (default: ["robot_0"] for single-robot engines)
+        """
+        return ["robot_0"]
 
     # ──────────────────────────────────────────────────────────────
     # Properties

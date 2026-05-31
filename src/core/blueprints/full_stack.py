@@ -219,6 +219,7 @@ def full_stack_blueprint(
     scene_xml: str = "",
     run_startup_checks: bool = True,
     manage_external_services: bool = True,
+    namespace: str | None = None,
     # Legacy alias
     planner: str = "",
     **config: Any,
@@ -302,5 +303,8 @@ def full_stack_blueprint(
             "nav_name": swap_nav_name,
             "driver_name": drv,
         }
+
+    if namespace:
+        bp.namespace(namespace)
 
     return bp

@@ -12,6 +12,7 @@ Legacy:
 """
 
 from .full_stack import full_stack_blueprint
+from .multi_robot import multi_robot_blueprint
 from .stacks import (
     driver,
     exploration,
@@ -36,6 +37,7 @@ __all__ = [
     "lidar",
     "maps",
     "memory",
+    "multi_robot_blueprint",
     "navigation",
     "perception",
     "planner",
