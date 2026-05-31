@@ -1,0 +1,6 @@
+# LingTu dev dependencies
+# Install: pip install -r requirements-dev.txt
+pytest
+pytest-cov
+ruff
+mypy

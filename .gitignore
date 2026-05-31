@@ -1,5 +1,5 @@
 # ============================================================
-# LingTu .gitignore — 2026-03-24 cleaned
+# LingTu .gitignore — 2026-05-31 cleaned
 # ============================================================
 
 # ── Third-party reference code (local only, not tracked) ──
@@ -20,7 +20,10 @@ log/
 # ── Runtime state ──
 .lingtu/
 artifacts/
+logs/
+output/
 MUJOCO_LOG.TXT
+status.out
 
 # ── Python ──
 __pycache__/
@@ -35,6 +38,9 @@ env/
 .pytest-tmp-map/
 .tmp_pytest/
 .tmp_pytest_clean/
+.tmp/
+.tmp_gateway_tests/
+pytest_tmp/
 
 # ── C/C++ build artifacts ──
 *.o
@@ -93,6 +99,7 @@ tools/videos/*.gif
 *.temp
 *.test
 *.log
+*.bak
 
 # ── Keys / credentials — NEVER commit ──
 keys/
