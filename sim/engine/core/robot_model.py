@@ -166,9 +166,9 @@ class _RobotRegistry:
             KeyError: No model with that name is registered.
         """
         if name not in cls._models:
-            available = ", ".join(cls._models)
+            available = "', '".join(cls._models)
             raise KeyError(
-                f"Unknown robot model {name!r}. Available: [{available}]"
+                f"Unknown robot model {name!r}. Available: ['{available}']"
             )
         return cls._models[name]
 
@@ -249,12 +249,16 @@ NOVA_DOG_MODEL = RobotModel(
             "RL_calf_joint",
             "RL_foot_joint",
         ),
+        # Note: foot joints (suffix _foot_joint) are limited="false" in MJCF
+        # (free rotation, no position bounds).  standing_pose=0.0 for them is
+        # a placeholder — not enforced.  action_scale=5.0 is clamped by the
+        # position actuator ctrlrange [-1.0, 1.0] (see scaffold_robot.py).
         standing_pose=(
             -0.1, -0.8, 1.8,   # FR: hip, thigh, calf
             0.1, 0.8, -1.8,    # FL
             0.1, 0.8, -1.8,    # RR
             -0.1, -0.8, 1.8,   # RL
-            0.0, 0.0, 0.0, 0.0,  # foot
+            0.0, 0.0, 0.0, 0.0,  # foot (unconstrained, placeholder)
         ),
         action_scale=(
             0.125, 0.25, 0.25,   # FR: hip, thigh, calf

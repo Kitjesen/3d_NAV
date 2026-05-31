@@ -133,7 +133,14 @@ WHEEL_ACTUATOR_TPL = '    <velocity name="{side}_wheel" joint="{side}_wheel_join
 
 
 def _valid_name(name: str) -> bool:
-    return bool(re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_\-]*$", name))
+    """Validate robot name.
+
+    Only lowercase alphanumeric and underscores are allowed.
+    Hyphens are rejected because the directory name becomes a Python
+    package name for ``import_module("sim.robots.<name>")``, and hyphens
+    are invalid in Python identifiers (PEP 8).
+    """
+    return bool(re.match(r"^[a-z][a-z0-9_]*$", name))
 
 
 def _sha256(path: str) -> str:
@@ -220,7 +227,8 @@ def main() -> None:
     # --- Validate inputs ---
     if not _valid_name(args.name):
         print(f"Error: '{args.name}' is not a valid robot name. "
-              f"Use alphanumeric, underscores, or hyphens.", file=sys.stderr)
+              f"Use lowercase alphanumeric and underscores only "
+              f"(hyphens break Python module imports).", file=sys.stderr)
         sys.exit(1)
 
     dest = os.path.join(ROBOTS_DIR, args.name)
@@ -259,9 +267,14 @@ def main() -> None:
     # --- Copy meshes reference ---
     if args.meshes:
         meshes_dest = os.path.join(dest, "meshes")
-        if os.name != "nt":
+        try:
             os.symlink(os.path.abspath(args.meshes), meshes_dest)
-        print(f"Meshes:  reference {args.meshes} -> sim/robots/{args.name}/meshes/")
+            print(f"Meshes:  symlink {args.meshes} -> {meshes_dest}")
+        except (OSError, NotImplementedError, AttributeError) as e:
+            # Fallback: copy the mesh directory
+            import shutil
+            shutil.copytree(args.meshes, meshes_dest, symlinks=True)
+            print(f"Meshes:  copied {args.meshes} -> {meshes_dest} (symlink not available: {e})")
 
     # --- Write policy manifest ---
     if args.policy:

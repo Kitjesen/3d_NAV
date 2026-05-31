@@ -155,8 +155,8 @@ def test_single_robot():
 # ---------------------------------------------------------------------------
 
 
-def test_multi_robot_different_types():
-    """Robot types differ but stack factories produce unique namespaced entries."""
+def test_multi_robot_same_type_twice():
+    """Two robots of identical type still produce unique namespaced entries."""
     bp = multi_robot_blueprint(
         ["stub", "stub"],
         llm="mock",

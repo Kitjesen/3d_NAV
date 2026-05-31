@@ -74,7 +74,7 @@ class GeometryExtractor:
             # 1. 世界坐标 → 栅格坐标
             center_grid = self.world_to_grid(room_center)
             if center_grid is None:
-                logger.warning(f"Room center {room_center} out of map bounds")
+                logger.warning("Room center %s out of map bounds", room_center)
                 return self._empty_geometry()
 
             # 2. 提取可通行栅格
@@ -118,7 +118,7 @@ class GeometryExtractor:
             }
 
         except Exception as e:
-            logger.error(f"Failed to extract geometry for room at {room_center}: {e}")
+            logger.error("Failed to extract geometry for room at %s: %s", room_center, e)
             return self._empty_geometry()
 
     def world_to_grid(self, world_pos: np.ndarray) -> tuple[int, int] | None:
@@ -261,7 +261,7 @@ class GeometryExtractor:
             return hull_vertices
 
         except Exception as e:
-            logger.warning(f"Failed to compute convex hull: {e}")
+            logger.warning("Failed to compute convex hull: %s", e)
             # 退化情况: 返回边界框的四个角点
             bbox = self.compute_bounding_box(cells)
             return np.array([

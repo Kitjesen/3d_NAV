@@ -32,6 +32,9 @@ from core.registry import get, register
 
 logger = logging.getLogger(__name__)
 
+# The three class names are lazy-forward references resolved by __getattr__
+# below.  ruff F822 is expected — each name is exported via lazy import from
+# its real module (base_autonomy.modules.*).
 __all__ = [
     "LocalPlannerModule",
     "PathFollowerModule",

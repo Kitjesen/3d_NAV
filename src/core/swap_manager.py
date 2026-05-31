@@ -110,6 +110,9 @@ class SwapManager:
         self._old_driver_name: str | None = None
         self._old_driver: Any = None
         self._new_driver_name: str | None = None
+        # Tracks whether _freeze() was successfully applied so _unfreeze()
+        # only runs when needed (e.g. rollback after failed freeze).
+        self._was_frozen: bool = False
 
         # -- resolve mutable data containers -----------------------------------
         self._resolve_data_containers()
@@ -119,6 +122,11 @@ class SwapManager:
 
         SystemHandle exposes private ``_modules`` / ``_connections``;
         test mocks expose ``modules`` / ``connections`` directly.
+
+        If the system object exposes neither private nor public containers,
+        both fall back to isolated empty collections.  Swap operations will
+        complete but NOT be reflected in the system — a warning is emitted
+        so callers can diagnose the misconfiguration.
         """
         if self._system is None:
             self._mods: dict[str, Any] = {}
@@ -127,9 +135,23 @@ class SwapManager:
         mods = getattr(self._system, "_modules", None)
         if not isinstance(mods, dict):
             mods = getattr(self._system, "modules", {})
+        if not isinstance(mods, dict):
+            logger.warning(
+                "SwapManager: system %r has no _modules or modules dict — "
+                "swap will not propagate to the system",
+                self._system,
+            )
+            mods = {}
         conns = getattr(self._system, "_connections", None)
         if not isinstance(conns, (list, Sequence)):
             conns = getattr(self._system, "connections", [])
+        if not isinstance(conns, (list, Sequence)):
+            logger.warning(
+                "SwapManager: system %r has no _connections or connections list — "
+                "wire metadata will not propagate",
+                self._system,
+            )
+            conns = []
         self._mods = mods
         self._conns = conns
 
@@ -185,6 +207,11 @@ class SwapManager:
         self._state = self.IDLE
         self._swap_phase = SwapState.IDLE
         self._error = None
+        self._saved_state = None
+        self._old_driver_name = None
+        self._old_driver = None
+        self._new_driver_name = None
+        self._was_frozen = False
 
     # -- public API -----------------------------------------------------------
 
@@ -193,7 +220,14 @@ class SwapManager:
 
         Detection heuristic: a driver is any module with ``_layer == 1``,
         a ``cmd_vel`` In port, and a ``stop_signal`` In port.
+
+        Thread-safe: acquires ``_lock`` to avoid race conditions with swap().
         """
+        with self._lock:
+            return self._find_current_driver()
+
+    def _find_current_driver(self) -> str | None:
+        """Internal driver lookup — caller must hold ``_lock``."""
         for name, mod in self._mods.items():
             if (
                 getattr(mod, "_layer", None) == 1
@@ -233,6 +267,7 @@ class SwapManager:
             self._old_driver_name = None
             self._old_driver = None
             self._new_driver_name = None
+            self._was_frozen = False
 
     def rollback(self) -> None:
         """Manually rollback a swap in progress.
@@ -259,7 +294,7 @@ class SwapManager:
                 f"Available: {available}"
             )
 
-        current = self.current_driver()
+        current = self._find_current_driver()
         if current == driver_name:
             logger.info("swap(%s): already active -- no-op", driver_name)
             return None  # no-op
@@ -304,6 +339,11 @@ class SwapManager:
 
             self._state = self.COMPLETED
             self._swap_phase = SwapState.IDLE
+            # Clear stale references to allow GC
+            self._saved_state = None
+            self._old_driver = None
+            self._old_driver_name = None
+            self._new_driver_name = None
             logger.info(
                 "swap(%s): completed (replaced %s)",
                 driver_name, current,
@@ -324,7 +364,11 @@ class SwapManager:
     # -- sub-operations -------------------------------------------------------
 
     def _freeze(self) -> None:
-        """Pause all motion: freeze cmd_vel mux and pause NavModule."""
+        """Pause all motion: freeze cmd_vel mux *then* pause NavModule.
+
+        Order: mux first (stops cmd_vel flow), nav second (pauses planning).
+        See ``_unfreeze`` for the reverse order.
+        """
         mux = self._mux_instance
         if mux is not None and hasattr(mux, "freeze"):
             logger.debug("SwapManager: freezing CmdVelMux")
@@ -333,9 +377,16 @@ class SwapManager:
         if nav is not None and hasattr(nav, "teleop_active"):
             logger.debug("SwapManager: pausing NavModule")
             nav.teleop_active.publish(True)
+        self._was_frozen = True
 
     def _unfreeze(self) -> None:
-        """Restore motion: resume NavModule and unfreeze cmd_vel mux."""
+        """Restore motion: resume NavModule *then* unfreeze cmd_vel mux.
+
+        Order is the reverse of ``_freeze``: nav first (resumes planning),
+        mux second (re-enables cmd_vel flow).  This avoids a transient
+        where the mux forwards commands before the nav has re-acquired
+        state.
+        """
         nav = self._nav_instance
         if nav is not None and hasattr(nav, "teleop_active"):
             logger.debug("SwapManager: resuming NavModule")
@@ -394,6 +445,15 @@ class SwapManager:
         # Restore old driver
         if self._old_driver is not None and self._old_driver_name is not None:
             if self._old_driver_name not in self._mods:
+                try:
+                    # Re-setup old driver to ensure clean state before restoration
+                    if hasattr(self._old_driver, "setup") and callable(self._old_driver.setup):
+                        self._old_driver.setup()
+                except Exception:
+                    logger.exception(
+                        "SwapManager rollback: error re-running setup on old driver %s",
+                        self._old_driver_name,
+                    )
                 self._mods[self._old_driver_name] = self._old_driver
                 self._rewire_cmd_vel(None, self._old_driver_name)
                 logger.info(
@@ -401,7 +461,13 @@ class SwapManager:
                     self._old_driver_name,
                 )
 
-        self._unfreeze()
+        if self._was_frozen:
+            try:
+                self._unfreeze()
+            except Exception:
+                logger.exception(
+                    "SwapManager rollback: error during unfreeze after rollback"
+                )
         self._swap_phase = SwapState.IDLE
         logger.info("SwapManager rollback: complete")
 

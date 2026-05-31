@@ -27,6 +27,7 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 from enum import Enum
@@ -204,12 +205,22 @@ class SensorSuite:
 
     @staticmethod
     def _extrinsics_to_matrix(mount: SensorMount) -> np.ndarray:
-        """Build a 4x4 homogeneous matrix from mount extrinsics."""
+        """Build a 4x4 homogeneous **body → sensor** transform.
+
+        Given a sensor mounted at position ``t = [x, y, z]`` (in body frame)
+        with rotation ``R`` (roll-pitch-yaw), a point in body frame is
+        mapped to sensor frame as::
+
+            p_sensor = R @ (p_body - t) = R @ p_body - R @ t
+
+        The 4x4 matrix is therefore ``[R | -R@t; 0 | 1]``.
+        """
         roll, pitch, yaw = mount.roll, mount.pitch, mount.yaw
         rot = _euler_to_rot(roll, pitch, yaw)
+        t = np.array([mount.x, mount.y, mount.z], dtype=np.float64)
         T = np.eye(4, dtype=np.float64)
         T[:3, :3] = rot
-        T[:3, 3] = [mount.x, mount.y, mount.z]
+        T[:3, 3] = -rot @ t
         return T
 
 
@@ -217,7 +228,7 @@ class SensorSuite:
 
 
 def _euler_to_rot(roll: float, pitch: float, yaw: float) -> np.ndarray:
-    """Build rotation matrix from XYZ Euler angles (radians). Pure numpy."""
+    """Build rotation matrix from roll-pitch-yaw (XYZ intrinsic / ZYX extrinsic) Euler angles (radians). Pure numpy."""
     cr, sr = np.cos(roll), np.sin(roll)
     cp, sp = np.cos(pitch), np.sin(pitch)
     cy, sy = np.cos(yaw), np.sin(yaw)
@@ -278,7 +289,7 @@ def sensor_suite_from_config(config_path: str | None = None) -> SensorSuite:
         sensors.append(SensorMount(
             sensor_id="camera_front",
             sensor_type=SensorType.CAMERA,
-            frame_id="camera_frame",
+            frame_id=cam.get("frame_id", "camera_frame"),
             x=cam.get("position_x", 0.0),
             y=cam.get("position_y", 0.0),
             z=cam.get("position_z", 0.0),
@@ -304,7 +315,7 @@ def sensor_suite_from_config(config_path: str | None = None) -> SensorSuite:
             roll=0.0,
             pitch=0.0,
             yaw=0.0,
-            fps=50.0,  # WTRTK-980 fixed rate
+            fps=gnss.get("fps", 50.0),  # WTRTK-980 default rate
             model=gnss.get("model", "WTRTK-980"),
         ))
 

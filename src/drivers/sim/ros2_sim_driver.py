@@ -537,16 +537,8 @@ class ROS2SimDriverModule(Module, layer=1):
 
     def _publish_robot_state(self) -> None:
         """Publish ROS2 sim operational state."""
-        self.robot_state.publish({
-            "standing": True,
-            "enabled": True,
-            "emergency": False,
-            "connected": True,
-            "battery_voltage": 0.0,
-            "battery_soc": 0.0,
-            "current_gait": "trot",
-            "timestamp": time.time(),
-        })
+        from drivers.sim import build_sim_robot_state
+        self.robot_state.publish(build_sim_robot_state())
 
     # -- Health --------------------------------------------------------------
 

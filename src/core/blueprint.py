@@ -313,6 +313,14 @@ class Blueprint:
         # 8. Post-build swap setup (opt-in, set by full_stack_blueprint)
         if self._swap_config:
             handle.enable_swap(**self._swap_config)
+            # Propagate swap manager to modules that can accept it
+            # (e.g. GatewayModule).  SwapManager is created AFTER
+            # on_system_modules() runs, so modules cannot discover it
+            # during the notification phase.
+            for mod in instances.values():
+                setter = getattr(mod, "_set_swap_manager", None)
+                if callable(setter):
+                    setter(handle.swap_manager)
 
         return handle
 

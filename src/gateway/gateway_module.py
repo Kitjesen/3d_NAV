@@ -1019,7 +1019,24 @@ class GatewayModule(Module, layer=6):
             None,
         )
 
-        self._swap_manager = modules.get("SwapManager")
+        # SwapManager is created after on_system_modules() returns, so it
+        # cannot be discovered here.  It is injected later by Blueprint.build()
+        # via _set_swap_manager().
+        self._swap_manager = None
+
+    def _set_swap_manager(self, swap_manager: Any) -> None:
+        """Receive SwapManager reference from Blueprint.build().
+
+        Called after on_system_modules() when the Blueprint's build() method
+        creates and activates the SwapManager.  This two-phase setup is
+        necessary because SwapManager is not a Module and therefore cannot
+        be discovered during the on_system_modules() notification.
+        """
+        self._swap_manager = swap_manager
+        logger.info(
+            "GatewayModule: received swap_manager %s",
+            swap_manager,
+        )
 
     def _explorer_backend(self) -> str:
         if self._frontier_explorer is not None:

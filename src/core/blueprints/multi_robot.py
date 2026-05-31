@@ -32,6 +32,7 @@ from .full_stack import full_stack_blueprint
 
 def multi_robot_blueprint(
     robots: list[str],
+    port_offset: int = 0,
     **shared_config,
 ) -> Blueprint:
     """Build a multi-robot system from per-robot namespaced stacks.
@@ -49,6 +50,10 @@ def multi_robot_blueprint(
             (testing, no hardware), ``"thunder"`` (real S100P),
             ``"nova_dog"`` (gRPC brainstem), ``"sim_mujoco"`` (MuJoCo sim),
             and ``"sim_ros2"`` (ROS2 bridge).
+        port_offset:
+            Offset added to the base gateway port (5050).  Each robot *i*
+            receives gateway port ``5050 + i + port_offset``, ensuring no
+            two robots bind the same port.  Default ``0``.
         **shared_config:
             Configuration forwarded to :func:`full_stack_blueprint` for every
             robot.  Use this to set shared options such as ``llm="mock"``,
@@ -63,19 +68,27 @@ def multi_robot_blueprint(
     Cross-robot wiring example::
 
         bp = multi_robot_blueprint(["stub", "stub"])
-        bp.wire(
-            "robot_0/NavigationModule", "mission_status",
-            "robot_1/SafetyRingModule", "external_mission_status",
-        )
-        system = bp.auto_wire().build()
+        bp.wire("robot_0/NavigationModule", "mission_status",
+                "robot_1/SafetyRingModule", "external_mission_status")
     """
+    # Pop namespace if accidentally included in shared_config, so it
+    # does not collide with the per-robot namespace passed explicitly.
+    shared_config.pop("namespace", None)
+
     combined = Blueprint()
 
     for i, robot_name in enumerate(robots):
+        kwargs = dict(shared_config)
+        # Fix 1: unique gateway port per robot to avoid port collisions
+        kwargs["gateway_port"] = 5050 + i + port_offset
+        # Fix 2: only robot_0 manages systemd services (SLAM, detectors)
+        if i > 0:
+            kwargs["manage_external_services"] = False
+
         robot_bp = full_stack_blueprint(
             robot=robot_name,
             namespace=f"robot_{i}",
-            **shared_config,
+            **kwargs,
         )
         combined.merge(robot_bp)
 

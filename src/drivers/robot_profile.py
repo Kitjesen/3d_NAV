@@ -217,13 +217,16 @@ class RobotProfile:
             body_length=geometry.get("vehicle_length", 1.0),
             body_width=geometry.get("vehicle_width", 0.6),
             body_height=geometry.get("vehicle_height", 0.5),
+            mass_kg=geometry.get("mass_kg", 55.0),
             max_slope_deg=safety.get("tilt_limit_deg", 30.0),
+            ground_clearance_m=geometry.get("ground_clearance_m", 0.15),
         )
 
         control_limits = ControlLimits(
             max_linear_speed=speed.get("max_linear", 1.0),
             max_angular_speed=speed.get("max_angular", 1.0),
             max_linear_accel=control.get("max_accel", 1.0),
+            max_decel=control.get("max_decel", 1.0),
             max_yaw_rate=control.get("max_yaw_rate", 45.0),
         )
 
@@ -237,6 +240,7 @@ class RobotProfile:
         )
 
         connection = ConnectionConfig(
+            protocol=driver.get("protocol", "grpc"),
             host=driver.get("dog_host", "127.0.0.1"),
             port=driver.get("dog_port", 13145),
             reconnect_interval_s=driver.get("reconnect_interval", 3.0),
@@ -387,7 +391,11 @@ THUNDER_V3_PROFILE = RobotProfile(
             model="Depth Camera",
             frame_id="camera_link",
             x=0.15,
+            y=0.0,
             z=0.45,
+            roll=0.0,
+            pitch=0.0,
+            yaw=0.0,
             intrinsics={
                 "fx": 615.0, "fy": 615.0,
                 "cx": 320.0, "cy": 240.0,
