@@ -46,7 +46,8 @@ class TestRenderText:
         try:
             out = render_text(system)
             assert isinstance(out, str)
-            assert len(out) > 0
+            assert "SrcMod" in out
+            assert "SinkMod" in out
         finally:
             system.stop()
 

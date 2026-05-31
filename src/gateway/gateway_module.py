@@ -47,17 +47,21 @@ Blueprint usage::
 from __future__ import annotations
 
 import asyncio
+import base64
+import collections
 import json
 import logging
 import math
 import os
 import queue
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path as FilePath
 from typing import Any, Callable
 
 import numpy as np
-from pathlib import Path as FilePath
 
 from core.module import Module
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
@@ -89,6 +93,8 @@ from gateway.services.map_paths import (
 )
 from gateway.services.map_safety import (
     apply_dynamic_filter_step1half as _map_apply_dynamic_filter_step1half,
+)
+from gateway.services.map_safety import (
     safe_map_name as _map_safe_map_name,
 )
 from gateway.services.runtime_status import (
@@ -103,8 +109,8 @@ from gateway.services.safety_status import (
 )
 from gateway.services.traffic import (
     DEFAULT_CLOUD_QUEUE_MAXSIZE,
-    DEFAULT_SSE_RASTER_MIN_INTERVAL_S,
     DEFAULT_SSE_QUEUE_MAXSIZE,
+    DEFAULT_SSE_RASTER_MIN_INTERVAL_S,
     DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED,
     DROP_OLDEST_POLICY,
     RECOMMENDED_CLIENT_RATES_HZ,
@@ -343,6 +349,7 @@ class GatewayModule(Module, layer=6):
         self._map_cloud_lock = threading.Lock()
         self._map_cloud_count: int = 0
         self._map_voxel_size: float = 0.15
+        self._inv_map_voxel_size: float = 1.0 / 0.15
 
         # Dynamic-obstacle removal — hit-count voting per voxel.
         # Phase 1 of docs/05-specialized/dynamic_obstacle_removal.md.
@@ -1447,7 +1454,7 @@ class GatewayModule(Module, layer=6):
             path = self._LAST_POSE_PATH
             if not os.path.isfile(path):
                 return None
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 d = json.load(f)
             if d.get("map_name") != map_name:
                 return None
@@ -1474,7 +1481,6 @@ class GatewayModule(Module, layer=6):
         x, y, yaw = d["x"], d["y"], d["yaw"]
 
         def _worker() -> None:
-            import subprocess as _sp
             time.sleep(2.5)  # give localizer time to finish loading static map
             try:
                 pcd_path = str(map_dir_for(map_name) / "map.pcd")
@@ -1492,7 +1498,7 @@ class GatewayModule(Module, layer=6):
                       f"\"{{pcd_path: '{pcd_path}', x: {x}, y: {y}, z: 0.0, "
                       f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\""
                 )
-                r = _sp.run(
+                r = subprocess.run(
                     ["bash", "-c", cmd],
                     capture_output=True,
                     text=True,
@@ -1930,7 +1936,7 @@ class GatewayModule(Module, layer=6):
         At voxel_size=0.15m this covers ±78km world range. Handles negative
         coords via self._voxel_key_offset.
         """
-        k = (pts_xyz[:, :3] / self._map_voxel_size).astype(np.int64)
+        k = (pts_xyz[:, :3] * self._inv_map_voxel_size).astype(np.int64)
         k = (k + self._voxel_key_offset) & 0xFFFFF
         return (k[:, 0] << 40) | (k[:, 1] << 20) | k[:, 2]
 
@@ -2146,10 +2152,7 @@ class GatewayModule(Module, layer=6):
         if not self._should_emit_sse_raster("costmap"):
             return
         try:
-            import base64 as _b64
-
-            import numpy as _np
-            g = _np.clip(grid, 0, 100).astype(_np.uint8)
+            g = np.clip(grid, 0, 100).astype(np.uint8)
             # grid[iy, ix]: shape[0]=rows(Y), shape[1]=cols(X)
             rows = int(g.shape[0])
             cols = int(g.shape[1]) if g.ndim >= 2 else rows
@@ -2162,7 +2165,7 @@ class GatewayModule(Module, layer=6):
             yaw = 0.0
             self.push_event({
                 "type":       "costmap",
-                "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
+                "grid_b64":   base64.b64encode(g.tobytes()).decode(),
                 "rows":       rows,
                 "cols":       cols,
                 "resolution": float(cm.get("resolution", 0.1)),
@@ -2184,11 +2187,8 @@ class GatewayModule(Module, layer=6):
         if not self._should_emit_sse_raster("slope_grid"):
             return
         try:
-            import base64 as _b64
-
-            import numpy as _np
             # Shape metadata is cheap; inline raster payload is optional.
-            arr = _np.asarray(grid)
+            arr = np.asarray(grid)
             rows = int(arr.shape[0])
             cols = int(arr.shape[1]) if arr.ndim >= 2 else rows
             origin = [float(v) for v in data.get("origin", [0.0, 0.0])]
@@ -2205,11 +2205,11 @@ class GatewayModule(Module, layer=6):
                 "yaw":        float(yaw),
             }
             if self._sse_slope_payload_enabled:
-                g = _np.clip(arr * (255.0 / 90.0), 0, 255).astype(_np.uint8)
+                g = np.clip(arr * (255.0 / 90.0), 0, 255).astype(np.uint8)
                 event.update({
                     "payload": "inline",
                     "encoding": "uint8_slope_degrees_0_90",
-                    "grid_b64": _b64.b64encode(g.tobytes()).decode(),
+                    "grid_b64": base64.b64encode(g.tobytes()).decode(),
                 })
             else:
                 event.update({
@@ -2496,7 +2496,6 @@ class GatewayModule(Module, layer=6):
     def _build_app(self):
         try:
             from fastapi import FastAPI
-            import os
             from fastapi.middleware.cors import CORSMiddleware
             from fastapi.responses import JSONResponse
         except ImportError:
@@ -2523,13 +2522,13 @@ class GatewayModule(Module, layer=6):
         # -- API Key auth (disabled if LINGTU_API_KEY not set) -------------
         from gateway.auth import APIKeyMiddleware
         from gateway.routes import (
+            map_lifecycle_payload,
             mount_dashboard_assets,
             register_app_routes,
             register_auth_routes,
             register_camera_routes,
             register_command_routes,
             register_diagnostic_routes,
-            map_lifecycle_payload,
             register_map_routes,
             register_operation_routes,
             register_realtime_routes,
@@ -2683,7 +2682,6 @@ class GatewayModule(Module, layer=6):
         # Reduce GIL switch interval so uvicorn's event loop gets CPU time
         # even when LiDAR/DDS callbacks are active in other threads.
         # Default is 5ms; 1ms gives the event loop ~10x more scheduling chances.
-        import sys
         old_interval = sys.getswitchinterval()
         sys.setswitchinterval(0.001)
         uvicorn = None
@@ -2776,8 +2774,6 @@ class GatewayModule(Module, layer=6):
 
     def _generate_viewer_live(self) -> str:
         """Snapshot ikd-tree to temp PCD, then render. Shows exactly what save_map would produce."""
-        import os
-        import subprocess
         import tempfile
         tmp = os.path.join(tempfile.gettempdir(), "lingtu_live_snapshot.pcd")
         try:

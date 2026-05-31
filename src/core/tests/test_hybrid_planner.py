@@ -256,7 +256,7 @@ class TestHybridPlannerFailureSemantic:
         assert not result.success, \
             "A* cannot cross the wall — must return failure, NOT a straight-line fallback"
         assert len(result.waypoints) == 0
-        assert len(result.failure_reason) > 0
+        assert "BLOCKED" in result.failure_reason
 
     def test_no_topo_path_returns_failure(self):
         """Two disconnected rooms in the topology → success=False."""
@@ -381,4 +381,4 @@ class TestHybridPath:
         planner = HybridPlanner(topology_graph=tsg, trav=_make_open_trav())
         result = planner.plan_path(np.array([0, 0, 0]), np.array([100, 0, 0]))
         assert not result.success
-        assert len(result.failure_reason) > 0
+        assert "no topological path" in result.failure_reason

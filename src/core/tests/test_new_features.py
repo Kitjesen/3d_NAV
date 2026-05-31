@@ -76,7 +76,6 @@ def test_31_semantic_mapper_persistence():
         has_kg = mod2._kg is not None
         room_types = mod2._kg.room_types if has_kg else []
         assert has_kg, "KG should be loaded"
-        assert len(room_types) > 0, f"room_types should not be empty, got: {room_types}"
         assert "office" in room_types, f"Expected 'office' in room_types, got: {room_types}"
         mod2.stop()
     finally:
@@ -107,7 +106,7 @@ def test_32_vector_memory_numpy():
 
     # Verify query works and returns correct position
     result = mod._query("backpack")
-    assert len(result) > 0, "Query should return results"
+    assert len(result) >= 1, f"Query should return at least 1 result, got {len(result)}"
     assert result[0]["x"] == 5.0, f"Expected x=5.0, got {result[0]['x']}"
     assert result[0]["y"] == 10.0, f"Expected y=10.0, got {result[0]['y']}"
 

@@ -14,14 +14,19 @@ Usage::
 
 from __future__ import annotations
 
+import collections
+import json
 import logging
 import math
 import os
+import subprocess
 import threading
 import time as _time
 from typing import Any, Callable, Dict, Optional
 
 import numpy as np
+
+from core.service_manager import get_service_manager
 
 from core.backend_status import BackendStatus
 from core.module import Module, skill
@@ -149,7 +154,7 @@ class SlamBridgeModule(Module, layer=1):
         self._reader = None
         self._rclpy_node = None  # fallback
         self._rclpy_executor = None
-        self._odom_recv_ts: list = []  # raw receive timestamps for true Hz
+        self._odom_recv_ts: collections.deque = collections.deque(maxlen=30)
         self._pointcloud_worker_lock = threading.Lock()
         self._pointcloud_worker_thread: threading.Thread | None = None
         self._pointcloud_worker_drops: int = 0
@@ -336,7 +341,7 @@ class SlamBridgeModule(Module, layer=1):
         self._gnss_residual_warn_ratio: float = kw.get(
             "gnss_residual_warn_ratio", 0.7)
         # Ring buffer of (ts, residual_m) for sliding-window ratio check
-        self._gnss_residual_history: list[tuple[float, float]] = []
+        self._gnss_residual_history: collections.deque = collections.deque()
         self._gnss_last_residual_m: float = 0.0
         self._gnss_relock_count: int = 0
         self._gnss_last_relock_ts: float = 0.0
@@ -674,12 +679,8 @@ class SlamBridgeModule(Module, layer=1):
 
     def _restart_backend_for_recovery(self, profile: str) -> bool:
         """Restart the active localization backend after drift divergence."""
-        import subprocess
-
         backend = str(profile or "bridge").lower()
         try:
-            from core.service_manager import get_service_manager
-
             svc = get_service_manager()
             if backend == "super_lio":
                 svc.stop(
@@ -751,7 +752,6 @@ class SlamBridgeModule(Module, layer=1):
         timeout: float = 30.0,
     ) -> bool:
         import shlex
-        import subprocess
 
         deadline = _time.monotonic() + timeout
         quoted_topic = shlex.quote(topic)
@@ -817,7 +817,6 @@ class SlamBridgeModule(Module, layer=1):
         """Avoid leaving the saved-map localizer stopped after failed recovery."""
         try:
             if svc is None:
-                from core.service_manager import get_service_manager
                 svc = get_service_manager()
             self._ensure_recovery_services(svc, "localizer")
             return
@@ -829,7 +828,6 @@ class SlamBridgeModule(Module, layer=1):
             )
 
         try:
-            import subprocess
             result = subprocess.run(
                 ["sudo", "systemctl", "start", "robot-localizer.service"],
                 capture_output=True,
@@ -880,7 +878,6 @@ class SlamBridgeModule(Module, layer=1):
         try:
             restart_start_mono = _time.monotonic()
             restart_start_wall = _time.time()
-            from core.service_manager import get_service_manager
 
             svc = get_service_manager()
             svc.stop("localizer")
@@ -935,8 +932,6 @@ class SlamBridgeModule(Module, layer=1):
             return self._restart_localization_chain_systemctl_fallback()
 
     def _restart_localization_chain_systemctl_fallback(self) -> bool:
-        import subprocess
-
         commands = (
             ["sudo", "systemctl", "stop", "robot-localizer.service"],
             ["sudo", "systemctl", "stop", "robot-fastlio2.service"],
@@ -1088,8 +1083,6 @@ class SlamBridgeModule(Module, layer=1):
         If no good position was ever recorded (SLAM diverged from startup),
         falls back to origin (0, 0, 0).
         """
-        import os
-        import subprocess
         profile = self._current_backend_profile()
         contract = self._backend_contract(profile)
         pos = self._drift_last_good_pos
@@ -1199,8 +1192,6 @@ class SlamBridgeModule(Module, layer=1):
         ):
             self._localizer_odom_loss_recovery_waiting_new_odom = False
         self._odom_recv_ts.append(wall)
-        if len(self._odom_recv_ts) > 30:
-            self._odom_recv_ts.pop(0)
 
     def _mark_cloud_received(
         self,
@@ -1308,8 +1299,6 @@ class SlamBridgeModule(Module, layer=1):
             return self._backend_detect_cache or configured or "bridge"
         self._backend_detect_mono = now
         try:
-            from core.service_manager import get_service_manager
-
             services = get_service_manager().status(
                 "super_lio_relocation",
                 "super_lio",
@@ -1386,12 +1375,9 @@ class SlamBridgeModule(Module, layer=1):
             if n == 0:
                 return
             step = msg.point_step
-            data = np.array(msg.data, dtype=np.uint8)
-            raw = data.reshape(n, step)
-            xyz = np.zeros((n, 3), dtype=np.float32)
-            xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
-            xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
-            xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
+            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, step)
+            xyz_buf = raw[:, :12].copy()
+            xyz = xyz_buf.view(np.float32).reshape(-1, 3)
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
@@ -1413,11 +1399,9 @@ class SlamBridgeModule(Module, layer=1):
             if n == 0:
                 return
             step = msg.point_step
-            raw = np.array(msg.data, dtype=np.uint8).reshape(n, step)
-            xyz = np.zeros((n, 3), dtype=np.float32)
-            xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
-            xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
-            xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
+            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, step)
+            xyz_buf = raw[:, :12].copy()
+            xyz = xyz_buf.view(np.float32).reshape(-1, 3)
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
@@ -1517,10 +1501,8 @@ class SlamBridgeModule(Module, layer=1):
                 xyz = pts[:, :3].copy()
             else:
                 raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, step)
-                xyz = np.zeros((n, 3), dtype=np.float32)
-                xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
-                xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
-                xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
+                xyz_buf = raw[:, :12].copy()
+                xyz = xyz_buf.view(np.float32).reshape(-1, 3)
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
@@ -1543,10 +1525,8 @@ class SlamBridgeModule(Module, layer=1):
                 xyz = pts[:, :3].copy()
             else:
                 raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, step)
-                xyz = np.zeros((n, 3), dtype=np.float32)
-                xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
-                xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
-                xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
+                xyz_buf = raw[:, :12].copy()
+                xyz = xyz_buf.view(np.float32).reshape(-1, 3)
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
@@ -1674,7 +1654,6 @@ class SlamBridgeModule(Module, layer=1):
         T = getattr(self, "_T_map_odom", None)
         if T is None:
             return odom
-        import numpy as _np
         # Position: map_p = T_map_odom * odom_p
         p = odom.pose.position
         ox, oy, oz = float(p.x), float(p.y), float(p.z)
@@ -1689,34 +1668,34 @@ class SlamBridgeModule(Module, layer=1):
         xx, yy, zz = qx * qx, qy * qy, qz * qz
         xy, xz, yz = qx * qy, qx * qz, qy * qz
         wx, wy, wzz = qw * qx, qw * qy, qw * qz
-        R_body = _np.array([
+        R_body = np.array([
             [1 - 2 * (yy + zz),     2 * (xy - wzz),    2 * (xz + wy)],
             [    2 * (xy + wzz), 1 - 2 * (xx + zz),    2 * (yz - wx)],
             [    2 * (xz - wy),     2 * (yz + wx), 1 - 2 * (xx + yy)],
-        ], dtype=_np.float64)
+        ], dtype=np.float64)
         R_map = T[:3, :3] @ R_body
         # 3x3 → quat (Shepperd-style, stable for any rotation)
         tr = R_map[0, 0] + R_map[1, 1] + R_map[2, 2]
         if tr > 0:
-            S = 2.0 * _np.sqrt(tr + 1.0)
+            S = 2.0 * np.sqrt(tr + 1.0)
             nw = 0.25 * S
             nx = (R_map[2, 1] - R_map[1, 2]) / S
             ny = (R_map[0, 2] - R_map[2, 0]) / S
             nz = (R_map[1, 0] - R_map[0, 1]) / S
         elif (R_map[0, 0] > R_map[1, 1]) and (R_map[0, 0] > R_map[2, 2]):
-            S = 2.0 * _np.sqrt(1.0 + R_map[0, 0] - R_map[1, 1] - R_map[2, 2])
+            S = 2.0 * np.sqrt(1.0 + R_map[0, 0] - R_map[1, 1] - R_map[2, 2])
             nw = (R_map[2, 1] - R_map[1, 2]) / S
             nx = 0.25 * S
             ny = (R_map[0, 1] + R_map[1, 0]) / S
             nz = (R_map[0, 2] + R_map[2, 0]) / S
         elif R_map[1, 1] > R_map[2, 2]:
-            S = 2.0 * _np.sqrt(1.0 + R_map[1, 1] - R_map[0, 0] - R_map[2, 2])
+            S = 2.0 * np.sqrt(1.0 + R_map[1, 1] - R_map[0, 0] - R_map[2, 2])
             nw = (R_map[0, 2] - R_map[2, 0]) / S
             nx = (R_map[0, 1] + R_map[1, 0]) / S
             ny = 0.25 * S
             nz = (R_map[1, 2] + R_map[2, 1]) / S
         else:
-            S = 2.0 * _np.sqrt(1.0 + R_map[2, 2] - R_map[0, 0] - R_map[1, 1])
+            S = 2.0 * np.sqrt(1.0 + R_map[2, 2] - R_map[0, 0] - R_map[1, 1])
             nw = (R_map[1, 0] - R_map[0, 1]) / S
             nx = (R_map[0, 2] + R_map[2, 0]) / S
             ny = (R_map[1, 2] + R_map[2, 1]) / S
@@ -1748,17 +1727,16 @@ class SlamBridgeModule(Module, layer=1):
         publisher, because the jump itself is the optimised correction.
         Hand-rolling this 60-line check at the consumer (here, SlamBridge)
         is therefore the *only* canonical option."""
-        import numpy as _np
         qx, qy, qz, qw = _normalize_quat(qx, qy, qz, qw)
         xx, yy, zz = qx * qx, qy * qy, qz * qz
         xy, xz, yz = qx * qy, qx * qz, qy * qz
         wx, wy, wz = qw * qx, qw * qy, qw * qz
-        R = _np.array([
+        R = np.array([
             [1 - 2 * (yy + zz),     2 * (xy - wz),     2 * (xz + wy)],
             [    2 * (xy + wz), 1 - 2 * (xx + zz),     2 * (yz - wx)],
             [    2 * (xz - wy),     2 * (yz + wx), 1 - 2 * (xx + yy)],
-        ], dtype=_np.float64)
-        T = _np.eye(4, dtype=_np.float64)
+        ], dtype=np.float64)
+        T = np.eye(4, dtype=np.float64)
         T[:3, :3] = R
         T[:3, 3] = [tx, ty, tz]
 
@@ -1767,12 +1745,12 @@ class SlamBridgeModule(Module, layer=1):
         prev_T = getattr(self, "_T_map_odom", None)
         if prev_T is not None:
             dt_vec = T[:3, 3] - prev_T[:3, 3]
-            dt_norm = float(_np.linalg.norm(dt_vec))
+            dt_norm = float(np.linalg.norm(dt_vec))
             # Rotation angle between two rotation matrices = arccos((tr(R_rel) - 1) / 2)
             R_rel = T[:3, :3] @ prev_T[:3, :3].T
-            tr = float(_np.clip((_np.trace(R_rel) - 1.0) * 0.5, -1.0, 1.0))
-            dyaw_rad = float(_np.arccos(tr))
-            dyaw_deg = dyaw_rad * 180.0 / _np.pi
+            tr = float(np.clip((np.trace(R_rel) - 1.0) * 0.5, -1.0, 1.0))
+            dyaw_rad = float(np.arccos(tr))
+            dyaw_deg = dyaw_rad * 180.0 / np.pi
             jump_t_thresh = getattr(self, "_jump_t_threshold_m", 1.0)
             jump_r_thresh = getattr(self, "_jump_r_threshold_deg", 30.0)
             if dt_norm > jump_t_thresh or dyaw_deg > jump_r_thresh:
@@ -2330,7 +2308,7 @@ class SlamBridgeModule(Module, layer=1):
         cutoff = now - window
         # Drop entries older than the window
         while self._gnss_residual_history and self._gnss_residual_history[0][0] < cutoff:
-            self._gnss_residual_history.pop(0)
+            self._gnss_residual_history.popleft()
 
         # Need a filled window + enough samples (≥ 5) before firing
         if not self._gnss_residual_history:
@@ -2818,7 +2796,6 @@ class SlamBridgeModule(Module, layer=1):
         """Return GNSS-SLAM fusion health: alignment, residual, fix quality,
         relock count, and last GNSS sample age. Use this to diagnose outdoor
         drift or suspected GNSS signal loss."""
-        import json
         return json.dumps(self._gnss_health_snapshot(), default=str)
 
     @skill
@@ -2827,7 +2804,6 @@ class SlamBridgeModule(Module, layer=1):
         valid RTK fix received while SLAM is healthy will establish a new
         offset. Use this after a known map switch or after diagnosing that
         the current alignment drifted."""
-        import json
         prev = (
             None if self._gnss_map_offset is None
             else [float(self._gnss_map_offset[0]),
@@ -2851,7 +2827,6 @@ class SlamBridgeModule(Module, layer=1):
         disabled, SLAM odometry is published without any GNSS correction
         (equivalent to pure LiDAR-inertial SLAM). Persisted only in this
         process — does not write robot_config.yaml."""
-        import json
         self._gnss_fusion = bool(enabled)
         if not self._gnss_fusion:
             # Dropping the alignment is kinder than leaving a stale offset

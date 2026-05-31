@@ -25,7 +25,19 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────
 
 def sanitize_float(v: float, default: float = 0.0) -> float:
-    """NaN / Inf → default。"""
+    """NaN / Inf → default.
+
+    Examples::
+
+        >>> sanitize_float(3.14)
+        3.14
+        >>> sanitize_float(float("nan"))
+        0.0
+        >>> sanitize_float(float("inf"), default=-1.0)
+        -1.0
+        >>> sanitize_float(42, default=0.0)
+        42
+    """
     if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
         return default
     return v
@@ -36,6 +48,19 @@ def sanitize_position(
     default: tuple = (0.0, 0.0, 0.0),
 ) -> list[float]:
     """校验 3D 位置，NaN/Inf 分量替换为 default 对应分量。
+
+    Examples::
+
+        >>> sanitize_position([1.0, 2.0, 3.0])
+        [1.0, 2.0, 3.0]
+        >>> sanitize_position([float("nan"), 2.0, 3.0])
+        [0.0, 2.0, 3.0]
+        >>> sanitize_position([1.0, float("inf"), 3.0], default=(0.0, 0.0, 0.0))
+        [1.0, 0.0, 3.0]
+        >>> sanitize_position([1.0])  # short list returns default
+        [0.0, 0.0, 0.0]
+        >>> sanitize_position(None)
+        [0.0, 0.0, 0.0]
 
     Returns:
         始终返回长度 3 的 float 列表。
@@ -83,6 +108,17 @@ def safe_json_dumps(
     1. 首先尝试 allow_nan=False (最快路径)
     2. 失败时递归清理 NaN/Inf 后重试
     3. 仍失败返回 default_value
+
+    Examples::
+
+        >>> safe_json_dumps({"a": 1, "b": 2})
+        '{"a": 1, "b": 2}'
+        >>> safe_json_dumps({"x": float("nan")})
+        '{"x": 0.0}'
+        >>> safe_json_dumps({"y": float("inf")}, indent=2)
+        '{\\n  "y": 0.0\\n}'
+        >>> safe_json_dumps(object(), default_value="null")
+        'null'
 
     Args:
         data: 要序列化的数据

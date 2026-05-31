@@ -41,7 +41,9 @@ def test_multi_robot_blueprint_builds():
         enable_semantic=False,
         **_FAST_CFG,
     )
-    assert len(bp._entries) > 0
+    assert len(bp._entries) >= 4, (
+        f"Expected at least 4 entries for 2-stub system, got {len(bp._entries)}"
+    )
     # Check no duplicate aliases
     names = [e.name for e in bp._entries]
     assert len(names) == len(set(names)), f"Duplicate aliases: {names}"
@@ -60,7 +62,9 @@ def test_multi_robot_full_semantic():
     )
     names = [e.name for e in bp._entries]
     assert len(names) == len(set(names))
-    assert len(bp._wires) > 0
+    assert len(bp._wires) >= 2, (
+        f"Expected at least 2 wires for 2-stub semantic system, got {len(bp._wires)}"
+    )
 
 
 def test_multi_robot_with_gateway():

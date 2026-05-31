@@ -213,7 +213,18 @@ def normalize_quaternion(
     *,
     epsilon: float = 1e-6,
 ) -> tuple[float, float, float, float] | None:
-    """归一化四元数，返回 (x, y, z, w) 或 None。"""
+    """归一化四元数，返回 (x, y, z, w) 或 None。
+
+    Examples::
+
+        >>> normalize_quaternion(0.0, 0.0, 0.0, 1.0)
+        (0.0, 0.0, 0.0, 1.0)
+        >>> q = normalize_quaternion(0.0, 0.0, 0.1, 0.995)
+        >>> abs(sum(c*c for c in q) - 1.0) < 1e-12
+        True
+        >>> normalize_quaternion(0.0, 0.0, 0.0, 0.0) is None
+        True
+    """
     norm = math.sqrt(x * x + y * y + z * z + w * w)
     if norm < epsilon:
         logger.warning("Quaternion near-zero norm: %.2e", norm)

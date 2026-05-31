@@ -201,7 +201,7 @@ class TestLingtuVersion:
 
         v = _lingtu_version()
         assert isinstance(v, str)
-        assert len(v) > 0
+        assert v.count(".") >= 1, f"Expected semver-like version string, got {v!r}"
 
 
 def _runtime_status_state() -> dict:
