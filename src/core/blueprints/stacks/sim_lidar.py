@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 from core.blueprint import Blueprint
+from core.blueprints.stacks._registry import stack_module
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +29,18 @@ def sim_lidar(scene_xml: str = "", **config) -> Blueprint:
     if not scene_xml:
         return bp
 
-    from drivers.sim.sim_pointcloud_provider import SimPointCloudProvider
-    bp.add(SimPointCloudProvider, scene_xml=scene_xml, **config)
+    SimPointCloudProvider = stack_module(
+        "sim_lidar",
+        "pointcloud",
+        seed_group="sim_lidar",
+        fallback="drivers.sim.sim_pointcloud_provider.SimPointCloudProvider",
+    )
+    bp.add(
+        SimPointCloudProvider,
+        alias="SimPointCloudProvider",
+        scene_xml=scene_xml,
+        **config,
+    )
     logger.info("sim_lidar stack: SimPointCloudProvider(%s)", scene_xml)
 
     return bp

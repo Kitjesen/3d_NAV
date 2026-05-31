@@ -14,6 +14,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from core import Blueprint, In, Module, Out, autoconnect
+from core.registry import register
 from semantic.perception.semantic_perception.detector_module import (
     DetectionResult,
     DetectorModule,
@@ -95,6 +96,23 @@ class TestDetectorModule(unittest.TestCase):
         with self.assertRaises(ValueError):
             mod.setup()
 
+    def test_create_backend_uses_perception_detector_registry(self):
+        seen = []
+
+        @register("perception_detector", "standalone_registry_detector")
+        class _DetectorProvider:
+            @staticmethod
+            def create(module):
+                seen.append(module)
+                return _MockDetectorBackend()
+
+        mod = DetectorModule(detector="standalone_registry_detector")
+
+        backend = mod._create_backend()
+
+        self.assertIsInstance(backend, _MockDetectorBackend)
+        self.assertEqual(seen, [mod])
+
     @patch.object(DetectorModule, '_create_backend', return_value=None)
     def test_no_backend_no_crash(self, _mock):
         """If backend fails to load, image delivery doesn't crash."""
@@ -115,6 +133,23 @@ class TestEncoderModule(unittest.TestCase):
         mod = EncoderModule()
         self.assertIn("image", mod.ports_in)
         self.assertIn("feature", mod.ports_out)
+
+    def test_create_backend_uses_perception_encoder_registry(self):
+        seen = []
+
+        @register("perception_encoder", "standalone_registry_encoder")
+        class _EncoderProvider:
+            @staticmethod
+            def create(module):
+                seen.append(module)
+                return _MockEncoderBackend()
+
+        mod = EncoderModule(encoder="standalone_registry_encoder")
+
+        backend = mod._create_backend()
+
+        self.assertIsInstance(backend, _MockEncoderBackend)
+        self.assertEqual(seen, [mod])
 
     @patch.object(EncoderModule, '_create_backend', return_value=_MockEncoderBackend())
     def test_encode_publishes_feature(self, _mock):
@@ -273,6 +308,22 @@ class TestDetectorBackendConfiguration(unittest.TestCase):
             min_box_size_px=10,
         )
         self.assertIs(backend, bpu_cls.return_value)
+
+    @patch("semantic.perception.semantic_perception.grounding_dino_detector.GroundingDINODetector")
+    def test_grounding_dino_backend_receives_confidence_as_box_threshold(self, dino_cls):
+        mod = DetectorModule(
+            detector="grounding_dino",
+            confidence=0.27,
+            device="cpu",
+        )
+
+        backend = mod._create_backend()
+
+        dino_cls.assert_called_once_with(
+            box_threshold=0.27,
+            device="cpu",
+        )
+        self.assertIs(backend, dino_cls.return_value)
 
 
 if __name__ == "__main__":

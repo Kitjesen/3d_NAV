@@ -8,12 +8,14 @@ from typing import Any
 import numpy as np
 
 from core.module import Module
+from core.registry import register
 from core.runtime_interface import TOPICS, topic_default_frame_id
 from core.stream import In
 
 logger = logging.getLogger(__name__)
 
 
+@register("map", "ros2_grid_bridge", description="ROS 2 OccupancyGrid visualization bridge")
 class ROS2GridBridgeModule(Module, layer=2):
     """Publish internal LingTu exploration grids as ROS 2 OccupancyGrid."""
 

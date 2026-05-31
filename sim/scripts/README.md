@@ -1,73 +1,74 @@
-# sim/scripts — 仿真脚本索引
+# sim/scripts Index
 
-> **为什么是索引而不是子目录**：这些脚本的路径已是事实上的契约——
-> `cli/profiles_data.py` 的 `_external_launcher`、`simulation_contract.py`、
-> `test_profile_graph_snapshots.py` 的断言、以及多个 `from sim.scripts.xxx import`
-> 都硬编码了 `sim/scripts/<name>`。物理移动会触发 30+ 处跨 profile/契约/测试/CI 的
-> 连锁修改，成本远超收益。因此用**命名前缀 + 本索引**表达分类，保持路径稳定。
->
-> 约定：新脚本按前缀命名（`*_gate.py` / `*_validation.py` / `run_*`,`demo_*` / `launch_*.sh`）。
+This directory is a stable script contract, not a package boundary. Many
+profiles, tests, and evidence gates refer to `sim/scripts/<name>` directly, so
+scripts stay in place and are grouped by naming convention.
 
-## 1. CI 门禁 `*_gate.py`（可被 CI 当作通过/失败闸门）
+## Safety Classes
 
-- `cmu_unity_runtime_gate.py` / `cmu_unity_sim_gate.py` — CMU Unity 仿真运行时门禁
-- `dynamic_obstacle_local_planner_gate.py` — 动态障碍下局部规划门禁
-- `fastlio2_rosbag_replay_gate.py` — Fast-LIO2 rosbag 回放门禁
-- `fastlio_speed_boundary_gate.py` — Fast-LIO 速度边界门禁
-- `gateway_goal_dry_run_gate.py` — Gateway 目标 dry-run 门禁
-- `gazebo_runtime_gate.py` — Gazebo 运行时门禁
-- `large_loop_closure_gate.py` — 大回环闭合门禁
-- `moving_obstacle_sweep_gate.py` — 移动障碍扫掠门禁
-- `mujoco_fastlio2_live_gate.py` — MuJoCo + Fast-LIO2 live 门禁
-- `native_pct_mujoco_gate.py` — 原生 PCT + MuJoCo 门禁
-- `pct_saved_map_navigation_gate.py` — PCT 存图导航门禁
-- `routecheck_preflight_gate.py` — 路线预检门禁
-- `saved_map_relocalize_contract_gate.py` / `saved_map_relocalize_runtime_gate.py` — 存图重定位门禁
-- `server_sim_closure.py` — 服务端仿真闭环门禁
+Use the safety class before running a script:
 
-## 2. 验证 / 诊断 `*_validation` / `*_diagnosis`
+| Safety class | Meaning | Examples |
+| --- | --- | --- |
+| summary-only unless --run-missing | Reads existing reports and writes an aggregate summary. It must not launch missing gates unless `--run-missing` is passed. Use `--host-preflight` to check host suitability without gate execution; use `--json-out -` for stdout-only reporting. | `server_sim_closure.py` |
+| local non-motion | Runs local Python checks, asset generation, or in-memory module dataflow. It must report `real_robot_motion=false` and `cmd_vel_sent_to_hardware=false`. | `multifloor_nav_validation.py --skip-mujoco`, `large_terrain_nav_validation.py`, `routecheck_preflight_gate.py` |
+| simulated motion only | May move a MuJoCo/Gazebo/Unity simulated robot. It must stay disconnected from physical robot drivers and hardware command subscribers. | `policy_nav_smoke.py`, `native_pct_mujoco_gate.py`, `mujoco_fastlio2_live_gate.py` |
+| ROS2 isolated simulation | May source ROS 2, launch sim nodes, or publish sim topics. Use an isolated `ROS_DOMAIN_ID`; never run on a robot ROS domain. | `gazebo_runtime_gate.py`, `launch_mujoco_fastlio2_live.sh`, `launch_lingtu_gazebo_industrial_demo.sh` |
+| legacy manual | Historical helpers or dataset scripts. They can source install spaces, start subprocesses, or assume local assets; they are not part of the G4 closure unless another gate explicitly consumes their report. | `_run_legkilo_test.sh`, `run_legkilo_test.sh`, `test_*.sh`, legacy Go1 demos |
 
-- `large_terrain_nav_validation.py` — 大地形导航验证（被 `test_large_terrain_scenario` 引用）
-- `large_loop_diagnosis_matrix.py` — 大回环诊断矩阵
-- `multifloor_nav_validation.py` — 多楼层导航验证
-- `render_slam_validation_screenshots.py` — SLAM 验证截图渲染
-- `run_slam_dataset_test_v2.py` — SLAM 数据集测试
-- `cmu_unity_tomogram_capture.py` — CMU Unity tomogram 采集
+## Gate Scripts
 
-## 3. 演示 / 运行入口 `run_*` / `demo_*` / `view_*` / `record_*`
+- `server_sim_closure.py` - G4 evidence aggregator; summary-only unless --run-missing. `--host-preflight` reports whether the current host can safely run the selected gates without launching them.
+- `routecheck_preflight_gate.py` - Gateway route preflight with no goal or cmd_vel publication.
+- `gateway_goal_dry_run_gate.py` - Gateway dry-run goal contract.
+- `dynamic_obstacle_local_planner_gate.py` - Dynamic-obstacle local planner gate.
+- `large_loop_closure_gate.py` - Large-loop closure report validator.
+- `moving_obstacle_sweep_gate.py` - Moving-obstacle sweep report validator.
+- `fastlio2_rosbag_replay_gate.py` - Fast-LIO2 rosbag replay gate.
+- `fastlio_speed_boundary_gate.py` - Fast-LIO speed-boundary gate.
+- `mujoco_fastlio2_live_gate.py` - MuJoCo live LiDAR/IMU plus Fast-LIO2 simulation gate.
+- `native_pct_mujoco_gate.py` - Native PCT plus ROS2 local planner/path follower into MuJoCo simulation.
+- `gazebo_runtime_gate.py` - Gazebo runtime simulation gate; requires ROS2 isolated simulation.
+- `pct_saved_map_navigation_gate.py` - Saved-map PCT navigation gate.
+- `saved_map_relocalize_contract_gate.py` / `saved_map_relocalize_runtime_gate.py` - Saved-map relocalization gates.
+- `cmu_unity_runtime_gate.py` / `cmu_unity_sim_gate.py` - CMU Unity runtime and contract gates.
 
-- `run_sim.py` — 通用仿真启动
-- `run_person_following.py` — 人物跟随
-- `run_semantic_full_stack.py` — 语义全栈
-- `demo_search.py` — 搜索演示
-- `policy_nav_smoke.py` — policy 导航冒烟
-- `go1_indoor_nav.py` / `go1_nav_full.py` — legacy Go1 demos; require optional `sim/robots/go1_playground/` assets and are not part of current G4 closure
-- `nav_overlay.py` — 导航叠加可视化
-- `view_scene.py` — 场景查看
-- `benchmark_following.py` — 跟随基准
-- `record_policy_nav_video.py` / `render_gazebo_frontier_video.py` — 录像/渲染
+## Validation And Diagnosis
 
-## 4. 启动脚本 `*.sh`
+- `multifloor_nav_validation.py` - Multi-floor navigation validation. Default safe mode is local non-motion; `--bridge-loop` changes it to simulated motion only.
+- `large_terrain_nav_validation.py` - Large-terrain global-planning asset validation. It does not exercise local planner or path follower backends and reports those algorithm surfaces as `not_exercised`.
+- `full_sim_validation.py` - Compatibility wrapper for the full simulation validation gate; canonical G4 closure aggregation is `server_sim_closure.py`.
+- `large_loop_diagnosis_matrix.py` - Large-loop diagnosis matrix.
+- `render_slam_validation_screenshots.py` - SLAM validation screenshot renderer.
+- `run_slam_dataset_test_v2.py` - SLAM dataset test runner.
+- `cmu_unity_tomogram_capture.py` - CMU Unity tomogram capture helper.
+- `run_global_planner.py` - Legacy ROS launch compatibility wrapper for `sim/launch/sim.launch.py`. It requires an isolated nonzero `ROS_DOMAIN_ID` and must not be used as the current G4 planner evidence source.
 
-- `launch_mujoco_fastlio2_live.sh` — MuJoCo + Fast-LIO2 live（profile `sim_mujoco_live` 的 `_external_launcher`）
-- `launch_cmu_unity_lingtu_runtime.sh` / `launch_cmu_unity_baseline.sh` — CMU Unity 运行时/基线
-- `launch_lingtu_gazebo_industrial_demo.sh` — Gazebo 工业园 demo
-- `test_*.sh`（`test_fullloop` / `test_semantic_nav` / `test_slam_datasets` / `test_slam_live` / `test_viz_*` / `test_factory_nova`）— 集成验证脚本
-- `install_deps.sh` — 依赖安装
-- `fastlio_speed_scan_plan.sh` / `run_legkilo_test.sh` — 速度扫描 / legkilo 数据集
+## Demo And Runtime Entrypoints
 
-## 5. 工具 / 数据
+- `run_sim.py` - Generic simulation launcher.
+- `run_person_following.py` - Person-following simulation launcher.
+- `run_semantic_full_stack.py` - Semantic full-stack simulation launcher.
+- `demo_search.py` - Search demo.
+- `policy_nav_smoke.py` - Policy-mode navigation smoke test; simulated motion only.
+- `cmu_unity_lingtu_stack.py` - CMU Unity LingTu stack helper for controlled simulation experiments; not the default product runtime.
+- `nav_overlay.py` - Navigation overlay visualization.
+- `view_scene.py` - Scene viewer.
+- `benchmark_following.py` - Person-following benchmark.
+- `record_policy_nav_video.py` / `render_gazebo_frontier_video.py` - Video recording/rendering helpers.
+- `go1_indoor_nav.py` / `go1_nav_full.py` - legacy Go1 demos; require optional `sim/robots/go1_playground/` assets and are not part of current G4 closure.
 
-- `algorithm_dataflow_summary.py` — 算法数据流摘要（被 `test_algorithm_dataflow_summary` 引用）
-- `rosbag_slam_bridge_replay.py` — rosbag → SLAM bridge 回放
+## Shell Launchers And Legacy Helpers
 
-## Stable index additions
+- `launch_mujoco_fastlio2_live.sh` - MuJoCo + Fast-LIO2 live simulation launcher for the `sim_mujoco_live` contract. Use ROS2 isolated simulation.
+- `launch_cmu_unity_lingtu_runtime.sh` / `launch_cmu_unity_baseline.sh` - CMU Unity runtime and baseline launchers.
+- `launch_lingtu_gazebo_industrial_demo.sh` - Gazebo industrial simulation demo launcher.
+- `_run_legkilo_test.sh` / `run_legkilo_test.sh` - legacy/manual dataset helper scripts. They may source ROS/install spaces, start SLAM dataset processes, or clean up external processes; do not include them in the G4 server closure.
+- `test_*.sh` - integration smoke helpers. Treat as legacy manual unless a gate documents a stricter contract.
+- `install_deps.sh` - optional dependency installer.
+- `fastlio_speed_scan_plan.sh` - speed scan helper.
 
-- `full_sim_validation.py` - compatibility wrapper for the full simulation
-  validation gate; canonical G4 closure aggregation is
-  `server_sim_closure.py`.
-- `cmu_unity_lingtu_stack.py` - CMU Unity LingTu stack helper for controlled
-  simulation experiments; not the default product runtime.
-- `_run_legkilo_test.sh` / `run_legkilo_test.sh` - legacy/manual dataset helper
-  scripts. They may source ROS/install spaces, start SLAM dataset processes, or
-  clean up external processes; do not include them in the G4 server closure.
+## Tooling
+
+- `algorithm_dataflow_summary.py` - Algorithm dataflow summary used by tests.
+- `rosbag_slam_bridge_replay.py` - Raw rosbag to `SlamBridgeModule` replay.

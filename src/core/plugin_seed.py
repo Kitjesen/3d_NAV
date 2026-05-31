@@ -12,6 +12,8 @@ import logging
 import sys
 from collections.abc import Iterable, Mapping
 
+from core.registry import restore_entries, snapshot
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,6 +43,8 @@ BUILTIN_PLUGIN_MODULES: Mapping[str, tuple[str, ...]] = {
         "nav.esdf_module",
         "nav.elevation_map_module",
         "nav.traversability_cost_module",
+        "nav.ros2_grid_bridge_module",
+        "nav.services.nav_services.map_manager_module",
     ),
     "safety": (
         "nav.safety_ring_module",
@@ -52,6 +56,7 @@ BUILTIN_PLUGIN_MODULES: Mapping[str, tuple[str, ...]] = {
     ),
     "navigation": (
         "nav.navigation_module",
+        "nav.ros2_path_bridge_module",
         "nav.frontier_explorer_module",
         "nav.traversable_frontier_module",
     ),
@@ -63,9 +68,13 @@ BUILTIN_PLUGIN_MODULES: Mapping[str, tuple[str, ...]] = {
     "slam": (
         "slam.slam_module",
         "slam.slam_bridge_module",
+        "slam.depth_visual_odom_module",
         "slam.gnss_module",
         "slam.gnss_bridge",
         "slam.ntrip_client_module",
+    ),
+    "sim_lidar": (
+        "drivers.sim.sim_pointcloud_provider",
     ),
     "exploration": (
         "exploration.tare_explorer_module",
@@ -76,6 +85,11 @@ BUILTIN_PLUGIN_MODULES: Mapping[str, tuple[str, ...]] = {
         "semantic.perception.semantic_perception.detector_module",
         "semantic.perception.semantic_perception.encoder_module",
         "semantic.perception.semantic_perception.api.factory",
+    ),
+    "reconstruction": (
+        "semantic.reconstruction.reconstruction_module",
+        "semantic.reconstruction.dataset_recorder_module",
+        "semantic.reconstruction.keyframe_exporter_module",
     ),
     "semantic": (
         "semantic.planner.semantic_planner.semantic_planner_module",
@@ -123,6 +137,7 @@ DEFAULT_BUILTIN_PLUGIN_GROUPS: tuple[str, ...] = (
     "slam",
     "exploration",
     "perception",
+    "reconstruction",
     "semantic",
     "llm",
     "memory",
@@ -154,19 +169,23 @@ def seed_builtin_plugins(
         available = ", ".join(sorted(BUILTIN_PLUGIN_MODULES))
         raise ValueError(f"Unknown plugin seed group(s): {unknown}. Available: {available}")
 
+    preserved_entries = snapshot()
     report: dict[str, dict[str, list[str]]] = {"loaded": {}, "failed": {}}
-    for group in requested:
-        for module_name in BUILTIN_PLUGIN_MODULES[group]:
-            try:
-                if reload_loaded and module_name in sys.modules:
-                    importlib.reload(sys.modules[module_name])
-                else:
-                    importlib.import_module(module_name)
-                report["loaded"].setdefault(group, []).append(module_name)
-            except Exception as exc:
-                message = f"{module_name}: {exc.__class__.__name__}: {exc}"
-                report["failed"].setdefault(group, []).append(message)
-                if strict:
-                    raise
-                logger.debug("Built-in plugin seed failed for %s", module_name, exc_info=True)
+    try:
+        for group in requested:
+            for module_name in BUILTIN_PLUGIN_MODULES[group]:
+                try:
+                    if reload_loaded and module_name in sys.modules:
+                        importlib.reload(sys.modules[module_name])
+                    else:
+                        importlib.import_module(module_name)
+                    report["loaded"].setdefault(group, []).append(module_name)
+                except Exception as exc:
+                    message = f"{module_name}: {exc.__class__.__name__}: {exc}"
+                    report["failed"].setdefault(group, []).append(message)
+                    if strict:
+                        raise
+                    logger.debug("Built-in plugin seed failed for %s", module_name, exc_info=True)
+    finally:
+        restore_entries(preserved_entries)
     return report

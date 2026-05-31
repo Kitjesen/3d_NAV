@@ -1,0 +1,15 @@
+# Go1 Playground Assets
+
+This directory is a placeholder for optional external assets used by the legacy
+Go1 demos and `sim/worlds/indoor_office.xml`.
+
+The expected external files are:
+
+- `xmls/go1_mjx_feetonly.xml`
+- `xmls/sensor_feet.xml`
+- `go1_policy.onnx`
+
+These assets are not part of the G4 server closure and are not required for
+the current LingTu Thunder/NOVA simulation gates. Keep this directory as an
+asset contract marker only; do not treat missing Go1 assets as a failure of the
+server-side full-simulation evidence path.

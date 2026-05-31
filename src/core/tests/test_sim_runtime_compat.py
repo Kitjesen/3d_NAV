@@ -1632,6 +1632,80 @@ def test_legacy_nova_nav_bridge_uses_current_robot_paths():
     assert '<include file="robot_with_camera.xml"/>' in source
 
 
+def test_legacy_sim_launch_global_planner_entrypoint_exists_and_is_guarded():
+    repo_root = Path(__file__).resolve().parents[3]
+    launch = (repo_root / "sim" / "launch" / "sim.launch.py").read_text(
+        encoding="utf-8"
+    )
+    wrapper = repo_root / "sim" / "scripts" / "run_global_planner.py"
+
+    assert 'sim_dir / "scripts" / "run_global_planner.py"' in launch
+    assert wrapper.exists()
+    source = wrapper.read_text(encoding="utf-8")
+    assert "ROS_DOMAIN_ID" in source
+    assert "isolated simulation domain" in source
+    assert "/nav/global_path" in source
+    assert "cmd_vel" not in source
+
+
+def test_legacy_manual_nova_scripts_default_to_current_robot_asset_paths():
+    repo_root = Path(__file__).resolve().parents[3]
+
+    for script_name in ("test_factory_nova.sh", "test_semantic_nav.sh"):
+        source = (repo_root / "sim" / "scripts" / script_name).read_text(
+            encoding="utf-8"
+        )
+        assert "/tmp/nova_sim" not in source
+        assert "/robot/factory_nova_scene.xml" not in source
+        assert "robots/nova_dog/robot_with_camera.xml" in source
+        assert "LINGTU_NOVA_SCENE_XML" in source
+        assert "LINGTU_SIM_DIR" in source
+
+
+def test_optional_go1_asset_contract_has_placeholder_readme():
+    repo_root = Path(__file__).resolve().parents[3]
+    indoor_office = (repo_root / "sim" / "worlds" / "indoor_office.xml").read_text(
+        encoding="utf-8"
+    )
+    readme = repo_root / "sim" / "robots" / "go1_playground" / "README.md"
+
+    assert "../robots/go1_playground/xmls/go1_mjx_feetonly.xml" in indoor_office
+    assert readme.exists()
+    text = readme.read_text(encoding="utf-8")
+    assert "optional external assets" in text
+    assert "not part of the G4 server closure" in text
+
+
+def test_root_operation_scripts_do_not_point_at_deleted_navigation_launches():
+    repo_root = Path(__file__).resolve().parents[3]
+    shell_entry = (repo_root / "scripts" / "lingtu.sh").read_text(encoding="utf-8")
+    ota_start = (repo_root / "scripts" / "ota" / "start_nav.sh").read_text(
+        encoding="utf-8"
+    )
+    ota_install = (repo_root / "scripts" / "ota" / "install_nav.sh").read_text(
+        encoding="utf-8"
+    )
+    pct_profile = (
+        repo_root / "launch" / "profiles" / "planner_pct_py.launch.py"
+    ).read_text(encoding="utf-8")
+    scripts_index = (repo_root / "scripts" / "README.md").read_text(encoding="utf-8")
+
+    for source in (shell_entry, ota_start, ota_install, pct_profile):
+        assert "navigation_run.launch.py" not in source
+        assert "navigation_bringup.launch.py" not in source
+        assert "launch/subsystems/planning.launch.py" not in source
+
+    assert 'WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"' in shell_entry
+    assert 'LINGTU_CLI="$WORKSPACE_DIR/lingtu.py"' in shell_entry
+    assert "_run_lingtu map" in shell_entry
+    assert "_run_lingtu nav" in shell_entry
+    assert "_run_lingtu status" in shell_entry
+    assert '"$NAV_DIR/lingtu.py" nav' in ota_start
+    assert "python3 \\$NAV_DIR/lingtu.py nav" in ota_install
+    assert "Shell 兼容入口" in scripts_index
+    assert "机器人端 `scripts/lingtu`" in scripts_index
+
+
 def test_sim_boundary_indexes_document_stable_contracts():
     repo_root = Path(__file__).resolve().parents[3]
     readme_text = (repo_root / "sim" / "README.md").read_text(encoding="utf-8")
@@ -1644,6 +1718,9 @@ def test_sim_boundary_indexes_document_stable_contracts():
         / "2026-05-31-sim-folder-modularization-goals.md"
     ).read_text(encoding="utf-8")
     scripts_index = (repo_root / "sim" / "scripts" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    launch_index = (repo_root / "sim" / "launch" / "README.md").read_text(
         encoding="utf-8"
     )
     engine_index = (repo_root / "sim" / "engine" / "README.md").read_text(
@@ -1689,6 +1766,8 @@ def test_sim_boundary_indexes_document_stable_contracts():
     assert "worlds, assets, robots, scripts, validation/evaluation" in repo_layout
     assert "sim/README.md" in repo_layout
     assert "bridge/sensors/datasets" in repo_layout
+    assert "artifacts/server_sim_closure/" in repo_layout
+    assert "launch/gazebo_simulation.launch.py" in repo_layout
     assert "legacy Go1 demos" in scripts_index
     assert "sim/robots/go1_playground/" in scripts_index
     assert "Add boundary README later" not in plan_text
@@ -1705,8 +1784,17 @@ def test_sim_boundary_indexes_document_stable_contracts():
     assert "aggregator does not launch missing gates" in readme_text
     assert "full_sim_validation.py" in scripts_index
     assert "cmu_unity_lingtu_stack.py" in scripts_index
+    assert "run_global_planner.py" in scripts_index
+    assert "isolated nonzero `ROS_DOMAIN_ID`" in scripts_index
+    assert "not be used as the current G4 planner evidence source" in scripts_index
     assert "_run_legkilo_test.sh" in scripts_index
     assert "legacy/manual dataset helper" in scripts_index
+    assert "Safety class" in scripts_index
+    assert "summary-only unless --run-missing" in scripts_index
+    assert "local non-motion" in scripts_index
+    assert "simulated motion only" in scripts_index
+    assert "ROS2 isolated simulation" in scripts_index
+    assert "legacy manual" in scripts_index
     assert "canonical simulation runtime core" in engine_index
     assert "lingtu.py sim" in engine_index
     assert "real_robot_motion=false" in engine_index
@@ -1716,6 +1804,17 @@ def test_sim_boundary_indexes_document_stable_contracts():
     assert "host_requirements" in closure_index
     assert "Linux/ROS 2/MuJoCo/PCT-native checks" in closure_index
     assert "cmd_vel_sent_to_hardware=false" in closure_index
+    assert "expected_report_path" in closure_index
+    assert "accepted_patterns" in closure_index
+    assert "Legacy ROS launch / smoke contract" in readme_text
+    assert "Simulation endpoint required" in readme_text
+    assert "Do not treat bare `nav`, `map`, or `explore` as simulation" in readme_text
+    assert "isolated `ROS_DOMAIN_ID`" in readme_text
+    assert "no hardware subscriber" in readme_text
+    assert "Legacy ROS launch / smoke contract" in launch_index
+    assert "isolated ROS_DOMAIN_ID" in launch_index
+    assert "Do not run on a robot ROS domain" in launch_index
+    assert "must not have hardware cmd_vel subscribers" in launch_index
 
 
 def test_mujoco_driver_prefers_brainstem_policy_and_resolves_repo_relative_paths(monkeypatch, tmp_path):

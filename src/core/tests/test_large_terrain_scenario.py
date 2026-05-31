@@ -189,6 +189,8 @@ def test_large_terrain_validation_report_is_non_motion_and_route_safe(tmp_path):
     assert report["simulation_only"] is True
     assert report["real_robot_motion"] is False
     assert report["cmd_vel_sent_to_hardware"] is False
+    assert report["algorithm_backends"]["local_planner"]["status"] == "not_exercised"
+    assert report["algorithm_backends"]["path_follower"]["status"] == "not_exercised"
     case = report["cases"][0]
     assert case["route"] == "terrain_long"
     assert case["ok"] is True
@@ -248,6 +250,54 @@ def test_large_terrain_validation_records_blocked_pct_without_faking_success(tmp
     assert report["cases"][0]["selection"]["selected_planner"] == ""
     assert report["cases"][0]["selection"]["selected_route_ok"] is False
     assert report["cases"][0]["selection"]["rejected_planners"][0]["reason"] == "environment_blocked"
+
+
+def test_large_terrain_validation_records_effective_global_planner_when_service_falls_back(tmp_path, monkeypatch):
+    from sim.scripts import large_terrain_nav_validation as mod
+
+    class FakeBackend:
+        available = True
+        _load_error = ""
+
+    class FallbackService:
+        def __init__(self, planner_name: str, tomogram: str, obstacle_thr: float, downsample_dist: float) -> None:
+            self._planner_name = planner_name
+            self._backend = FakeBackend()
+            self._fallback_backend = FakeBackend()
+            self.last_plan_report = {}
+
+        def setup(self) -> None:
+            return None
+
+        def plan(self, start, goal, safe_goal_tolerance=0.0):
+            self.last_plan_report = {
+                "primary_planner": self._planner_name,
+                "selected_planner": "astar",
+                "fallback_reason": "pct path_safety failed",
+                "policy": "fallback_astar",
+                "rejected_plans": [
+                    {"planner": self._planner_name, "reason": "unsafe_primary_path"},
+                ],
+                "reached_goal": True,
+            }
+            return [
+                [float(start[0]), float(start[1]), 0.0],
+                [float(goal[0]), float(goal[1]), 0.0],
+            ], 1.0
+
+    monkeypatch.setattr(mod, "GlobalPlannerService", FallbackService)
+    monkeypatch.setattr(mod, "_pct_runtime_evidence", lambda: {"ok": True, "missing": []})
+
+    report = mod.run_validation(tmp_path, routes=("terrain_short",), planners=("pct",))
+
+    plan = report["cases"][0]["planning"][0]
+    assert plan["planner"] == "pct"
+    assert plan["planner_requested"] == "pct"
+    assert plan["selected_planner"] == "astar"
+    assert plan["fallback_reason"] == "pct path_safety failed"
+    assert plan["plan_safety_policy"] == "fallback_astar"
+    assert plan["rejected_plans"][0]["planner"] == "pct"
+    assert plan["native_backend_used"] is False
 
 
 def test_large_terrain_pct_runtime_evidence_preserves_host_diagnostics(monkeypatch):

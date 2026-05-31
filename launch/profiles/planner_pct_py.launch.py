@@ -15,13 +15,11 @@
   输出:  /nav/global_path ← pct_planner_astar 直接发布
          /nav/way_point   ← pct_path_adapter
 
-用法:
-  ros2 launch launch/subsystems/planning.launch.py \
-    planner_profile:=pct_py \
-    map_path:=/path/to/building2_9.pickle
+Current Module-first entrypoint:
+  python lingtu.py nav --planner astar --tomogram /path/to/building2_9.pickle
 
-或在 navigation_run.launch.py 中:
-  ros2 launch launch/navigation_run.launch.py planner_profile:=pct_py
+Legacy ROS-native smoke usage:
+  launch this profile directly only from an isolated ROS 2 launch test.
 """
 
 import os

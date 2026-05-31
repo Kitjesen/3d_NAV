@@ -37,14 +37,26 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-
-from core.module import Module
-from core.msgs.geometry import Quaternion, Twist, Vector3
-from core.msgs.nav import Odometry
-from core.registry import register
-from core.runtime_interface import body_frame_id, odom_frame_id
-from core.stream import In, Out
+try:
+    from core.module import Module
+    from core.msgs.geometry import Quaternion, Twist, Vector3
+    from core.msgs.nav import Odometry
+    from core.registry import register
+    from core.runtime_interface import body_frame_id, odom_frame_id
+    from core.stream import In, Out
+except ModuleNotFoundError as exc:
+    if exc.name != "core":
+        raise
+    _src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    _known_paths = {os.path.normcase(os.path.abspath(path or ".")) for path in sys.path}
+    if os.path.normcase(_src) not in _known_paths:
+        sys.path.insert(0, _src)
+    from core.module import Module
+    from core.msgs.geometry import Quaternion, Twist, Vector3
+    from core.msgs.nav import Odometry
+    from core.registry import register
+    from core.runtime_interface import body_frame_id, odom_frame_id
+    from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 NOVA_DOG_ODOM_FRAME_ID = odom_frame_id()

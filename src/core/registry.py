@@ -121,3 +121,11 @@ def restore(state: dict[str, dict[str, tuple]]) -> None:
     _registry.clear()
     for cat, plugins in state.items():
         _registry[cat] = dict(plugins)
+
+
+def restore_entries(state: dict[str, dict[str, tuple]]) -> None:
+    """Restore specific entries without removing registrations added meanwhile."""
+    for cat, plugins in state.items():
+        current = _registry.setdefault(cat, {})
+        for name, entry in plugins.items():
+            current[name] = entry

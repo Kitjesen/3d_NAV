@@ -115,6 +115,27 @@ def _run_local_planner_phase(
     return published[-1]
 
 
+def _backend_evidence(module: LocalPlannerModule, *, requested: str, exercised_by: str) -> dict[str, Any]:
+    status = getattr(module, "_backend_status", None)
+    actual = str(getattr(module, "_backend", "") or requested)
+    configured = str(getattr(status, "configured", "") or requested)
+    degraded = bool(getattr(status, "degraded", False) or actual != requested)
+    degraded_reason = str(
+        getattr(status, "degraded_reason", "") or getattr(status, "reason", "") or ""
+    )
+    if degraded and not degraded_reason and actual != requested:
+        degraded_reason = f"effective backend changed from {requested} to {actual}"
+    return {
+        "requested": requested,
+        "configured_backend": configured,
+        "backend_actual": actual,
+        "degraded": degraded,
+        "degraded_reason": degraded_reason,
+        "native_backend_used": actual == "nanobind",
+        "exercised_by": exercised_by,
+    }
+
+
 def run_gate(
     *,
     backend: str = "nanobind",
@@ -126,9 +147,16 @@ def run_gate(
     errors: list[str] = []
     module = LocalPlannerModule(backend=backend)
     started = False
+    backend_evidence: dict[str, Any] | None = None
     try:
         module.setup()
         started = True
+        backend_evidence = _backend_evidence(
+            module,
+            requested=backend,
+            exercised_by="dynamic_obstacle",
+        )
+        backend_actual = str(backend_evidence["backend_actual"])
         module._on_odom(
             Odometry(
                 pose=Pose(
@@ -164,7 +192,12 @@ def run_gate(
                     spacing_y=5,
                 )
             )
-            path = _run_local_planner_phase(module, backend=backend, obstacles=obstacles, timestamp=ts)
+            path = _run_local_planner_phase(
+                module,
+                backend=backend_actual,
+                obstacles=obstacles,
+                timestamp=ts,
+            )
             phase_reports.append(
                 _phase_report(
                     name=phase.name,
@@ -223,7 +256,15 @@ def run_gate(
             "real_robot_motion": False,
             "cmd_vel_sent_to_hardware": False,
             "backend_requested": backend,
-            "backend_actual": backend,
+            "backend_actual": backend_actual,
+            "native_backend_used": backend_actual == "nanobind",
+            "algorithm_backends": {
+                "local_planner": backend_evidence,
+                "path_follower": {
+                    "status": "not_exercised",
+                    "exercised_by": "not_exercised",
+                },
+            },
             "dynamic_replan_verified": dynamic_replan_verified,
             "obstacle_response_verified": not any("obstacle did not" in item for item in errors),
             "clear_path_recovery_verified": not any("straight path" in item for item in errors),
@@ -246,7 +287,32 @@ def run_gate(
             "real_robot_motion": False,
             "cmd_vel_sent_to_hardware": False,
             "backend_requested": backend,
-            "backend_actual": backend if started else "",
+            "backend_actual": (
+                str(backend_evidence["backend_actual"])
+                if backend_evidence is not None
+                else (backend if started else "")
+            ),
+            "native_backend_used": (
+                bool(backend_evidence["native_backend_used"])
+                if backend_evidence is not None
+                else False
+            ),
+            "algorithm_backends": {
+                "local_planner": backend_evidence
+                or {
+                    "requested": backend,
+                    "configured_backend": backend,
+                    "backend_actual": backend if started else "",
+                    "degraded": False,
+                    "degraded_reason": "",
+                    "native_backend_used": False,
+                    "exercised_by": "dynamic_obstacle",
+                },
+                "path_follower": {
+                    "status": "not_exercised",
+                    "exercised_by": "not_exercised",
+                },
+            },
             "dynamic_replan_verified": False,
             "obstacle_response_verified": False,
             "clear_path_recovery_verified": False,

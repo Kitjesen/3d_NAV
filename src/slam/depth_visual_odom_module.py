@@ -18,31 +18,41 @@ Based on Selective KF (arXiv 2412.17235) principle:
 
 from __future__ import annotations
 
+import importlib
 import logging
 import threading
 import time
 from typing import Any, Dict, Optional
 
-import cv2
 import numpy as np
 
 from core.module import Module
 from core.msgs.geometry import Pose, Quaternion, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.sensor import CameraIntrinsics, Image
+from core.registry import register
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
+
+_cv2: Any | None = None
+
+
+def _cv2_module() -> Any:
+    """Import OpenCV only when visual odometry actually uses it."""
+    global _cv2
+    if _cv2 is None:
+        _cv2 = importlib.import_module("cv2")
+    return _cv2
 
 # Minimum features to compute PnP reliably
 MIN_FEATURES_PNP = 8
 # Maximum features to track (limit CPU on aarch64)
 MAX_FEATURES = 300
-# LK optical flow parameters
-LK_PARAMS = dict(
+# LK optical flow parameters that do not require OpenCV constants at import time
+LK_PARAMS_BASE = dict(
     winSize=(21, 21),
     maxLevel=3,
-    criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01),
 )
 # ORB detector parameters
 ORB_PARAMS = dict(
@@ -54,6 +64,18 @@ ORB_PARAMS = dict(
 )
 
 
+def _lk_params(cv2_module: Any) -> dict[str, Any]:
+    return {
+        **LK_PARAMS_BASE,
+        "criteria": (
+            cv2_module.TERM_CRITERIA_EPS | cv2_module.TERM_CRITERIA_COUNT,
+            30,
+            0.01,
+        ),
+    }
+
+
+@register("visual_odom", "depth", description="Depth-camera visual odometry fallback")
 class DepthVisualOdomModule(Module, layer=1):
     """Depth camera visual odometry — degeneracy-triggered backup.
 
@@ -128,6 +150,7 @@ class DepthVisualOdomModule(Module, layer=1):
             self._D = np.zeros(5, dtype=np.float64)
         # Pre-compute undistortion maps for cv2.remap (fast per-frame undistort)
         if info.has_distortion and np.any(self._D != 0):
+            cv2 = _cv2_module()
             self._undistort_maps = cv2.initUndistortRectifyMap(
                 self._K, self._D, None, self._K,
                 (info.width, info.height), cv2.CV_16SC2,
@@ -158,6 +181,7 @@ class DepthVisualOdomModule(Module, layer=1):
         self._prev_kps = None
         self._frame_count = 0
         if self._orb is None:
+            cv2 = _cv2_module()
             self._orb = cv2.ORB_create(**ORB_PARAMS)
         self.active.publish(True)
         logger.info("DepthVisualOdom: ACTIVATED (SLAM degenerate)")
@@ -189,6 +213,7 @@ class DepthVisualOdomModule(Module, layer=1):
 
     def _process_frame(self, rgb: np.ndarray) -> None:
         """Core visual odometry pipeline."""
+        cv2 = _cv2_module()
         # Convert to grayscale
         if rgb.ndim == 3 and rgb.shape[2] == 3:
             gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
@@ -283,15 +308,16 @@ class DepthVisualOdomModule(Module, layer=1):
             return None, None
 
         pts = prev_pts.reshape(-1, 1, 2)
+        cv2 = _cv2_module()
         curr_pts, status, _err = cv2.calcOpticalFlowPyrLK(
-            prev_gray, curr_gray, pts, None, **LK_PARAMS
+            prev_gray, curr_gray, pts, None, **_lk_params(cv2)
         )
         if curr_pts is None or status is None:
             return None, None
 
         # Bidirectional check for robustness
         back_pts, back_status, _ = cv2.calcOpticalFlowPyrLK(
-            curr_gray, prev_gray, curr_pts, None, **LK_PARAMS
+            curr_gray, prev_gray, curr_pts, None, **_lk_params(cv2)
         )
         if back_pts is None:
             return None, None
@@ -350,6 +376,7 @@ class DepthVisualOdomModule(Module, layer=1):
     def _solve_pnp(self, pts_3d: np.ndarray, pts_2d: np.ndarray) -> np.ndarray | None:
         """Solve PnP with RANSAC, return 4x4 transform or None."""
         # distCoeffs=None because images are already undistorted in _process_frame
+        cv2 = _cv2_module()
         success, rvec, tvec, inliers = cv2.solvePnPRansac(
             pts_3d, pts_2d, self._K, None,
             iterationsCount=200,

@@ -148,6 +148,7 @@ class _BPUTrackerProvider:
         return BPUTracker(module._detector, tracker_type="botsort")
 
 
+@register("perception", "scene", description="RGB-D semantic scene perception module")
 class PerceptionModule(Module, layer=3):
     _run_in_worker = True
     _worker_group = "perception"
@@ -172,6 +173,27 @@ class PerceptionModule(Module, layer=3):
     # All others (yoloe, bpu, sim_scene) fall back to the direct-import path.
     _FACTORY_DETECTORS = {"yolo_world"}
     _FACTORY_ENCODERS = {"clip"}
+
+    class _CandidateModuleView:
+        def __init__(
+            self,
+            module: "PerceptionModule",
+            *,
+            detector_type: str | None = None,
+            encoder_type: str | None = None,
+            detector: Any | None = None,
+        ) -> None:
+            self._module = module
+            self._sim_scene_observer = None
+            if detector_type is not None:
+                self._detector_type = detector_type
+            if encoder_type is not None:
+                self._encoder_type = encoder_type
+            if detector is not None:
+                self._detector = detector
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._module, name)
 
     def __init__(
         self,
@@ -378,18 +400,20 @@ class PerceptionModule(Module, layer=3):
     def stop(self) -> None:
         """Release GPU resources."""
         for attr, name in [("_detector", "Detector"), ("_clip_encoder", "Encoder")]:
-            obj = getattr(self, attr, None)
-            if obj is None:
-                continue
-            for method in ("shutdown", "close", "reset"):
-                fn = getattr(obj, method, None)
-                if callable(fn):
-                    try:
-                        fn()
-                    except Exception as e:
-                        logger.warning("%s %s() error: %s", name, method, e)
-                    break
+            self._dispose_backend(getattr(self, attr, None), name)
         super().stop()
+
+    def _dispose_backend(self, obj: Any | None, name: str) -> None:
+        if obj is None:
+            return
+        for method in ("shutdown", "close", "reset"):
+            fn = getattr(obj, method, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception as e:
+                    logger.warning("%s %s() error: %s", name, method, e)
+                break
 
     # == Port callbacks ========================================================
 
@@ -507,12 +531,8 @@ class PerceptionModule(Module, layer=3):
     def _init_detector(self):
         """Lazy-import detector backend."""
         try:
-            provider = get("perception_detector", self._detector_type)
-            det = provider.create(self)
-            load_model = getattr(det, "load_model", None)
-            if callable(load_model):
-                load_model()
-            logger.info("%s loaded", getattr(provider, "label", self._detector_type))
+            det, observer = self._load_detector_candidate(self._detector_type)
+            self._sim_scene_observer = observer
             self._detector_status.use(self._detector_type, degraded=False)
             return det
         except KeyError:
@@ -527,13 +547,35 @@ class PerceptionModule(Module, layer=3):
             self._detector_status.use("unavailable", reason=str(e))
         return None
 
-    def _init_detector_tracker(self):
+    def _load_detector_candidate(self, backend: str):
+        provider = get("perception_detector", backend)
+        view = self._CandidateModuleView(self, detector_type=backend)
+        det = None
+        try:
+            det = provider.create(view)
+            load_model = getattr(det, "load_model", None)
+            if callable(load_model):
+                load_model()
+            logger.info("%s loaded", getattr(provider, "label", backend))
+            return det, view._sim_scene_observer
+        except Exception:
+            self._dispose_backend(det, "Detector candidate")
+            raise
+
+    def _init_detector_tracker(
+        self,
+        backend: str | None = None,
+        detector: Any | None = None,
+    ):
         """Create a low-latency 2D tracker for detector outputs when available."""
-        if self._detector_type != "bpu" or self._detector is None:
+        backend = self._detector_type if backend is None else backend
+        detector = self._detector if detector is None else detector
+        if backend != "bpu" or detector is None:
             return None
         try:
             provider = get("perception_tracker", "bpu")
-            tracker = provider.create(self)
+            view = self._CandidateModuleView(self, detector_type=backend, detector=detector)
+            tracker = provider.create(view)
             logger.info("BPUTracker loaded: BPU detector outputs will include track_id")
             return tracker
         except Exception as e:
@@ -545,12 +587,7 @@ class PerceptionModule(Module, layer=3):
     def _init_clip_encoder(self):
         """Lazy-import encoder backend based on encoder_type."""
         try:
-            provider = get("perception_encoder", self._encoder_type)
-            enc = provider.create(self)
-            load_model = getattr(enc, "load_model", None)
-            if callable(load_model):
-                load_model()
-            logger.info("%s loaded", getattr(provider, "label", self._encoder_type))
+            enc = self._load_encoder_candidate(self._encoder_type)
             self._encoder_status.use(self._encoder_type, degraded=False)
             return enc
         except KeyError:
@@ -564,6 +601,21 @@ class PerceptionModule(Module, layer=3):
             logger.warning("Encoder %r unavailable: %s", self._encoder_type, e)
             self._encoder_status.use("unavailable", reason=str(e))
         return None
+
+    def _load_encoder_candidate(self, backend: str):
+        provider = get("perception_encoder", backend)
+        view = self._CandidateModuleView(self, encoder_type=backend)
+        enc = None
+        try:
+            enc = provider.create(view)
+            load_model = getattr(enc, "load_model", None)
+            if callable(load_model):
+                load_model()
+            logger.info("%s loaded", getattr(provider, "label", backend))
+            return enc
+        except Exception:
+            self._dispose_backend(enc, "Encoder candidate")
+            raise
 
     def reconfigure_backend(
         self,
@@ -589,46 +641,50 @@ class PerceptionModule(Module, layer=3):
                 "available": list_plugins("perception_detector"),
             }
 
+        try:
+            detector, observer = self._load_detector_candidate(backend)
+            if detector is None:
+                raise RuntimeError("detector unavailable")
+            tracker = self._init_detector_tracker(backend, detector)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "category": "detector",
+                "requested_backend": backend,
+                "reason": "backend_reconfigure_failed",
+                "error": str(exc),
+            }
+
         with self._backend_lock:
             previous_backend = self._detector_type
             previous_detector = self._detector
             previous_tracker = self._detector_tracker
             previous_observer = self._sim_scene_observer
-            previous_status = self._detector_status
             self._detector_type = backend
             self._detector_status = BackendStatus.configured_as(backend)
-            self._sim_scene_observer = None
-            try:
-                detector = self._init_detector()
-                if detector is None:
-                    raise RuntimeError(
-                        self._detector_status.degraded_reason or "detector unavailable"
-                    )
-                tracker = self._init_detector_tracker()
-            except Exception as exc:
-                self._detector_type = previous_backend
-                self._detector = previous_detector
-                self._detector_tracker = previous_tracker
-                self._sim_scene_observer = previous_observer
-                self._detector_status = previous_status
-                return {
-                    "ok": False,
-                    "category": "detector",
-                    "requested_backend": backend,
-                    "reason": "backend_reconfigure_failed",
-                    "error": str(exc),
-                }
             self._detector = detector
             self._detector_tracker = tracker
+            self._sim_scene_observer = observer
             self._detector_status.configured = backend
             self._detector_status.use(backend, degraded=False)
-            return {
-                "ok": True,
-                "category": "detector",
-                "previous_backend": previous_backend,
-                "backend": backend,
-                "degraded": False,
-            }
+
+        disposed: list[Any] = []
+        for obj, name in (
+            (previous_tracker, "Detector tracker"),
+            (previous_detector, "Detector"),
+            (previous_observer, "SimSceneObserver"),
+        ):
+            if obj is None or any(obj is seen for seen in disposed):
+                continue
+            self._dispose_backend(obj, name)
+            disposed.append(obj)
+        return {
+            "ok": True,
+            "category": "detector",
+            "previous_backend": previous_backend,
+            "backend": backend,
+            "degraded": False,
+        }
 
     def _reconfigure_encoder(self, backend: str, **_config: Any) -> dict[str, Any]:
         try:
@@ -642,39 +698,36 @@ class PerceptionModule(Module, layer=3):
                 "available": list_plugins("perception_encoder"),
             }
 
+        try:
+            encoder = self._load_encoder_candidate(backend)
+            if encoder is None:
+                raise RuntimeError("encoder unavailable")
+        except Exception as exc:
+            return {
+                "ok": False,
+                "category": "encoder",
+                "requested_backend": backend,
+                "reason": "backend_reconfigure_failed",
+                "error": str(exc),
+            }
+
         with self._backend_lock:
             previous_backend = self._encoder_type
             previous_encoder = self._clip_encoder
-            previous_status = self._encoder_status
             self._encoder_type = backend
             self._encoder_status = BackendStatus.configured_as(backend)
-            try:
-                encoder = self._init_clip_encoder()
-                if encoder is None:
-                    raise RuntimeError(
-                        self._encoder_status.degraded_reason or "encoder unavailable"
-                    )
-            except Exception as exc:
-                self._encoder_type = previous_backend
-                self._clip_encoder = previous_encoder
-                self._encoder_status = previous_status
-                return {
-                    "ok": False,
-                    "category": "encoder",
-                    "requested_backend": backend,
-                    "reason": "backend_reconfigure_failed",
-                    "error": str(exc),
-                }
             self._clip_encoder = encoder
             self._encoder_status.configured = backend
             self._encoder_status.use(backend, degraded=False)
-            return {
-                "ok": True,
-                "category": "encoder",
-                "previous_backend": previous_backend,
-                "backend": backend,
-                "degraded": False,
-            }
+
+        self._dispose_backend(previous_encoder, "Encoder")
+        return {
+            "ok": True,
+            "category": "encoder",
+            "previous_backend": previous_backend,
+            "backend": backend,
+            "degraded": False,
+        }
 
     def _run_detector(self, bgr: np.ndarray) -> list:
         """Run detector, return Detection2D list."""

@@ -40,6 +40,7 @@ import numpy as np
 from core import In, Module, Out
 from core.msgs.nav import Odometry
 from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat
+from core.registry import register
 
 from .reconstruction_module import _load_cam_body_extrinsic, _pose_to_matrix
 
@@ -52,6 +53,11 @@ _DEFAULT_KF_TIME_S   = 2.0    # seconds (max interval even if stationary)
 _DEFAULT_BATCH_SIZE  = 5      # frames per HTTP POST
 
 
+@register(
+    "reconstruction",
+    "keyframe_exporter",
+    description="RGB-D keyframe reconstruction server exporter",
+)
 class ReconKeyframeExporterModule(Module, layer=3):
     """Select keyframes and stream them to the remote reconstruction server.
 

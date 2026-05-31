@@ -20,12 +20,13 @@ MONITOR_SEC=${2:-240}
 VIZ=${3:-}
 
 # ── 路径 ─────────────────────────────────────────────────────────
-SIM_DIR=/tmp/nova_sim
-BRIDGE_SCRIPT=${SIM_DIR}/bridge/nova_nav_bridge.py
-SCENE_XML=${SIM_DIR}/robot/factory_nova_scene.xml
-MAP_DIR=/tmp/sim_maps
-MAP_FILE=${MAP_DIR}/factory_nova
-SEMANTIC_STUB=${SIM_DIR}/semantic/factory_stub_test.py
+REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+SIM_DIR=${LINGTU_SIM_DIR:-${REPO_ROOT}/sim}
+BRIDGE_SCRIPT=${LINGTU_NOVA_BRIDGE_SCRIPT:-${REPO_ROOT}/sim/bridge/nova_nav_bridge.py}
+SCENE_XML=${LINGTU_NOVA_SCENE_XML:-${SIM_DIR}/robots/nova_dog/robot_with_camera.xml}
+MAP_DIR=${LINGTU_SIM_MAP_DIR:-/tmp/sim_maps}
+MAP_FILE=${LINGTU_FACTORY_MAP_FILE:-${MAP_DIR}/factory_nova}
+SEMANTIC_STUB=${LINGTU_FACTORY_SEMANTIC_STUB:-${SIM_DIR}/semantic/factory_stub_test.py}
 
 # ── 检查文件 ─────────────────────────────────────────────────────
 for f in "${BRIDGE_SCRIPT}" "${SCENE_XML}"; do

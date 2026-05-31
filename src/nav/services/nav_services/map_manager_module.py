@@ -36,6 +36,7 @@ import numpy as np
 from core import In, Module, Out, skill
 from core.dynamic_filter import apply_dynamic_filter_step1half
 from core.msgs.sensor import PointCloud2
+from core.registry import register
 from core.runtime_interface import TOPICS, topic_default_frame_id
 from core.same_source_map_artifacts import (
     build_saved_map_metadata,
@@ -52,6 +53,7 @@ class _LiveMapCloudSnapshotSaved(Exception):
     """Internal control-flow marker after saving a live map_cloud snapshot."""
 
 
+@register("map", "manager", description="Saved-map lifecycle manager")
 class MapManagerModule(Module, layer=6):
     """Map and POI management module (hive Module).
 

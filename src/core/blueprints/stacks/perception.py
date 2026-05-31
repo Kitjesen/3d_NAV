@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 from core.blueprint import Blueprint
+from core.blueprints.stacks._registry import optional_stack_module, stack_module
 
 logger = logging.getLogger(__name__)
 _NATIVE_CAMERA_DRIVERS = {"MujocoDriverModule"}  # Only MuJoCo has built-in camera
@@ -33,7 +34,12 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
     )
 
     try:
-        from drivers.real.thunder.camera_bridge_module import CameraBridgeModule
+        CameraBridgeModule = stack_module(
+            "camera_bridge",
+            "default",
+            seed_group="camera",
+            fallback="drivers.real.thunder.camera_bridge_module.CameraBridgeModule",
+        )
 
         if needs_camera_bridge:
             # Read camera rotation from robot_config.yaml
@@ -44,15 +50,21 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
                     cam_rotate = get_config().raw.get("camera", {}).get("rotate", 0)
                 except Exception:
                     pass
-            bp.add(CameraBridgeModule, rotate=int(cam_rotate))
+            bp.add(CameraBridgeModule, alias="CameraBridgeModule", rotate=int(cam_rotate))
     except ImportError:
         pass
 
     try:
-        from semantic.perception.semantic_perception.perception_module import PerceptionModule
+        PerceptionModule = stack_module(
+            "perception",
+            "scene",
+            seed_group="perception",
+            fallback="semantic.perception.semantic_perception.perception_module.PerceptionModule",
+        )
 
         bp.add(
             PerceptionModule,
+            alias="PerceptionModule",
             detector_type=detector,
             encoder_type=encoder,
             confidence_threshold=config.get("confidence", 0.3),
@@ -85,31 +97,45 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
         logger.warning("Perception modules not available: %s", e)
 
     if config.get("enable_standalone_encoder", False):
-        try:
-            from semantic.perception.semantic_perception.encoder_module import EncoderModule
-
+        EncoderModule = optional_stack_module(
+            "encoder",
+            "pluggable",
+            seed_group="perception",
+            fallback="semantic.perception.semantic_perception.encoder_module.EncoderModule",
+        )
+        if EncoderModule is not None:
             # Experimental tool module; the full-stack scene graph path uses
             # PerceptionModule's internal encoder capability.
-            bp.add(EncoderModule, encoder=encoder)
-        except ImportError as e:
-            logger.warning("Standalone encoder module not available: %s", e)
+            bp.add(EncoderModule, alias="EncoderModule", encoder=encoder)
+        else:
+            logger.warning("Standalone encoder module not available")
 
-    try:
-        from semantic.reconstruction.reconstruction_module import ReconstructionModule
-        bp.add(ReconstructionModule)
-    except ImportError:
-        pass
+    ReconstructionModule = optional_stack_module(
+        "reconstruction",
+        "default",
+        seed_group="reconstruction",
+        fallback="semantic.reconstruction.reconstruction_module.ReconstructionModule",
+    )
+    if ReconstructionModule is not None:
+        bp.add(ReconstructionModule, alias="ReconstructionModule")
 
     # Optional: record keyframes to disk for offline reconstruction
     # Enabled when recon_save_dir is provided in config
     recon_save_dir = config.get("recon_save_dir", "")
     if recon_save_dir:
-        try:
-            from semantic.reconstruction.dataset_recorder_module import (
-                DatasetRecorderModule,
-            )
+        DatasetRecorderModule = optional_stack_module(
+            "reconstruction",
+            "dataset_recorder",
+            seed_group="reconstruction",
+            fallback=(
+                "semantic.reconstruction.dataset_recorder_module."
+                "DatasetRecorderModule"
+            ),
+        )
+        if DatasetRecorderModule is not None:
             bp.add(
                 DatasetRecorderModule,
+                alias="DatasetRecorderModule",
                 save_dir=recon_save_dir,
                 keyframe_dist_m=float(config.get("recon_kf_dist_m", 0.15)),
                 keyframe_rot_rad=float(config.get("recon_kf_rot_rad", 0.17)),
@@ -118,26 +144,29 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
                 jpeg_quality=int(config.get("recon_jpeg_quality", 90)),
                 session_name=str(config.get("recon_session", "")),
             )
-        except ImportError:
-            pass
 
     # Optional: stream keyframes to a remote reconstruction server
     # Enabled when recon_server_url is provided in config
     recon_server_url = config.get("recon_server_url", "")
     if recon_server_url:
-        try:
-            from semantic.reconstruction.keyframe_exporter_module import (
-                ReconKeyframeExporterModule,
-            )
+        ReconKeyframeExporterModule = optional_stack_module(
+            "reconstruction",
+            "keyframe_exporter",
+            seed_group="reconstruction",
+            fallback=(
+                "semantic.reconstruction.keyframe_exporter_module."
+                "ReconKeyframeExporterModule"
+            ),
+        )
+        if ReconKeyframeExporterModule is not None:
             bp.add(
                 ReconKeyframeExporterModule,
+                alias="ReconKeyframeExporterModule",
                 server_url=recon_server_url,
                 keyframe_dist_m=float(config.get("recon_kf_dist_m", 0.3)),
                 keyframe_rot_rad=float(config.get("recon_kf_rot_rad", 0.26)),
                 keyframe_time_s=float(config.get("recon_kf_time_s", 2.0)),
                 jpeg_quality=int(config.get("recon_jpeg_quality", 85)),
             )
-        except ImportError:
-            pass
 
     return bp

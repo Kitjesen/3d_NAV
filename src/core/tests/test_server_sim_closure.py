@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -90,6 +91,20 @@ def test_readme_full_closure_command_uses_g4_server_full_sim_preset():
     assert "--preset g4_server_full_sim" in command_section
     assert "--required-only" in command_section
     assert "--run-missing" not in command_section
+
+
+def test_g4_required_gates_have_report_override_options():
+    from core.algorithm_gates import G4_SERVER_FULL_SIM_REQUIRED_GATES
+
+    parser = server_sim_closure._build_parser()
+    option_strings = {
+        option
+        for action in parser._actions
+        for option in action.option_strings
+    }
+
+    for gate in G4_SERVER_FULL_SIM_REQUIRED_GATES:
+        assert f"--{gate.replace('_', '-')}-report" in option_strings
 
 
 def test_g4_summary_required_gate_sequence_preserves_core_order(tmp_path: Path, monkeypatch):
@@ -1988,10 +2003,122 @@ def test_server_sim_closure_can_summarize_required_only(tmp_path: Path, monkeypa
     )
 
     assert summary["ok"] is True
+    assert summary["execution_mode"] == "summary_only"
+    assert summary["run_missing"] is False
+    assert summary["gate_runs"] == []
+    assert summary["initial_missing_or_failed"] == []
     assert summary["include_optional"] is False
     assert set(summary["gates"]) == {"large_terrain"}
     assert summary["optional_missing_or_failed"] == []
     assert summary["optional_gaps"] == []
+
+
+def test_server_sim_closure_summarizes_algorithm_backends_from_gate_reports(tmp_path: Path):
+    local_planner_evidence = {
+        "requested": "nanobind",
+        "configured_backend": "nanobind",
+        "backend_actual": "nanobind",
+        "native_backend_used": True,
+        "exercised_by": "command_flow",
+    }
+    path_follower_evidence = {
+        "requested": "nav_core",
+        "configured_backend": "nav_core",
+        "backend_actual": "nav_core",
+        "native_backend_used": True,
+        "exercised_by": "command_flow",
+    }
+    multifloor_report = _complete_multifloor_report()
+    for case in multifloor_report["cases"]:
+        case["algorithm_backends"] = {
+            "local_planner": local_planner_evidence,
+            "path_follower": path_follower_evidence,
+        }
+        case["command_flow"] = {
+            **case["command_flow"],
+            "algorithm_backends": case["algorithm_backends"],
+        }
+    multifloor = _write_json(tmp_path / "multifloor.json", multifloor_report)
+    large = _write_json(
+        tmp_path / "large.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "algorithm_backends": {
+                "local_planner": {
+                    "status": "not_exercised",
+                    "exercised_by": "large_terrain_global_planning_assets",
+                },
+                "path_follower": {
+                    "status": "not_exercised",
+                    "exercised_by": "large_terrain_global_planning_assets",
+                },
+            },
+            "cases": [
+                {
+                    "route": "terrain_long",
+                    "path_safety": {"ok": True},
+                    "planning": [{"planner": "pct", "native_backend_used": True}],
+                }
+            ],
+        },
+    )
+    dynamic = _write_json(
+        tmp_path / "dynamic.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "backend_actual": "nanobind",
+            "dynamic_replan_verified": True,
+            "obstacle_response_verified": True,
+            "clear_path_recovery_verified": True,
+            "min_clearance_m": 0.42,
+            "algorithm_backends": {
+                "local_planner": local_planner_evidence,
+                "path_follower": {
+                    "status": "not_exercised",
+                    "exercised_by": "not_exercised",
+                },
+            },
+            "phases": [
+                {"name": "clear_initial", "path_count": 101, "path_frame_id": "map", "avoidance_side": "straight"},
+                {"name": "obstacle_left", "path_count": 101, "path_frame_id": "map", "avoidance_side": "right"},
+                {"name": "obstacle_right", "path_count": 101, "path_frame_id": "map", "avoidance_side": "left"},
+                {"name": "obstacle_center", "path_count": 101, "path_frame_id": "map", "avoidance_side": "right"},
+                {"name": "clear_recovered", "path_count": 101, "path_frame_id": "map", "avoidance_side": "straight"},
+            ],
+        },
+    )
+
+    summary = server_sim_closure.summarize(
+        report_overrides={
+            "multifloor_exploration": multifloor,
+            "large_terrain": large,
+            "dynamic_obstacle_local_planner": dynamic,
+        },
+        required={
+            "multifloor_exploration",
+            "large_terrain",
+            "dynamic_obstacle_local_planner",
+        },
+        include_optional=False,
+    )
+
+    assert summary["ok"] is True
+    backends = summary["algorithm_backends"]
+    assert backends["multifloor_exploration"]["local_planner"]["backend_actual"] == "nanobind"
+    assert backends["multifloor_exploration"]["path_follower"]["backend_actual"] == "nav_core"
+    assert backends["large_terrain"]["local_planner"]["status"] == "not_exercised"
+    assert backends["dynamic_obstacle_local_planner"]["local_planner"]["backend_actual"] == "nanobind"
+    assert backends["dynamic_obstacle_local_planner"]["path_follower"]["status"] == "not_exercised"
+    assert (
+        summary["gates"]["dynamic_obstacle_local_planner"]["evidence"]["algorithm_backends"]
+        == backends["dynamic_obstacle_local_planner"]
+    )
 
 
 def test_server_sim_closure_can_require_fresh_reports(tmp_path: Path):
@@ -2059,6 +2186,15 @@ def test_server_sim_closure_summary_lists_missing_required_commands(
     assert summary["gates"]["large_terrain"]["expected_report_path"] == command["expected_report_path"]
     assert summary["host_requirements"]["large_terrain"] == command["host_requirements"]
 
+    for container in (
+        summary["gates"]["large_terrain"],
+        command,
+        summary["next_actions"][0],
+    ):
+        assert "expected_report_path" in container
+        assert "accepted_patterns" in container
+        assert "host_requirements" in container
+
 
 def test_server_sim_closure_run_missing_executes_missing_required_gate(
     tmp_path: Path,
@@ -2098,6 +2234,8 @@ def test_server_sim_closure_run_missing_executes_missing_required_gate(
 
     assert summary["ok"] is True, summary["remaining_gaps"]
     assert summary["initial_missing_or_failed"] == ["large_terrain"]
+    assert summary["execution_mode"] == "run_missing"
+    assert summary["run_missing"] is True
     assert [item["name"] for item in summary["gate_runs"]] == ["large_terrain"]
     assert summary["gate_runs"][0]["returncode"] == 0
     assert summary["gate_runs"][0]["status"] == "passed"
@@ -4580,7 +4718,199 @@ def test_server_sim_closure_saved_map_relocalize_next_action_lists_localizer_hos
     )
     assert any("MuJoCo/Fast-LIO live feed" in item for item in action["host_requirements"])
     assert any("localizer runtime" in item for item in action["host_requirements"])
+    assert not any("PCT native extension modules" in item for item in action["host_requirements"])
     assert summary["host_requirements"]["saved_map_relocalize"] == action["host_requirements"]
+
+
+def test_server_sim_closure_native_pct_missing_summary_lists_runtime_requirements():
+    summary = server_sim_closure.summarize(
+        report_overrides={},
+        required={"native_pct_mujoco"},
+        include_optional=False,
+    )
+
+    command = summary["missing_required_commands"][0]
+    assert command["name"] == "native_pct_mujoco"
+    assert command["expected_report_path"] == (
+        "artifacts/server_sim_closure/native_pct_mujoco/report.json"
+    )
+    assert (
+        "artifacts/server_sim_closure/native_pct_mujoco/report.*.server.json"
+        in command["accepted_patterns"]
+    )
+    assert any("PCT native extension modules" in item for item in command["host_requirements"])
+    assert any("CPython 3.10" in item for item in command["host_requirements"])
+    assert any("ROS 2 Humble" in item for item in command["host_requirements"])
+    assert any("MuJoCo EGL" in item for item in command["host_requirements"])
+    assert any(
+        "no physical robot drivers or hardware command publishers" in item
+        for item in command["host_requirements"]
+    )
+
+
+def test_server_sim_host_preflight_blocks_pct_gate_on_wrong_host():
+    report = server_sim_closure.host_preflight(
+        required={"large_terrain"},
+        platform_system="Windows",
+        machine="AMD64",
+        python_tag="py313",
+        env={},
+        executable_exists=lambda _name: False,
+        module_available=lambda _name: False,
+        path_exists=lambda _path: False,
+        pct_runtime_report={
+            "ok": False,
+            "host_platform_supported": False,
+            "python_abi_matches_known_good": False,
+            "error": "No runnable PCT native modules for arch=x86_64 python=py313",
+        },
+    )
+
+    assert report["schema_version"] == "lingtu.server_sim_host_preflight.v1"
+    assert report["execution_mode"] == "host_preflight_only"
+    assert report["simulation_only"] is True
+    assert report["real_robot_motion"] is False
+    assert report["cmd_vel_sent_to_hardware"] is False
+    assert report["ok"] is False
+    assert report["blocked_gates"] == ["large_terrain"]
+    gate = report["gates"]["large_terrain"]
+    assert gate["ok"] is False
+    assert gate["checks"]["pct_native"]["ok"] is False
+    assert any("PCT native runtime unavailable" in item for item in gate["blockers"])
+    assert any("CPython 3.10" in item for item in gate["blockers"])
+
+
+def test_server_sim_host_preflight_accepts_local_non_motion_gate():
+    report = server_sim_closure.host_preflight(
+        required={"routecheck_preflight"},
+        platform_system="Windows",
+        machine="AMD64",
+        python_tag="py313",
+        env={},
+        executable_exists=lambda _name: False,
+        module_available=lambda _name: False,
+        path_exists=lambda _path: False,
+    )
+
+    assert report["ok"] is True
+    assert report["runnable_gates"] == ["routecheck_preflight"]
+    assert report["blocked_gates"] == []
+    gate = report["gates"]["routecheck_preflight"]
+    assert gate["ok"] is True
+    assert gate["checks"]["local_non_motion"]["ok"] is True
+    assert "routecheck_preflight_gate.py" in gate["command"]
+
+
+def test_server_sim_host_preflight_requires_isolated_ros_domain_and_hardware_audit():
+    common = dict(
+        required={"native_pct_mujoco"},
+        platform_system="Linux",
+        machine="x86_64",
+        python_tag="py310",
+        env={"ROS_DISTRO": "humble", "ROS_DOMAIN_ID": "30", "MUJOCO_GL": "egl"},
+        executable_exists=lambda name: name in {"ros2"},
+        module_available=lambda name: name == "mujoco",
+        path_exists=lambda path: str(path) == "/opt/ros/humble/setup.bash",
+        pct_runtime_report={
+            "ok": True,
+            "host_platform_supported": True,
+            "python_abi_matches_known_good": True,
+            "lib_dir": "/tmp/pct-native",
+            "error": "",
+        },
+    )
+
+    unsafe = server_sim_closure.host_preflight(
+        **common,
+        hardware_subscribers=lambda: ["/s100p_driver"],
+    )
+    assert unsafe["ok"] is False
+    assert unsafe["blocked_gates"] == ["native_pct_mujoco"]
+    assert any(
+        "hardware command subscribers present" in item
+        for item in unsafe["gates"]["native_pct_mujoco"]["blockers"]
+    )
+
+    safe = server_sim_closure.host_preflight(
+        **common,
+        hardware_subscribers=lambda: [],
+    )
+    assert safe["ok"] is True
+    assert safe["runnable_gates"] == ["native_pct_mujoco"]
+    assert safe["gates"]["native_pct_mujoco"]["checks"]["hardware_subscribers"]["ok"] is True
+
+
+def test_server_sim_host_preflight_cli_writes_read_only_report(tmp_path: Path, monkeypatch):
+    out = tmp_path / "host_preflight.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "server_sim_closure.py",
+            "--host-preflight",
+            "--required",
+            "routecheck_preflight",
+            "--json-out",
+            str(out),
+            "--strict",
+        ],
+    )
+
+    assert server_sim_closure.main() == 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["execution_mode"] == "host_preflight_only"
+    assert report["run_missing"] is False
+    assert report["gate_runs"] == []
+    assert report["real_robot_motion"] is False
+    assert report["cmd_vel_sent_to_hardware"] is False
+    assert report["runnable_gates"] == ["routecheck_preflight"]
+
+
+def test_server_sim_host_preflight_cli_json_out_dash_writes_stdout_only(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "server_sim_closure.py",
+            "--host-preflight",
+            "--required",
+            "routecheck_preflight",
+            "--json-out",
+            "-",
+            "--strict",
+        ],
+    )
+
+    assert server_sim_closure.main() == 0
+    assert not (tmp_path / "-").exists()
+    report = json.loads(capsys.readouterr().out)
+    assert report["execution_mode"] == "host_preflight_only"
+    assert report["run_missing"] is False
+    assert report["gate_runs"] == []
+    assert report["runnable_gates"] == ["routecheck_preflight"]
+
+
+def test_server_sim_host_preflight_rejects_run_missing_mix(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "server_sim_closure.py",
+            "--host-preflight",
+            "--run-missing",
+            "--required",
+            "routecheck_preflight",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        server_sim_closure.main()
+    assert "--host-preflight cannot be combined with --run-missing" in str(exc.value)
 
 
 def test_server_sim_closure_fastlio2_dynamic_inspection_command_uses_pct_contract():

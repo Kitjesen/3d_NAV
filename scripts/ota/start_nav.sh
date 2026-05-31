@@ -38,5 +38,10 @@ if [ -f "$NAV_DIR/metadata.json" ]; then
     echo "Navigation version: $(python3 -c "import json; print(json.load(open('$NAV_DIR/metadata.json'))['version'])" 2>/dev/null || echo 'unknown')"
 fi
 
-# 启动导航系统 (运行模式)
-exec ros2 launch "$NAV_DIR/launch/navigation_run.launch.py"
+# Start the Module-first navigation profile.
+cd "$NAV_DIR"
+if [ -n "${LINGTU_NAV_ARGS:-}" ]; then
+    # Intentional word splitting lets systemd/env files append simple CLI flags.
+    exec "${LINGTU_PYTHON:-python3}" "$NAV_DIR/lingtu.py" nav $LINGTU_NAV_ARGS
+fi
+exec "${LINGTU_PYTHON:-python3}" "$NAV_DIR/lingtu.py" nav

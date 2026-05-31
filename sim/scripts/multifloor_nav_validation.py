@@ -153,6 +153,39 @@ def _is_production_local_planner_backend(backend: str) -> bool:
     return backend in {"nanobind", "cmu", "cmu_py"}
 
 
+def _algorithm_backend_evidence(
+    module: object,
+    *,
+    requested: str,
+    exercised_by: str,
+    native_backend: str | None = None,
+) -> dict[str, Any]:
+    status = getattr(module, "_backend_status", None)
+    actual = str(
+        getattr(status, "effective", "")
+        or getattr(module, "_backend", "")
+        or requested
+    )
+    configured = str(getattr(status, "configured", "") or requested)
+    degraded = bool(getattr(status, "degraded", False) or actual != requested)
+    degraded_reason = str(
+        getattr(status, "degraded_reason", "") or getattr(status, "reason", "") or ""
+    )
+    if degraded and not degraded_reason and actual != requested:
+        degraded_reason = f"effective backend changed from {requested} to {actual}"
+    evidence: dict[str, Any] = {
+        "requested": requested,
+        "configured_backend": configured,
+        "backend_actual": actual,
+        "degraded": degraded,
+        "degraded_reason": degraded_reason,
+        "exercised_by": exercised_by,
+    }
+    if native_backend is not None:
+        evidence["native_backend_used"] = actual == native_backend
+    return evidence
+
+
 def _safe_norm(points: np.ndarray) -> np.ndarray:
     arr = np.asarray(points, dtype=np.float64)
     return arr[np.all(np.isfinite(arr), axis=1)]
@@ -582,6 +615,20 @@ def _planner_status(
     return "fail"
 
 
+def _service_plan_report(svc: Any | None) -> dict[str, Any]:
+    if svc is None:
+        return {}
+    try:
+        report = getattr(svc, "last_plan_report", {}) or {}
+    except Exception:
+        return {}
+    return dict(report) if isinstance(report, dict) else {}
+
+
+def _planner_value(value: Any, default: str) -> str:
+    return str(value or default).lower().strip()
+
+
 def run_global_planner(
     *,
     planner: str,
@@ -609,7 +656,7 @@ def run_global_planner(
             np.asarray(goal, dtype=float),
             safe_goal_tolerance=safe_goal_tolerance,
         )
-        plan_report = svc.last_plan_report
+        plan_report = _service_plan_report(svc)
         pts = _path_points(path)
         arr = np.asarray(pts, dtype=np.float64)
         distance = float(np.sum(np.linalg.norm(np.diff(arr, axis=0), axis=1))) if len(arr) > 1 else 0.0
@@ -634,7 +681,13 @@ def run_global_planner(
         )
         reached_goal = bool(backend_reached_goal and goal_projection_within_tolerance)
         feasible = bool(pts) and reached_goal
-        backend_available = bool(getattr(backend, "available", True))
+        selected_planner = _planner_value(plan_report.get("selected_planner"), planner)
+        planner_requested = _planner_value(plan_report.get("primary_planner"), planner)
+        selected_backend = backend
+        if selected_planner != planner:
+            selected_backend = getattr(svc, "_fallback_backend", None) or backend
+        backend_available = bool(getattr(selected_backend, "available", True))
+        requested_backend_available = bool(getattr(backend, "available", True))
         error = None
         if not pts:
             error = "planner returned empty path"
@@ -651,14 +704,29 @@ def run_global_planner(
         )
         return {
             "planner": planner,
+            "planner_requested": planner_requested,
+            "selected_planner": selected_planner,
+            "fallback_reason": str(plan_report.get("fallback_reason") or ""),
+            "plan_safety_policy": str(plan_report.get("policy") or ""),
+            "rejected_plans": (
+                plan_report.get("rejected_plans")
+                if isinstance(plan_report.get("rejected_plans"), list)
+                else []
+            ),
             "status": status,
             "blocked": status == "blocked",
             "ok": feasible,
             "feasible": feasible,
             "backend_available": backend_available,
-            "backend_class": backend.__class__.__name__ if backend is not None else None,
+            "backend_requested_available": requested_backend_available,
+            "backend_class": selected_backend.__class__.__name__ if selected_backend is not None else None,
+            "backend_requested_class": backend.__class__.__name__ if backend is not None else None,
             "native_runtime": native_runtime,
-            "native_backend_used": planner == "pct" and bool(getattr(backend, "available", False)),
+            "native_backend_used": (
+                selected_planner == "pct"
+                and bool(getattr(selected_backend, "available", False))
+                and feasible
+            ),
             "tomogram": str(tomogram),
             "tomogram_sha256": _tomogram_sha256(tomogram),
             "planner_scope": (
@@ -692,6 +760,9 @@ def run_global_planner(
         }
     except Exception as exc:
         error = str(exc)
+        plan_report = _service_plan_report(svc)
+        selected_planner = _planner_value(plan_report.get("selected_planner"), planner)
+        planner_requested = _planner_value(plan_report.get("primary_planner"), planner)
         backend_available = bool(getattr(backend, "available", False)) if backend is not None else False
         load_error = str(getattr(backend, "_load_error", "") or "")
         status = _planner_status(
@@ -703,12 +774,23 @@ def run_global_planner(
         )
         return {
             "planner": planner,
+            "planner_requested": planner_requested,
+            "selected_planner": selected_planner,
+            "fallback_reason": str(plan_report.get("fallback_reason") or ""),
+            "plan_safety_policy": str(plan_report.get("policy") or ""),
+            "rejected_plans": (
+                plan_report.get("rejected_plans")
+                if isinstance(plan_report.get("rejected_plans"), list)
+                else []
+            ),
             "status": status,
             "blocked": status == "blocked",
             "ok": False,
             "feasible": False,
             "backend_available": backend_available,
             "backend_class": backend.__class__.__name__ if backend is not None else None,
+            "backend_requested_available": backend_available,
+            "backend_requested_class": backend.__class__.__name__ if backend is not None else None,
             "native_runtime": native_runtime,
             "native_backend_used": False,
             "tomogram": str(tomogram),
@@ -1533,8 +1615,14 @@ def run_command_flow(
     from base_autonomy.modules.path_follower_module import PathFollowerModule
     from nav.cmd_vel_mux_module import CmdVelMux
 
+    path_follower_backend = "pid"
     local_planner = LocalPlannerModule(backend=local_planner_backend, corridor_lookahead_m=2.5)
-    path_follower = PathFollowerModule(backend="pid", max_speed=0.25, min_speed=0.05, lookahead=0.6)
+    path_follower = PathFollowerModule(
+        backend=path_follower_backend,
+        max_speed=0.25,
+        min_speed=0.05,
+        lookahead=0.6,
+    )
     mux = CmdVelMux(source_timeout=1.0)
     modules = [local_planner, path_follower, mux]
 
@@ -1592,11 +1680,31 @@ def run_command_flow(
                 break
             time.sleep(0.02)
     except Exception as exc:
+        local_planner_evidence = _algorithm_backend_evidence(
+            local_planner,
+            requested=local_planner_backend,
+            exercised_by="command_flow",
+            native_backend="nanobind",
+        )
+        path_follower_evidence = _algorithm_backend_evidence(
+            path_follower,
+            requested=path_follower_backend,
+            exercised_by="command_flow",
+            native_backend="nav_core",
+        )
         return {
             "ok": False,
             "error": str(exc),
             "non_motion": True,
             "local_planner_backend": local_planner_backend,
+            "local_planner_backend_requested": local_planner_backend,
+            "local_planner_backend_actual": local_planner_evidence["backend_actual"],
+            "path_follower_backend_requested": path_follower_backend,
+            "path_follower_backend_actual": path_follower_evidence["backend_actual"],
+            "algorithm_backends": {
+                "local_planner": local_planner_evidence,
+                "path_follower": path_follower_evidence,
+            },
             "production_local_planner_verified": False,
             "driver_used": False,
             "goal_sent": False,
@@ -1606,6 +1714,20 @@ def run_command_flow(
         for module in reversed(modules):
             module.stop()
 
+    local_planner_evidence = _algorithm_backend_evidence(
+        local_planner,
+        requested=local_planner_backend,
+        exercised_by="command_flow",
+        native_backend="nanobind",
+    )
+    path_follower_evidence = _algorithm_backend_evidence(
+        path_follower,
+        requested=path_follower_backend,
+        exercised_by="command_flow",
+        native_backend="nav_core",
+    )
+    local_planner_actual = str(local_planner_evidence["backend_actual"])
+    path_follower_actual = str(path_follower_evidence["backend_actual"])
     ok = (
         seen["local_path"] > 0
         and seen["path_follower_cmd"] > 0
@@ -1616,8 +1738,16 @@ def run_command_flow(
     return {
         "ok": ok,
         "non_motion": True,
-        "local_planner_backend": local_planner_backend,
-        "production_local_planner_verified": ok and _is_production_local_planner_backend(local_planner_backend),
+        "local_planner_backend": local_planner_actual,
+        "local_planner_backend_requested": local_planner_backend,
+        "local_planner_backend_actual": local_planner_actual,
+        "path_follower_backend_requested": path_follower_backend,
+        "path_follower_backend_actual": path_follower_actual,
+        "algorithm_backends": {
+            "local_planner": local_planner_evidence,
+            "path_follower": path_follower_evidence,
+        },
+        "production_local_planner_verified": ok and _is_production_local_planner_backend(local_planner_actual),
         "driver_used": False,
         "goal_sent": False,
         "cmd_vel_sent_to_hardware": False,
@@ -2036,9 +2166,18 @@ def _native_pct_gate(
         "blocked": bool(blocked and not ok),
         "reason": "" if ok else selected.get("error") or "native pct gate failed",
         "planner": "pct",
+        "planner_requested": str(selected.get("planner_requested") or selected.get("planner") or "pct"),
+        "selected_planner": str(selected.get("selected_planner") or selected.get("planner") or "pct"),
+        "fallback_reason": str(selected.get("fallback_reason") or ""),
+        "plan_safety_policy": str(selected.get("plan_safety_policy") or ""),
+        "rejected_plans": selected.get("rejected_plans") if isinstance(selected.get("rejected_plans"), list) else [],
         "backend_available": bool(selected.get("backend_available")),
+        "backend_requested_available": bool(
+            selected.get("backend_requested_available", selected.get("backend_available"))
+        ),
         "native_backend_used": bool(selected.get("native_backend_used")),
         "backend_class": selected.get("backend_class"),
+        "backend_requested_class": selected.get("backend_requested_class"),
         "runtime_ok": bool(runtime.get("ok")) if isinstance(runtime, dict) else False,
         "runtime": runtime,
         "tomogram": selected.get("tomogram"),
@@ -2121,8 +2260,14 @@ def run_route_case(
             "ok": False,
             "error": "no feasible path available for MuJoCo bridge loop",
         }
+    local_planner_backend_actual = str(
+        command_flow.get(
+            "local_planner_backend_actual",
+            command_flow.get("local_planner_backend", local_planner_backend),
+        )
+    )
     production_local_planner_verified = bool(
-        _is_production_local_planner_backend(local_planner_backend)
+        _is_production_local_planner_backend(local_planner_backend_actual)
         and command_flow.get("ok")
         and (not bridge_loop or (mujoco_bridge_loop or {}).get("production_local_planner_verified"))
     )
@@ -2143,7 +2288,8 @@ def run_route_case(
     report = {
         "schema_version": 1,
         **_validation_scope(),
-        "local_planner_backend_verified": local_planner_backend,
+        "local_planner_backend_requested": local_planner_backend,
+        "local_planner_backend_verified": local_planner_backend_actual,
         "production_local_planner_required": require_production_local_planner,
         "production_local_planner_verified": production_local_planner_verified,
         "non_motion": True,
@@ -2178,6 +2324,7 @@ def run_route_case(
         "planning": planning,
         "native_pct_gate": native_pct_gate,
         "command_flow": command_flow,
+        "algorithm_backends": command_flow.get("algorithm_backends", {}),
         "tracking_replay": tracking_replay,
         "mujoco_bridge_loop": mujoco_bridge_loop,
         "exploration": exploration,
@@ -2244,10 +2391,23 @@ def run_route_matrix(
         )
         for name in routes
     ]
+    local_planner_backend_actuals = sorted(
+        {
+            str(case.get("local_planner_backend_verified", local_planner_backend))
+            for case in cases
+        }
+    )
+    local_planner_backend_verified: str | list[str]
+    if len(local_planner_backend_actuals) == 1:
+        local_planner_backend_verified = local_planner_backend_actuals[0]
+    else:
+        local_planner_backend_verified = local_planner_backend_actuals
     summary = {
         "schema_version": 1,
         **_validation_scope(),
-        "local_planner_backend_verified": local_planner_backend,
+        "local_planner_backend_requested": local_planner_backend,
+        "local_planner_backend_verified": local_planner_backend_verified,
+        "local_planner_backend_actuals": local_planner_backend_actuals,
         "production_local_planner_required": require_production_local_planner,
         "production_local_planner_verified": all(
             case.get("production_local_planner_verified") for case in cases

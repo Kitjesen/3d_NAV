@@ -18,10 +18,18 @@ BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+LINGTU_PYTHON="${LINGTU_PYTHON:-python3}"
+LINGTU_CLI="$WORKSPACE_DIR/lingtu.py"
 TOMOGRAM_DIR="$WORKSPACE_DIR/src/global_planning/PCT_planner/rsc/tomogram"
 PCD_DIR="$WORKSPACE_DIR/src/global_planning/PCT_planner/rsc/pcd"
 MAP_DIR="$WORKSPACE_DIR/maps"
+
+_run_lingtu() {
+    cd "$WORKSPACE_DIR"
+    exec "$LINGTU_PYTHON" "$LINGTU_CLI" "$@"
+}
 
 # ── 通用初始化 ───────────────────────────────────────────────
 _init() {
@@ -55,12 +63,9 @@ _find_latest_map() {
 # ── 子命令: map ───────────────────────────────────────────────
 cmd_map() {
     echo -e "${BOLD}${BLUE}▶ 建图模式${NC}"
-    echo -e "  启动 LiDAR + Fast-LIO2 + 地形分析 + 局部规划"
-    echo -e "  ${YELLOW}用手柄遥控机器人覆盖目标区域，完成后 Ctrl+C 停止${NC}"
-    echo -e "  ${YELLOW}停止后运行: ${GREEN}./lingtu.sh save${NC}"
+    echo -e "  委托当前 Module-first CLI: ${GREEN}python lingtu.py map${NC}"
     echo ""
-    _init
-    ros2 launch launch/navigation_bringup.launch.py
+    _run_lingtu map
 }
 
 # ── 子命令: save ──────────────────────────────────────────────
@@ -146,76 +151,30 @@ cmd_nav() {
     fi
     echo ""
 
+    if [ -f "${MAP_PATH}.pickle" ]; then
+        _run_lingtu nav --tomogram "${MAP_PATH}.pickle"
+    fi
     export NAV_MAP_PATH="$MAP_PATH"
-    ros2 launch launch/navigation_run.launch.py map_path:="$MAP_PATH"
+    echo -e "  委托当前 Module-first CLI: ${GREEN}python lingtu.py nav${NC}"
+    _run_lingtu nav
 }
 
 # ── 子命令: status ─────────────────────────────────────────────
 cmd_status() {
     echo -e "${BOLD}${BLUE}▶ 系统状态检查${NC}"
+    echo -e "  委托当前 Module-first CLI: ${GREEN}python lingtu.py status${NC}"
     echo ""
-    _init
-
-    # 地图文件
-    echo -e "${YELLOW}── 地图文件 ──${NC}"
-    local LATEST
-    LATEST=$(_find_latest_map)
-    if [ -n "$LATEST" ]; then
-        echo -e "  最新地图: ${GREEN}$(basename $LATEST)${NC}"
-        [ -f "${LATEST}.pcd" ]    && echo -e "  PCD:      ${GREEN}✓${NC}" || echo -e "  PCD:      ${RED}✗ 缺失${NC}"
-        [ -f "${LATEST}.pickle" ] && echo -e "  Tomogram: ${GREEN}✓${NC}" || echo -e "  Tomogram: ${YELLOW}⚠ 未生成（需 save）${NC}"
-    else
-        echo -e "  ${RED}未找到地图文件${NC}"
-    fi
-    echo ""
-
-    # 关键话题（按层分组）
-    echo -e "${YELLOW}── 话题状态 ──${NC}"
-    _check_topic() {
-        if timeout 2s ros2 topic info "$1" &>/dev/null; then
-            echo -e "  ${GREEN}✓${NC} $1"
-        else
-            echo -e "  ${RED}✗${NC} $1"
-        fi
-    }
-    echo -e "  ${BLUE}[SLAM]${NC}"
-    _check_topic "/nav/odometry"
-    _check_topic "/nav/map_cloud"
-    echo -e "  ${BLUE}[定位]${NC}"
-    _check_topic "/nav/localization_quality"
-    echo -e "  ${BLUE}[全局规划]${NC}"
-    _check_topic "/nav/global_path"
-    _check_topic "/nav/planner_status"
-    echo -e "  ${BLUE}[局部规划]${NC}"
-    _check_topic "/nav/terrain_map"
-    _check_topic "/nav/way_point"
-    _check_topic "/nav/local_path"
-    _check_topic "/nav/cmd_vel"
-    echo ""
-
-    # TF
-    echo -e "${YELLOW}── TF 链 ──${NC}"
-    if timeout 3s ros2 run tf2_ros tf2_echo map odom &>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} map → odom"
-    else
-        echo -e "  ${RED}✗${NC} map → odom（ICP Localizer 未运行？）"
-    fi
-    if timeout 3s ros2 run tf2_ros tf2_echo odom body &>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} odom → body"
-    else
-        echo -e "  ${RED}✗${NC} odom → body（Fast-LIO2 未运行？）"
-    fi
-    echo ""
+    _run_lingtu status
 }
 
 # ── 帮助 ──────────────────────────────────────────────────────
 cmd_help() {
     echo -e "${BOLD}lingtu.sh — MapPilot 统一启动入口${NC}"
     echo ""
-    echo -e "  ${GREEN}./lingtu.sh map${NC}     建图模式（手柄遥控 + SLAM 建图）"
+    echo -e "  ${GREEN}./lingtu.sh map${NC}     兼容入口，委托 python lingtu.py map"
     echo -e "  ${GREEN}./lingtu.sh save${NC}    保存地图（PCD + Tomogram 全自动）"
-    echo -e "  ${GREEN}./lingtu.sh nav${NC}     导航模式（自动加载最新地图）"
-    echo -e "  ${GREEN}./lingtu.sh status${NC}  检查系统状态"
+    echo -e "  ${GREEN}./lingtu.sh nav${NC}     兼容入口，委托 python lingtu.py nav"
+    echo -e "  ${GREEN}./lingtu.sh status${NC}  兼容入口，委托 python lingtu.py status"
     echo ""
     echo -e "${YELLOW}典型流程:${NC}"
     echo -e "  1. ${GREEN}./lingtu.sh map${NC}   遥控机器人建图"

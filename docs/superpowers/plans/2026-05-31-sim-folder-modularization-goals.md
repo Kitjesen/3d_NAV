@@ -447,3 +447,572 @@ PYTHONPATH=src:. python sim/scripts/server_sim_closure.py --preset g4_server_ful
 Stale path search still has expected historical references in plan/archive
 documents. The live `sim/README.md` and `sim/bridge/nova_nav_bridge.py` checks
 no longer match `sim/robot` or `sim/scenes` runtime paths.
+
+## 2026-05-31 Continuation: G4 Contract And Stack Pluginization
+
+G14. Done in this continuation pass: make the G4 evidence contract explicit
+enough for agents and CI to separate missing/stale artifacts from host-runtime
+blockers. `server_sim_closure.py` now exposes `expected_report_path`,
+`accepted_patterns`, and `host_requirements` on each gate summary, on
+`missing_required_commands`, and on `next_actions`; it also adds the missing
+`--multifloor-exploration-report` CLI override. `native_pct_mujoco` accepts
+the historical `report.*.server.json` pattern, while `saved_map_relocalize`
+is documented as ROS2 + MuJoCo/Fast-LIO + localizer + saved-map assets, not a
+PCT-native gate.
+
+G15. Done in this continuation pass: extend stack-level pluginization without
+changing Module wiring names. `safety`, `lidar`, `gateway`, `navigation`,
+external `tare` exploration, and `perception` now resolve registered
+implementations while preserving canonical aliases such as `NavigationModule`,
+`SafetyRingModule`, `GatewayModule`, `PerceptionModule`, and
+`WavefrontFrontierExplorer`. This keeps existing `full_stack_wiring.py`
+string contracts stable when a local backend is swapped instantly.
+
+Latest safe validation evidence:
+
+```bash
+python -m py_compile sim/scripts/server_sim_closure.py sim/scripts/multifloor_nav_validation.py src/core/blueprints/stacks/safety.py src/core/blueprints/stacks/lidar.py src/core/blueprints/stacks/gateway.py src/core/blueprints/stacks/navigation.py src/core/blueprints/stacks/exploration.py src/core/blueprints/stacks/perception.py src/semantic/perception/semantic_perception/perception_module.py src/core/tests/test_stack_registry_resolution.py src/core/tests/test_plugin_seed.py src/core/tests/test_server_sim_closure.py src/core/tests/test_sim_runtime_compat.py
+# passed
+
+python -m pytest src/core/tests/test_stack_registry_resolution.py src/core/tests/test_plugin_seed.py -q
+# 9 passed
+
+python -m pytest src/core/tests/test_server_sim_closure.py -q
+# 124 passed
+
+python -m pytest src/core/tests/test_multifloor_sim_validation.py -q
+# 26 passed
+
+python -m pytest src/core/tests/test_tare_exploration.py src/core/tests/test_traversable_frontier_module.py::test_full_stack_can_add_traversable_frontier_without_wiring_it_to_control src/core/tests/test_sim_runtime_compat.py::test_full_stack_wires_frontier_exploration_goal_to_navigation -q
+# 42 passed
+
+python -m pytest src/core/tests/test_sim_semantic_pipeline_blueprint.py src/core/tests/test_perception_factory_registry.py src/core/tests/test_perception_module.py::TestDetectorConfiguration -q
+# 18 passed
+
+PYTHONPATH=src:. python sim/scripts/server_sim_closure.py --preset g4_server_full_sim --required-only --json-out artifacts/server_sim_closure_summary_g4_current.json
+# exited 0; summary ok=false, simulation_only=true,
+# real_robot_motion=false, cmd_vel_sent_to_hardware=false.
+# verified true: gateway_runtime_acceptance, routecheck_preflight,
+# dynamic_obstacle_local_planner.
+# still blocked: multifloor_exploration, large_terrain,
+# native_pct_mujoco, fastlio2_dynamic_inspection, moving_obstacle_sweep,
+# large_loop_closure, gazebo_runtime, saved_map_relocalize,
+# pct_saved_map_navigation.
+```
+
+## 2026-05-31 Continuation: Map/Planner/Memory Pluginization
+
+G16. Done in this continuation pass: extend stack-level registry replacement
+to `maps`, `planner`, and `memory` without changing canonical Module names.
+The map stack now resolves `OccupancyGridModule`, `VoxelGridModule`,
+`ESDFModule`, `ElevationMapModule`, `TraversabilityCostModule`,
+`ROS2GridBridgeModule`, and `MapManagerModule` through the registry. The
+planner stack resolves `SemanticPlannerModule`, `LLMModule`, and
+`VisualServoModule`. The memory stack resolves `SemanticMapperModule`,
+`EpisodicMemoryModule`, `TaggedLocationsModule`, `VectorMemoryModule`,
+`TemporalMemoryModule`, and `MissionLoggerModule`. `MapManagerModule` and
+`ROS2GridBridgeModule` now have explicit built-in registry entries. This moves
+local map/planner/memory swaps onto the same plugin surface as the earlier
+safety/navigation/perception work while keeping full-stack wire names stable.
+
+Latest safe validation evidence for G16:
+
+```bash
+python -m pytest src/core/tests/test_stack_registry_resolution.py::test_maps_stack_prefers_registered_modules_with_canonical_aliases src/core/tests/test_stack_registry_resolution.py::test_planner_stack_prefers_registered_modules_with_canonical_aliases src/core/tests/test_stack_registry_resolution.py::test_memory_stack_prefers_registered_modules_with_canonical_aliases -q
+# RED before implementation: 3 failed because maps/planner/memory ignored registry replacements.
+
+python -m py_compile src/core/blueprints/stacks/maps.py src/core/blueprints/stacks/planner.py src/core/blueprints/stacks/memory.py src/nav/services/nav_services/map_manager_module.py src/nav/ros2_grid_bridge_module.py src/core/plugin_seed.py src/core/tests/test_stack_registry_resolution.py src/core/tests/test_plugin_seed.py
+# passed
+
+python -m pytest src/core/tests/test_stack_registry_resolution.py src/core/tests/test_plugin_seed.py -q
+# 12 passed
+
+python -m pytest src/core/tests/test_profile_graph_snapshots.py -q
+# 33 passed
+
+python -m pytest src/core/tests/test_sim_semantic_pipeline_blueprint.py -q
+# 4 passed
+
+python -m pytest src/core/tests/test_cross_module_integration.py -q
+# 1 passed; emitted existing nanobind refleak diagnostics after pytest success.
+
+python -m pytest src/core/tests/test_sim_nav_e2e.py -q
+# 4 passed
+
+PYTHONPATH=src:. python sim/scripts/server_sim_closure.py --preset g4_server_full_sim --required-only --json-out artifacts/server_sim_closure_summary_g4_current.json
+# exited 0; summary remains ok=false. Verified true:
+# gateway_runtime_acceptance, routecheck_preflight,
+# dynamic_obstacle_local_planner. The same 9 G4 gates remain blocked by
+# PCT-native/ROS2/MuJoCo/localizer host requirements or missing/stale reports.
+```
+
+## 2026-05-31 Continuation: SLAM And Sim-LiDAR Pluginization
+
+G17. Done in this continuation pass: extend stack-level registry replacement
+to `slam` and `sim_lidar` while preserving non-motion validation boundaries.
+`slam("bridge", manage_services=False)` now resolves `SlamBridgeModule` and
+`DepthVisualOdomModule` through registry categories `slam_bridge/default` and
+`visual_odom/depth`, retaining the canonical aliases consumed by full-stack
+wiring. `sim_lidar()` now resolves `SimPointCloudProvider` through
+`sim_lidar/pointcloud`, so synthetic LiDAR sources can be swapped without
+rewiring downstream map/planning modules.
+
+Latest safe validation evidence for G17:
+
+```bash
+python -m pytest src/core/tests/test_stack_registry_resolution.py::test_slam_stack_prefers_registered_bridge_and_visual_odom_modules src/core/tests/test_stack_registry_resolution.py::test_sim_lidar_stack_prefers_registered_pointcloud_provider -q
+# RED before implementation: 2 failed because slam/sim_lidar ignored registry replacements.
+
+python -m py_compile src/core/blueprints/stacks/slam.py src/core/blueprints/stacks/sim_lidar.py src/slam/depth_visual_odom_module.py src/drivers/sim/sim_pointcloud_provider.py src/core/plugin_seed.py src/core/tests/test_stack_registry_resolution.py src/core/tests/test_plugin_seed.py
+# passed
+
+python -m pytest src/core/tests/test_stack_registry_resolution.py src/core/tests/test_plugin_seed.py -q
+# 14 passed
+
+python -m pytest src/core/tests/test_profile_graph_snapshots.py -q
+# 33 passed
+
+python -m pytest src/core/tests/test_sim_nav_e2e.py -q
+# 4 passed
+
+python -m pytest src/core/tests/test_localization_health.py src/slam/tests/test_slam_backend_status.py src/slam/tests/test_slam_gnss_fusion.py -q
+# 121 passed
+
+PYTHONPATH=src:. python sim/scripts/server_sim_closure.py --preset g4_server_full_sim --required-only --json-out artifacts/server_sim_closure_summary_g4_current.json
+# exited 0; summary remains ok=false, simulation_only=true,
+# real_robot_motion=false, cmd_vel_sent_to_hardware=false.
+```
+
+## 2026-05-31 Continuation: Optional Surfaces And Seed Preservation
+
+G18. Done in this continuation pass: close the remaining stack-factory
+pluginization gaps found by the parallel architecture/explore pass.
+`perception()` now resolves optional encoder, reconstruction, dataset recorder,
+and keyframe exporter modules through registry categories while keeping the
+stable aliases consumed by full-stack wiring. `navigation()` now resolves the
+optional ROS 2 path bridge through `navigation/ros2_path_bridge`. The local
+TARE exploration branch now resolves `TAREExplorerModule` and
+`ExplorationSupervisorModule` through the same registry-first path as the
+external TARE branch.
+
+G19. Done in this continuation pass: harden the simulation folder boundary
+contract for future agents. `sim/scripts/README.md` now classifies scripts by
+safety level instead of implying that every script is runnable in the current
+host. `sim/launch/README.md` documents the legacy ROS launch contract and
+requires an isolated ROS domain with no hardware command subscribers. The top
+level `sim/README.md` now states that product tasks must use a simulation
+endpoint and that bare `nav`, `map`, and `explore` profiles are not simulation
+entrypoints.
+
+G20. Done in this continuation pass: make the autonomy helper assembly
+registry-first. `add_autonomy_stack()` now resolves terrain, local planner, and
+path follower modules through the plugin registry before adding them to a
+blueprint. This preserves canonical aliases (`TerrainModule`,
+`LocalPlannerModule`, `PathFollowerModule`) while allowing a local detector,
+local planner, follower, or terrain plugin to be swapped at startup without
+rewiring downstream modules.
+
+G21. Done in this continuation pass: fix the highest-risk plugin seed bug from
+the parallel review. `seed_builtin_plugins()` now snapshots pre-existing
+registry entries and restores those exact entries after built-in seed imports,
+so a caller-provided plugin override is not silently overwritten while missing
+built-in siblings are still filled in.
+
+Latest safe validation evidence for G18-G21:
+
+```bash
+python -m pytest src/core/tests/test_stack_registry_resolution.py::test_perception_optional_tool_modules_prefer_registered_modules src/core/tests/test_stack_registry_resolution.py::test_navigation_optional_ros2_path_bridge_prefers_registered_module src/core/tests/test_plugin_seed.py::test_reconstruction_plugin_seed_registers_optional_modules src/core/tests/test_plugin_seed.py::test_navigation_plugin_seed_registers_ros2_path_bridge -q
+# RED before implementation: optional perception/reconstruction and ROS2 path
+# bridge surfaces ignored registry replacements or were missing seed entries.
+
+python -m pytest src/core/tests/test_stack_registry_resolution.py::test_exploration_local_tare_prefers_registered_modules_with_canonical_aliases -q
+# RED before implementation: local TARE used direct imports and ignored registry
+# replacements.
+
+python -m pytest src/core/tests/test_sim_runtime_compat.py::test_sim_boundary_indexes_document_stable_contracts src/core/tests/test_server_sim_closure.py::test_server_sim_closure_summary_only_mode_is_explicit -q
+# RED before implementation: simulation boundary docs lacked launch/safety
+# contracts and summary-only closure output did not expose explicit execution
+# fields.
+
+python -m pytest src/core/tests/test_stack_registry_resolution.py::test_autonomy_stack_prefers_registered_modules_with_canonical_aliases -q
+# RED before implementation: add_autonomy_stack used eager concrete class
+# imports and ignored registry replacements.
+
+python -m pytest src/core/tests/test_plugin_seed.py::test_builtin_plugin_seed_preserves_preexisting_plugin_registrations -q
+# RED before implementation: built-in plugin seeding overwrote a pre-existing
+# plugin registration for the same category/name.
+
+python -m py_compile src/core/registry.py src/core/plugin_seed.py src/core/blueprints/stacks/exploration.py src/core/blueprints/stacks/perception.py src/core/blueprints/stacks/navigation.py src/base_autonomy/modules/__init__.py src/base_autonomy/modules/autonomy_module.py src/core/tests/test_plugin_seed.py src/core/tests/test_stack_registry_resolution.py src/core/tests/test_server_sim_closure.py src/core/tests/test_sim_runtime_compat.py
+# passed
+
+python -m pytest src/core/tests/test_stack_registry_resolution.py src/core/tests/test_plugin_seed.py -q
+# 19 passed
+
+python -m pytest src/core/tests/test_server_sim_closure.py -q
+# 124 passed
+
+python -m pytest src/core/tests/test_sim_runtime_compat.py::test_sim_boundary_indexes_document_stable_contracts src/core/tests/test_tare_exploration.py::TestExplorationStackFactory -q
+# 13 passed
+
+python -m pytest src/core/tests/test_profile_graph_snapshots.py -q
+# 33 passed
+
+python -m pytest src/core/tests/test_sim_nav_e2e.py -q
+# 4 passed
+
+python -m pytest src/core/tests/test_cross_module_integration.py -q
+# 1 passed; emitted existing nanobind refleak diagnostics and deprecation
+# warnings after pytest success.
+
+python -m pytest src/base_autonomy/tests/test_autonomy_modules.py -q
+# 18 passed
+
+python -m pytest src/core/tests/test_backend_status.py src/core/tests/test_runtime_backend_switch.py -q
+# 25 passed
+
+python -m pytest src/core/tests/test_sim_semantic_pipeline_blueprint.py src/core/tests/test_perception_factory_registry.py src/core/tests/test_perception_module.py::TestDetectorConfiguration -q
+# 18 passed
+
+python -m pytest src/core/tests/test_multifloor_sim_validation.py -q
+# 26 passed
+
+PYTHONPATH=src:. python sim/scripts/server_sim_closure.py --preset g4_server_full_sim --required-only --json-out artifacts/server_sim_closure_summary_g4_current.json
+# exited 0; summary remains ok=false, execution_mode=summary_only,
+# run_missing=false, gate_runs=[], simulation_only=true,
+# real_robot_motion=false, cmd_vel_sent_to_hardware=false.
+
+PYTHONPATH=src:. python sim/scripts/multifloor_nav_validation.py --skip-mujoco
+# exited 0; non-motion report refreshed. Synthetic LiDAR localization and
+# nav_core tracking replay passed; production PCT native runtime remains
+# unavailable on this Windows / Python 3.13 host.
+```
+
+Current G4 full simulation closure is still intentionally not complete.
+`artifacts/server_sim_closure_summary_g4_current.json` remains `ok=false` with
+the same nine required gates blocking:
+`multifloor_exploration`, `large_terrain`, `native_pct_mujoco`,
+`fastlio2_dynamic_inspection`, `moving_obstacle_sweep`, `large_loop_closure`,
+`gazebo_runtime`, `saved_map_relocalize`, and `pct_saved_map_navigation`.
+
+Next execution goals from this checkpoint were executed as G22-G24 below.
+
+## 2026-05-31 Continuation: Seed Hygiene And Remaining Gate Queue
+
+G22. Done in this continuation pass: registry seeding the built-in `driver`
+group no longer mutates `sys.path` in the normal repo runtime. The legacy
+`drivers.real.thunder.connection` module still registers the compatibility
+`driver/nova_dog` backend, but its path fallback now runs only when `core`
+cannot be imported. `drivers.real.thunder.__init__` now exports legacy
+attributes lazily, so importing `drivers.real.thunder.han_dog_module` does not
+also import legacy blueprint helpers.
+
+G23. Done in this continuation pass: SLAM plugin seeding and
+`slam("bridge", enable_visual_backup=True)` no longer import OpenCV just to
+register or build the depth visual odometry module. `DepthVisualOdomModule`
+keeps its `visual_odom/depth` registry entry at import time, but caches a lazy
+`cv2` import only when camera distortion maps, ORB activation, LK tracking, or
+PnP solving actually use OpenCV.
+
+G24. Done as a planning/audit checkpoint, not as gate execution: the remaining
+G4 gates were sorted into host-specific execution lanes. The current Windows /
+Python 3.13 host can refresh none of the nine remaining required gates as a
+passing full-closure artifact because even the local non-ROS gates now require
+native PCT modules built for Linux/S100P and CPython 3.10. The current G4
+summary artifact remains summary-only and safe:
+`execution_mode=summary_only`, `run_missing=false`, `gate_runs=[]`,
+`simulation_only=true`, `real_robot_motion=false`, and
+`cmd_vel_sent_to_hardware=false`.
+
+G24 execution queue:
+
+| Order | Gate | Required host lane | Expected report |
+| ---: | --- | --- | --- |
+| 1 | `large_terrain` | Linux or S100P/aarch64, CPython 3.10 ABI, PCT native libs; no ROS/MuJoCo required. | `artifacts/server_sim_closure/large_terrain/report.json` |
+| 2 | `multifloor_exploration` | Linux or S100P/aarch64, CPython 3.10 ABI, PCT native libs; no ROS/MuJoCo required. | `artifacts/server_sim_closure/multifloor_exploration/report.json` |
+| 3 | `native_pct_mujoco` | Linux + ROS 2 Humble + MuJoCo EGL + PCT native; isolated simulation domain. | `artifacts/server_sim_closure/native_pct_mujoco/report.json` |
+| 4 | `fastlio2_dynamic_inspection` | Linux + ROS 2 Humble + MuJoCo EGL + PCT native; isolated simulation domain. | `artifacts/server_sim_closure/mujoco_fastlio2_live*/inspection*/*/report.json` |
+| 5 | `moving_obstacle_sweep` | Linux + ROS 2 Humble + MuJoCo EGL + PCT native; depends on inspection reports/video. | `artifacts/server_sim_closure/moving_obstacle_sweep/report.json` |
+| 6 | `large_loop_closure` | Linux + ROS 2 Humble + MuJoCo EGL + PCT native; isolated simulation domain. | `artifacts/server_sim_closure/large_loop_closure/report.json` |
+| 7 | `gazebo_runtime` | Linux + ROS 2 Humble + Gazebo/Ignition; isolated `ROS_DOMAIN_ID` and Gazebo partition. | `artifacts/server_sim_closure/gazebo_runtime_explore/report_grid_astar_odomfoot.json` |
+| 8 | `saved_map_relocalize` | Linux + ROS 2 Humble + MuJoCo/Fast-LIO live feed + localizer runtime + saved-map assets; no PCT requirement. | `artifacts/server_sim_closure/saved_map_relocalize_runtime/report.json` |
+| 9 | `pct_saved_map_navigation` | Linux + ROS 2 Humble + MuJoCo EGL + PCT native; run after saved-map relocalization evidence exists. | `artifacts/server_sim_closure/pct_saved_map_navigation/report.json` |
+
+Use `artifacts/server_sim_closure_summary_g4_current.json` field
+`next_actions[]` as the command source of truth for these gates. Do not use
+`--run-missing` on the Windows host; run the commands manually on an isolated
+simulation host that has no physical robot drivers or hardware command
+subscribers.
+
+Latest safe validation evidence for G22-G24:
+
+```bash
+python -m pytest src/core/tests/test_plugin_seed.py::test_driver_plugin_seed_does_not_mutate_sys_path src/core/tests/test_plugin_seed.py::test_slam_plugin_seed_does_not_import_cv2_for_registration_only -q
+# RED before implementation: 2 failed because driver seeding mutated sys.path
+# and SLAM seeding imported cv2. After implementation: 2 passed.
+
+python -m py_compile src/drivers/real/thunder/__init__.py src/drivers/real/thunder/blueprints.py src/drivers/real/thunder/connection.py src/slam/depth_visual_odom_module.py src/core/tests/test_plugin_seed.py
+# passed
+
+python -m pytest src/core/tests/test_plugin_seed.py -q
+# 6 passed
+
+python -m pytest src/core/tests/test_han_dog_module.py src/drivers/tests/test_driver_spec.py -q
+# 22 passed
+
+python -m pytest src/core/tests/test_stack_registry_resolution.py::test_slam_stack_prefers_registered_bridge_and_visual_odom_modules src/core/tests/test_stack_registry_resolution.py::test_slam_stack_visual_backup_does_not_import_cv2_at_build_time src/core/tests/test_plugin_seed.py::test_slam_plugin_seed_does_not_import_cv2_for_registration_only src/slam/tests/test_slam_backend_status.py src/slam/tests/test_slam_gnss_fusion.py -q
+# 41 passed
+```
+
+Next execution goals:
+
+- G25: if legacy `driver/nova_dog` is no longer required, remove it from
+  default driver seeding or move it behind an explicit compatibility group.
+- G26: add a machine-checkable isolated-host preflight for the G24 queue
+  before any Linux/ROS2/MuJoCo gate is run.
+- G27: refresh the first two PCT-native non-ROS gates (`large_terrain` then
+  `multifloor_exploration`) on a Linux/S100P CPython 3.10 host, then re-run
+  `server_sim_closure` summary-only.
+
+## 2026-05-31 Continuation: Host Preflight Gate Queue
+
+G26. Done in this continuation pass: `server_sim_closure.py` now has a
+read-only `--host-preflight` mode for the G4 queue. This mode does not run any
+gate command, rejects `--run-missing`, writes no hardware command, and reports
+host suitability before a Linux/ROS2/MuJoCo/PCT gate is attempted. Its report
+schema is explicit about the safety boundary:
+`execution_mode=host_preflight_only`, `run_missing=false`, `gate_runs=[]`,
+`simulation_only=true`, `real_robot_motion=false`, and
+`cmd_vel_sent_to_hardware=false`.
+
+G26a. Done after parallel safety review: `--json-out -` is now stdout-only, so
+host preflight can be run without creating a report artifact. This closes the
+strict read-only caveat for preflight use cases where "read-only" means no gate
+execution, no hardware command, and no filesystem report write.
+
+The current Windows / Python 3.13 host preflight artifact is
+`artifacts/server_sim_closure_host_preflight_g4_current.json`. It marks only
+the local non-motion gates as runnable:
+`gateway_runtime_acceptance`, `routecheck_preflight`, and
+`dynamic_obstacle_local_planner`. The remaining nine gates are blocked:
+`multifloor_exploration`, `large_terrain`, `native_pct_mujoco`,
+`fastlio2_dynamic_inspection`, `moving_obstacle_sweep`, `large_loop_closure`,
+`gazebo_runtime`, `saved_map_relocalize`, and `pct_saved_map_navigation`.
+
+Primary blockers on this host:
+
+- PCT-native gates require Linux or S100P/aarch64 plus CPython 3.10-compatible
+  native PCT modules. Current host is Windows / AMD64 / CPython 3.13.
+- ROS gates require ROS 2 Humble sourced and a nonzero isolated
+  `ROS_DOMAIN_ID`.
+- Hardware-command safety gates require a ROS graph audit showing no physical
+  robot subscribers on hardware command topics.
+- Gazebo gates require `gz` or `ign`.
+- Saved-map relocalization requires ROS 2 Humble plus the localizer runtime and
+  saved-map assets in an isolated simulation domain.
+
+Latest safe validation evidence for G26:
+
+```bash
+python -m pytest src/core/tests/test_server_sim_closure.py::test_server_sim_host_preflight_blocks_pct_gate_on_wrong_host src/core/tests/test_server_sim_closure.py::test_server_sim_host_preflight_accepts_local_non_motion_gate src/core/tests/test_server_sim_closure.py::test_server_sim_host_preflight_requires_isolated_ros_domain_and_hardware_audit -q
+# 3 passed
+
+python -m pytest src/core/tests/test_server_sim_closure.py::test_server_sim_host_preflight_cli_writes_read_only_report src/core/tests/test_server_sim_closure.py::test_server_sim_host_preflight_rejects_run_missing_mix -q
+# 2 passed
+
+python -m py_compile sim/scripts/server_sim_closure.py src/core/tests/test_server_sim_closure.py
+# passed
+
+python -m pytest src/core/tests/test_server_sim_closure.py -q
+# 130 passed
+
+PYTHONPATH=src:. python sim/scripts/server_sim_closure.py --host-preflight --preset g4_server_full_sim --required-only --json-out artifacts/server_sim_closure_host_preflight_g4_current.json
+# exited 0; execution_mode=host_preflight_only, run_missing=false,
+# gate_runs=[], simulation_only=true, real_robot_motion=false,
+# cmd_vel_sent_to_hardware=false. Runnable gates: gateway_runtime_acceptance,
+# routecheck_preflight, dynamic_obstacle_local_planner. Blocked gates: the
+# nine host-specific G4 gates listed above.
+
+PYTHONPATH=src:. python sim/scripts/server_sim_closure.py --host-preflight --preset g4_server_full_sim --required-only --json-out -
+# exited 0; no file named '-' was created. stdout reported
+# execution_mode=host_preflight_only, run_missing=false, gate_runs=[],
+# simulation_only=true, real_robot_motion=false,
+# cmd_vel_sent_to_hardware=false.
+
+PYTHONPATH=src:. python sim/scripts/server_sim_closure.py --preset g4_server_full_sim --required-only --json-out artifacts/server_sim_closure_summary_g4_current.json
+# exited 0; execution_mode=summary_only, run_missing=false, gate_runs=[].
+# Current G4 full closure remains ok=false with the same nine required gates
+# missing or failed.
+```
+
+Next execution goals from this checkpoint:
+
+- G27: run `--host-preflight --strict` on the isolated Linux/S100P CPython 3.10
+  PCT host. Stop if PCT runtime, Python ABI, or safety flags fail.
+- G28: refresh `large_terrain` and `multifloor_exploration` on that host, then
+  rerun summary-only G4 closure and archive the reports under
+  `artifacts/server_sim_closure/`.
+- G29: on the isolated ROS 2 Humble simulation host, capture the zero-subscriber
+  ROS graph audit for hardware command topics before any MuJoCo/Gazebo gate.
+- G30: only after G27-G29 pass, run the MuJoCo/Fast-LIO/Gazebo/saved-map gates
+  in G24 order and refresh the full `server_sim_closure` summary.
+- G31: close remaining sim folder migration gaps: `sim/launch/sim.launch.py`
+  references a missing `sim/scripts/run_global_planner.py`, legacy
+  `test_*.sh` scripts still hard-code `/tmp/nova_sim/robot/*`, optional Go1
+  assets are documented but absent, and `sim/semantic`, `sim/meshes`,
+  `sim/maps`, `sim/configs`, plus local generated-output folders still need a
+  prune/archive/README decision.
+- G32: make detector/encoder runtime replacement truly hot-swappable by
+  preloading the new backend outside the frame-processing lock, atomically
+  swapping on success, and shutting down the old backend after the swap.
+- G33: unify standalone `DetectorModule` and `EncoderModule` with the
+  perception provider registry so there is one backend contract for both
+  stack-level and standalone use.
+- G34: either implement runtime reconfigure for `TerrainModule`,
+  `LocalPlannerModule`, and `PathFollowerModule`, or remove those unsupported
+  targets from the Gateway backend-switch surface.
+- G35: add a runtime evidence gate that records whether `_nav_core` actually
+  loaded on the target host. The configuration can say `nanobind/nav_core`,
+  but the current modules may fall back to `cmu_py/pid` if native bindings are
+  missing; full simulation evidence must record the backend that actually ran.
+- G36: document the algorithm chain in the closure evidence:
+  `LiDAR/SLAM -> SlamBridgeModule -> maps/Terrain -> TraversabilityCost +
+  NavigationModule(PCT/A*) -> LocalPlannerModule(nav_core/CMU) ->
+  PathFollowerModule(nav_core) -> CmdVelMux -> Driver/SafetyRing`.
+- G37: do not claim a DIMOS or external-method performance win until the same
+  scene, seed, map/tomogram, planner inputs, and hardware/runtime envelope have
+  fresh metrics for coverage, path length, time-to-goal, collision clearance,
+  replan count, tracking error, CPU/latency, large-loop closure, and moving
+  obstacle behavior.
+
+Parallel-agent findings merged into this checkpoint:
+
+- Simulation folder boundary: `sim/engine`, `sim/worlds`, `sim/assets`, and
+  `sim/scripts` now have clear roles, but legacy launch/script references and
+  optional Go1/external assets still need a cleanup decision.
+- Safety preflight: core constraints hold (`gate_runs=[]`, no `--run-missing`,
+  no hardware command). The stricter no-artifact case is now covered by
+  `--json-out -`. Remaining caution: hardware subscriber detection is a ROS
+  graph heuristic, so ROS gates still need a zero-subscriber audit artifact on
+  the target simulation host.
+- Moduleization: most stack factories are registry-first, but runtime hot-swap
+  is not complete. Perception backend replacement currently loads under a
+  shared lock and can block frame processing; standalone Detector/Encoder
+  modules still have direct backend branches; motion backend reconfigure is
+  advertised by Gateway but not implemented in all motion modules.
+- Algorithm chain: current local planning is CMU/nav_core style point-cloud
+  voxel scoring through `LocalPlannerModule`, not DWA/TEB and not ESDF-first.
+  `TARE` enters through exploration; `wavefront` is enabled inside the
+  navigation stack for the `explore` profile. DIMOS comparison remains an
+  evidence task, not a conclusion.
+
+## 2026-05-31 Continuation: Legacy Sim Cleanup And Backend Evidence
+
+G31. Done in this continuation pass: close the high-signal simulation folder
+migration gaps without moving stable entrypoints. `sim/scripts/run_global_planner.py`
+now exists as a guarded legacy ROS launch wrapper that requires an isolated
+nonzero `ROS_DOMAIN_ID` and only remaps planner/path/status topics, not
+hardware velocity topics. Legacy Nova shell helpers now default to repo-local
+`sim/robots/nova_dog/robot_with_camera.xml` through `LINGTU_SIM_DIR` and
+`LINGTU_NOVA_SCENE_XML`, and stale `/tmp/nova_sim` guidance was removed.
+Optional Go1 playground assets are documented as external placeholders and not
+part of the G4 server closure.
+
+G32. Done in this continuation pass: `PerceptionModule` detector/encoder
+runtime replacement now creates and loads candidate backends outside
+`_backend_lock`, swaps active references under the lock, disposes the previous
+backend after successful swap, and disposes a failed candidate while keeping
+the previous active backend intact. This closes the frame-processing lock and
+resource leak issues found by the xhigh audit.
+
+G33. Done in this continuation pass: standalone `DetectorModule` and
+`EncoderModule` now resolve through the same `perception_detector` and
+`perception_encoder` registries used by `PerceptionModule`. Built-in
+standalone providers cover `yoloe`, `yolo_world`, `bpu`, `grounding_dino`,
+`clip`, and `mobileclip`; GroundingDINO standalone config maps confidence to
+`box_threshold`.
+
+G34. Still open: motion runtime backend switching remains fail-closed for
+`TerrainModule`, `LocalPlannerModule`, and `PathFollowerModule`. Keep Gateway
+or MCP surfaces honest: either implement a tested safe switch path later, or
+continue reporting `backend_reconfigure_unsupported` instead of implying a hot
+swap exists.
+
+G35. Done for current non-motion evidence surfaces: dynamic obstacle,
+multifloor command-flow, large-terrain, and multifloor global-planner reports
+now distinguish requested backend/planner from actual effective backend/planner.
+`dynamic_obstacle_local_planner` records `algorithm_backends.local_planner`
+from the actual module fallback state and marks path follower as
+`not_exercised`. `multifloor_nav_validation` records actual local planner and
+path follower backends in command-flow and propagates them to route/matrix
+reports. `large_terrain_nav_validation` carries `GlobalPlannerService`
+`last_plan_report` through `planner_requested`, `selected_planner`,
+`fallback_reason`, `plan_safety_policy`, and `rejected_plans`, while explicitly
+marking local planner/path follower as `not_exercised`. Multifloor PCT gate
+now exposes the same requested/effective planner split and does not count a
+PCT-to-A* fallback as native PCT evidence.
+
+G36. Done in this continuation pass: the algorithm chain is documented in this
+plan, validation scripts expose requested-versus-actual backend evidence, and
+`server_sim_closure` now lifts per-gate `algorithm_backends` into one
+top-level closure table. This lets the G4 summary show which gates actually ran
+`nanobind`/`nav_core`, which gates only exercised global planning, and which
+motion stages remain `not_exercised` without digging into each raw report.
+
+G37. Still open: no DIMOS or external-method performance win is claimed. The
+next valid comparison must use the same scene, seed, map/tomogram, planner
+inputs, and runtime envelope, then report coverage, path length, time-to-goal,
+clearance/collisions, replan count, tracking error, CPU/latency, large-loop
+closure, and moving-obstacle behavior.
+
+Latest safe validation evidence for G31-G35:
+
+```bash
+python -m pytest src/core/tests/test_dynamic_obstacle_local_planner_gate.py src/core/tests/test_multifloor_sim_validation.py::test_command_flow_reports_requested_and_effective_algorithm_backends src/core/tests/test_multifloor_sim_validation.py::test_pct_global_plan_reports_effective_planner_after_fallback src/core/tests/test_large_terrain_scenario.py::test_large_terrain_validation_report_is_non_motion_and_route_safe src/core/tests/test_large_terrain_scenario.py::test_large_terrain_validation_records_effective_global_planner_when_service_falls_back src/core/tests/test_sim_runtime_compat.py::test_legacy_sim_launch_global_planner_entrypoint_exists_and_is_guarded src/core/tests/test_sim_runtime_compat.py::test_legacy_manual_nova_scripts_default_to_current_robot_asset_paths src/core/tests/test_sim_runtime_compat.py::test_optional_go1_asset_contract_has_placeholder_readme src/core/tests/test_sim_runtime_compat.py::test_sim_boundary_indexes_document_stable_contracts -q
+# 10 passed
+
+python -m pytest src/core/tests/test_runtime_backend_switch.py src/core/tests/test_perception_decoupled.py -q
+# 33 passed
+
+python -m py_compile sim/scripts/run_global_planner.py sim/scripts/dynamic_obstacle_local_planner_gate.py sim/scripts/multifloor_nav_validation.py sim/scripts/large_terrain_nav_validation.py src/semantic/perception/semantic_perception/perception_module.py src/semantic/perception/semantic_perception/detector_module.py src/semantic/perception/semantic_perception/encoder_module.py
+# passed
+
+python -m pytest src/core/tests/test_multifloor_sim_validation.py -q
+# 28 passed
+
+python -m pytest src/core/tests/test_large_terrain_scenario.py -q
+# 11 passed
+
+PYTHONPATH=src:. python sim/scripts/dynamic_obstacle_local_planner_gate.py --json-out artifacts/server_sim_closure/dynamic_obstacle_local_planner/report.json
+# exited 0; ok=true, backend_requested=nanobind, backend_actual=nanobind,
+# algorithm_backends.local_planner.backend_actual=nanobind,
+# algorithm_backends.path_follower.status=not_exercised,
+# simulation_only=true, cmd_vel_sent_to_hardware=false.
+
+PYTHONPATH=src:. python sim/scripts/server_sim_closure.py --host-preflight --preset g4_server_full_sim --required-only --json-out artifacts/server_sim_closure_host_preflight_g4_current.json
+# exited 0; execution_mode=host_preflight_only, run_missing=false,
+# gate_runs=0, runnable=3, blocked=9, simulation_only=true,
+# real_robot_motion=false, cmd_vel_sent_to_hardware=false.
+
+PYTHONPATH=src:. python sim/scripts/server_sim_closure.py --preset g4_server_full_sim --required-only --json-out artifacts/server_sim_closure_summary_g4_current.json
+# exited 0; execution_mode=summary_only, ok=false, run_missing=false,
+# gate_runs=0, dynamic_obstacle_local_planner verified=true,
+# simulation_only=true, real_robot_motion=false,
+# cmd_vel_sent_to_hardware=false.
+
+python -m pytest src/core/tests/test_server_sim_closure.py::test_server_sim_closure_summarizes_algorithm_backends_from_gate_reports -q
+# RED before implementation: KeyError on summary["algorithm_backends"].
+# After implementation: 1 passed.
+
+python -m pytest src/core/tests/test_server_sim_closure.py::test_server_sim_closure_summarizes_algorithm_backends_from_gate_reports src/core/tests/test_server_sim_closure.py::test_server_sim_closure_can_summarize_required_only src/core/tests/test_dynamic_obstacle_local_planner_gate.py src/core/tests/test_multifloor_sim_validation.py::test_command_flow_reports_requested_and_effective_algorithm_backends src/core/tests/test_multifloor_sim_validation.py::test_pct_global_plan_reports_effective_planner_after_fallback src/core/tests/test_large_terrain_scenario.py::test_large_terrain_validation_report_is_non_motion_and_route_safe src/core/tests/test_large_terrain_scenario.py::test_large_terrain_validation_records_effective_global_planner_when_service_falls_back -q
+# 8 passed
+
+python -m py_compile sim/scripts/server_sim_closure.py src/core/tests/test_server_sim_closure.py
+# passed
+
+PYTHONPATH=src:. python sim/scripts/server_sim_closure.py --preset g4_server_full_sim --required-only --json-out artifacts/server_sim_closure_summary_g4_current.json
+# exited 0; execution_mode=summary_only, ok=false, run_missing=false,
+# gate_runs=0, algorithm_backends currently includes
+# dynamic_obstacle_local_planner from fresh local evidence, and safety fields
+# remain simulation_only=true, real_robot_motion=false,
+# cmd_vel_sent_to_hardware=false.
+```

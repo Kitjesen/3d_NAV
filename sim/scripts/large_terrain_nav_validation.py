@@ -36,6 +36,21 @@ DEFAULT_PLANNERS = ("astar",)
 SELECTION_POLICY = "first_route_ok_after_primary"
 
 
+def _not_exercised_algorithm_backends() -> dict[str, dict[str, str]]:
+    return {
+        "local_planner": {
+            "status": "not_exercised",
+            "exercised_by": "large_terrain_global_planning_assets",
+            "reason": "large_terrain validates global planning assets and path safety only",
+        },
+        "path_follower": {
+            "status": "not_exercised",
+            "exercised_by": "large_terrain_global_planning_assets",
+            "reason": "large_terrain does not run tracking or cmd_vel generation",
+        },
+    }
+
+
 def _route_map(assets: LargeTerrainAssets) -> dict[str, TerrainRoute]:
     return {route.name: route for route in assets.routes}
 
@@ -113,6 +128,18 @@ def _pct_runtime_evidence() -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
+def _service_plan_report(svc: Any) -> dict[str, Any]:
+    try:
+        report = getattr(svc, "last_plan_report", {}) or {}
+    except Exception:
+        return {}
+    return dict(report) if isinstance(report, dict) else {}
+
+
+def _planner_value(value: Any, default: str) -> str:
+    return str(value or default).lower().strip()
+
+
 def _plan_with_backend(
     planner_name: str,
     assets: LargeTerrainAssets,
@@ -138,6 +165,11 @@ def _plan_with_backend(
     except Exception as exc:
         return {
             "planner": planner_name,
+            "planner_requested": planner_name,
+            "selected_planner": planner_name,
+            "fallback_reason": "",
+            "plan_safety_policy": "",
+            "rejected_plans": [],
             "backend_class": "",
             "feasible": False,
             "blocked": True,
@@ -154,26 +186,43 @@ def _plan_with_backend(
     backend = svc._backend
     backend_available = bool(getattr(backend, "available", True))
     start_t = time.perf_counter()
+    plan_report: dict[str, Any] = {}
     try:
         path, plan_ms = svc.plan(
             np.asarray(route.start, dtype=float),
             np.asarray(route.goal, dtype=float),
             safe_goal_tolerance=0.0,
         )
+        plan_report = _service_plan_report(svc)
         elapsed_ms = float(plan_ms if plan_ms is not None else (time.perf_counter() - start_t) * 1000.0)
         error = ""
     except Exception as exc:
         path = []
+        plan_report = _service_plan_report(svc)
         elapsed_ms = (time.perf_counter() - start_t) * 1000.0
         error = str(exc)
-    native_backend_used = bool(planner_name == "pct" and backend_available and path)
+    selected_planner = _planner_value(plan_report.get("selected_planner"), planner_name)
+    primary_planner = _planner_value(plan_report.get("primary_planner"), planner_name)
+    selected_backend = backend
+    if selected_planner != planner_name:
+        selected_backend = getattr(svc, "_fallback_backend", None) or backend
+    selected_backend_available = bool(getattr(selected_backend, "available", True))
+    native_backend_used = bool(selected_planner == "pct" and selected_backend_available and path)
     status = "passed" if path else "blocked" if environment_blocked else "failed"
+    rejected_plans = plan_report.get("rejected_plans", [])
     return {
         "planner": planner_name,
-        "backend_class": backend.__class__.__name__ if backend is not None else "",
+        "planner_requested": primary_planner,
+        "selected_planner": selected_planner,
+        "fallback_reason": str(plan_report.get("fallback_reason") or ""),
+        "plan_safety_policy": str(plan_report.get("policy") or ""),
+        "rejected_plans": rejected_plans if isinstance(rejected_plans, list) else [],
+        "backend_class": selected_backend.__class__.__name__ if selected_backend is not None else "",
+        "backend_requested_class": backend.__class__.__name__ if backend is not None else "",
         "feasible": bool(path),
         "blocked": bool(not path),
-        "backend_available": backend_available,
+        "backend_available": selected_backend_available,
+        "backend_requested_available": backend_available,
         "native_backend_used": native_backend_used,
         "native_runtime": native_runtime,
         "status": status,
@@ -242,7 +291,8 @@ def _selection_evidence(planning: list[dict[str, Any]]) -> dict[str, Any]:
     )
     rejected = [
         {
-            "planner": str(plan.get("planner", "")),
+            "planner": str(plan.get("planner_requested") or plan.get("planner", "")),
+            "selected_planner": str(plan.get("selected_planner") or plan.get("planner", "")),
             "feasible": bool(plan.get("feasible")),
             "route_ok": bool(plan.get("route_ok")),
             "reason": (
@@ -259,12 +309,14 @@ def _selection_evidence(planning: list[dict[str, Any]]) -> dict[str, Any]:
         for plan in planning
         if not (bool(plan.get("feasible")) and bool(plan.get("route_ok")))
     ]
+    primary_planner = str(primary.get("planner_requested") or primary.get("planner", ""))
+    selected_planner = str(selected.get("selected_planner") or selected.get("planner", "")) if selected else ""
     return {
         "policy": SELECTION_POLICY,
-        "primary_planner": str(primary.get("planner", "")),
-        "selected_planner": str(selected.get("planner", "")) if selected else "",
+        "primary_planner": primary_planner,
+        "selected_planner": selected_planner,
         "selected_route_ok": bool(selected),
-        "fallback_used": bool(selected and primary and selected.get("planner") != primary.get("planner")),
+        "fallback_used": bool(selected and primary and selected_planner != primary_planner),
         "rejected_planners": rejected,
     }
 
@@ -352,6 +404,7 @@ def run_validation(
         "cmd_vel_sent_to_hardware": False,
         "validation_level": "global_planning_assets",
         "selection_policy": SELECTION_POLICY,
+        "algorithm_backends": _not_exercised_algorithm_backends(),
         "assets": {
             "scene_xml": str(assets.scene_xml),
             "tomogram": str(assets.tomogram),

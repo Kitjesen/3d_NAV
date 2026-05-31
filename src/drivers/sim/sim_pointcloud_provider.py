@@ -23,6 +23,7 @@ import numpy as np
 from core.module import Module
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
+from core.registry import register
 from core.runtime_interface import TOPICS, topic_default_frame_id
 from core.stream import In, Out
 
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 SIM_POINTCLOUD_MAP_FRAME_ID = topic_default_frame_id(TOPICS.map_cloud)
 
 
+@register("sim_lidar", "pointcloud", description="MuJoCo XML static point-cloud provider")
 class SimPointCloudProvider(Module, layer=1):
     """Parse MuJoCo XML scene and publish obstacle geometry as PointCloud2."""
 

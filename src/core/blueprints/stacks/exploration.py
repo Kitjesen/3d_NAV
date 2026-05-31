@@ -23,6 +23,7 @@ import logging
 import os
 
 from core.blueprint import Blueprint
+from core.blueprints.stacks._registry import stack_module
 
 logger = logging.getLogger(__name__)
 
@@ -82,23 +83,42 @@ def _add_tare(bp: Blueprint, **kw) -> bool:
         return False
 
     try:
-        from exploration.exploration_supervisor_module import (
-            ExplorationSupervisorModule,
-        )
         from exploration.native_factories import tare_explorer
-        from exploration.tare_explorer_module import TAREExplorerModule
+
+        TAREExplorerModule = stack_module(
+            "exploration",
+            "tare",
+            seed_group="exploration",
+            fallback="exploration.tare_explorer_module.TAREExplorerModule",
+        )
+        ExplorationSupervisorModule = stack_module(
+            "exploration",
+            "supervisor",
+            seed_group="exploration",
+            fallback=(
+                "exploration.exploration_supervisor_module."
+                "ExplorationSupervisorModule"
+            ),
+        )
         scenario = kw.pop("tare_scenario", None)
         if scenario is None:
             scenario = get_config().raw.get("exploration", {}).get(
                 "tare_scenario", "forest")
-        bp.add(tare_explorer(cfg, scenario=scenario))
-        bp.add(TAREExplorerModule, **_tare_kwargs(kw))
+        bp.add(
+            tare_explorer(cfg, scenario=scenario),
+            alias="TAREPlannerNativeModule",
+        )
+        bp.add(TAREExplorerModule, alias="TAREExplorerModule", **_tare_kwargs(kw))
         # Supervisor consolidates tare_stats into supervisor_state +
         # fires exploration_ready once TARE is healthy. Autoconnect wires
         # its ``tare_stats: In[dict]`` to TAREExplorerModule's Out, and
         # its ``supervisor_state: Out[dict]`` plus ``tare_stats`` into
         # Gateway for SSE.
-        bp.add(ExplorationSupervisorModule, **_supervisor_kwargs(kw))
+        bp.add(
+            ExplorationSupervisorModule,
+            alias="ExplorationSupervisorModule",
+            **_supervisor_kwargs(kw),
+        )
         logger.info(
             "TARE exploration stack enabled (scenario=%s, supervisor=on)",
             scenario,
@@ -111,15 +131,27 @@ def _add_tare(bp: Blueprint, **kw) -> bool:
 
 def _add_external_tare_bridge(bp: Blueprint, **kw) -> None:
     """Add the TARE bridge without launching LingTu's native TARE process."""
-    from exploration.exploration_supervisor_module import (
-        ExplorationSupervisorModule,
+    TAREExplorerModule = stack_module(
+        "exploration",
+        "tare",
+        seed_group="exploration",
+        fallback="exploration.tare_explorer_module.TAREExplorerModule",
     )
-    from exploration.tare_explorer_module import TAREExplorerModule
+    ExplorationSupervisorModule = stack_module(
+        "exploration",
+        "supervisor",
+        seed_group="exploration",
+        fallback="exploration.exploration_supervisor_module.ExplorationSupervisorModule",
+    )
 
     kw.setdefault("prefer_path_strategy", False)
     kw.setdefault("configured_backend", "tare_external")
-    bp.add(TAREExplorerModule, **_tare_kwargs(kw))
-    bp.add(ExplorationSupervisorModule, **_supervisor_kwargs(kw))
+    bp.add(TAREExplorerModule, alias="TAREExplorerModule", **_tare_kwargs(kw))
+    bp.add(
+        ExplorationSupervisorModule,
+        alias="ExplorationSupervisorModule",
+        **_supervisor_kwargs(kw),
+    )
     logger.info("External TARE exploration bridge enabled (native process off)")
 
 

@@ -7,12 +7,18 @@ from typing import Any
 
 from core.module import Module
 from core.msgs.nav import Path
+from core.registry import register
 from core.runtime_interface import TOPICS, topic_default_frame_id
 from core.stream import In
 
 logger = logging.getLogger(__name__)
 
 
+@register(
+    "navigation",
+    "ros2_path_bridge",
+    description="ROS 2 nav_msgs/Path visualization bridge",
+)
 class ROS2PathBridgeModule(Module, layer=5):
     """Publish internal LingTu paths as ROS 2 nav_msgs/Path for RViz."""
 

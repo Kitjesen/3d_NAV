@@ -51,7 +51,7 @@ def lidar(ip: str | None = None, enabled: bool = True) -> Blueprint:
     kw = {}
     if ip:
         kw["ip"] = ip
-    bp.add(LidarModule, **kw)
+    bp.add(LidarModule, alias="LidarModule", **kw)
     logger.info("LiDAR stack: LidarModule added (ip=%s)", ip or "config default")
 
     return bp

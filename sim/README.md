@@ -148,6 +148,11 @@ LingTu now keeps the task profile separate from the runtime connection layer.
 Use these entries when validating the product stack instead of calling scattered
 gate scripts directly:
 
+**Simulation endpoint required:** product task profiles only count as
+simulation when they are bound to an explicit simulation endpoint such as
+`--endpoint mujoco_live`, `--endpoint gazebo`, or `--endpoint cmu_unity`. Do not treat bare `nav`, `map`, or `explore` as simulation; those profiles may
+target the robot-side runtime depending on profile and host configuration.
+
 ```bash
 python lingtu.py explore --endpoint mujoco_live        # MuJoCo raw MID-360 + Fast-LIO
 python lingtu.py explore --endpoint gazebo --record    # Gazebo industrial demo + RViz
@@ -228,6 +233,19 @@ complete. A passing full summary must report `ok=true`,
 When `--required` names only a subset, non-required failures are reported in
 `optional_missing_or_failed` and `optional_gaps`; do not treat those as full
 closure evidence.
+
+Before running host-specific gates, use the preflight mode to check local
+capabilities without launching any gate command:
+
+```bash
+PYTHONPATH=src:. python sim/scripts/server_sim_closure.py \
+  --host-preflight \
+  --preset g4_server_full_sim \
+  --required-only \
+  --json-out -
+```
+
+`--json-out -` prints only to stdout and does not create a report artifact.
 
 Current full closure gates:
 
@@ -663,6 +681,13 @@ native ROS2 local-planner + MuJoCo video loop and require
 
 ### 6.3 Full Stack with ROS2
 
+This is a legacy ROS launch / smoke contract. The current server-side closure
+uses the G4 gates above; keep this launch path stable for compatibility, but do
+not treat its historical `run_global_planner.py` reference as the current
+planner validation entrypoint. Run it only in an isolated `ROS_DOMAIN_ID` with
+no robot bridge, robot driver, or hardware command subscriber present. See
+`sim/launch/README.md` before using this path.
+
 ```bash
 source /opt/ros/humble/setup.bash
 ros2 launch sim/launch/sim.launch.py world:=building_scene
@@ -680,6 +705,11 @@ python lingtu.py sim
 ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
   "{header: {frame_id: 'map'}, pose: {position: {x: 5.0, y: 3.0, z: 0.0}}}"
 ```
+
+The ROS2 `/goal_pose` example is for isolated simulation domains only. Export
+an isolated `ROS_DOMAIN_ID` first and verify there is no hardware subscriber on
+`/goal_pose`, `/cmd_vel`, or `/nav/cmd_vel` before publishing. Do not run this
+example on the robot ROS domain.
 
 ### 6.5 Person Following Benchmark
 
@@ -833,7 +863,7 @@ messages in the bag.
 | `evaluation/` | Offline SLAM evaluation manifests and dataset tooling |
 | `external_scenes/` | Optional external/license-constrained scene placeholders |
 | `meshes/` | Legacy mesh path; keep until references are fully audited |
-| `launch/` | ROS2 launch files |
+| `launch/` | Legacy ROS launch / smoke contract files |
 | `maps/` | Reserved empty placeholder for future simulation map fixtures |
 | `output/` | Local generated outputs; reproducible evidence should prefer `artifacts/` |
 | `configs/` | Reserved empty placeholder for future simulation configuration fixtures |

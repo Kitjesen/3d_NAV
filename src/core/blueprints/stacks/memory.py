@@ -6,6 +6,7 @@ import logging
 import os
 
 from core.blueprint import Blueprint
+from core.blueprints.stacks._registry import optional_stack_module
 
 logger = logging.getLogger(__name__)
 
@@ -17,40 +18,60 @@ def memory(save_dir: str = "", **config) -> Blueprint:
     bp = Blueprint()
     save_dir = save_dir or DEFAULT_SEMANTIC_DIR
 
-    try:
-        from memory.modules.semantic_mapper_module import SemanticMapperModule
-        bp.add(SemanticMapperModule, save_dir=save_dir)
-    except ImportError as e:
-        logger.warning("SemanticMapperModule not available: %s", e)
+    SemanticMapperModule = optional_stack_module(
+        "semantic",
+        "mapper",
+        seed_group="memory",
+        fallback="memory.modules.semantic_mapper_module.SemanticMapperModule",
+    )
+    if SemanticMapperModule is not None:
+        bp.add(SemanticMapperModule, alias="SemanticMapperModule", save_dir=save_dir)
+    else:
+        logger.warning("SemanticMapperModule not available")
 
-    try:
-        from memory.modules.episodic_module import EpisodicMemoryModule
-        bp.add(EpisodicMemoryModule)
-    except ImportError:
-        pass
+    EpisodicMemoryModule = optional_stack_module(
+        "memory",
+        "episodic",
+        seed_group="memory",
+        fallback="memory.modules.episodic_module.EpisodicMemoryModule",
+    )
+    if EpisodicMemoryModule is not None:
+        bp.add(EpisodicMemoryModule, alias="EpisodicMemoryModule")
 
-    try:
-        from memory.modules.tagged_locations_module import TaggedLocationsModule
-        bp.add(TaggedLocationsModule)
-    except ImportError:
-        pass
+    TaggedLocationsModule = optional_stack_module(
+        "memory",
+        "tagged_locations",
+        seed_group="memory",
+        fallback="memory.modules.tagged_locations_module.TaggedLocationsModule",
+    )
+    if TaggedLocationsModule is not None:
+        bp.add(TaggedLocationsModule, alias="TaggedLocationsModule")
 
-    try:
-        from memory.modules.vector_memory_module import VectorMemoryModule
-        bp.add(VectorMemoryModule, persist_dir=save_dir)
-    except ImportError:
-        pass
+    VectorMemoryModule = optional_stack_module(
+        "vector_memory",
+        "default",
+        seed_group="memory",
+        fallback="memory.modules.vector_memory_module.VectorMemoryModule",
+    )
+    if VectorMemoryModule is not None:
+        bp.add(VectorMemoryModule, alias="VectorMemoryModule", persist_dir=save_dir)
 
-    try:
-        from memory.modules.temporal_memory_module import TemporalMemoryModule
-        bp.add(TemporalMemoryModule, save_dir=save_dir)
-    except ImportError:
-        pass
+    TemporalMemoryModule = optional_stack_module(
+        "memory",
+        "temporal",
+        seed_group="memory",
+        fallback="memory.modules.temporal_memory_module.TemporalMemoryModule",
+    )
+    if TemporalMemoryModule is not None:
+        bp.add(TemporalMemoryModule, alias="TemporalMemoryModule", save_dir=save_dir)
 
-    try:
-        from memory.modules.mission_logger_module import MissionLoggerModule
-        bp.add(MissionLoggerModule)
-    except ImportError:
-        pass
+    MissionLoggerModule = optional_stack_module(
+        "memory",
+        "mission_logger",
+        seed_group="memory",
+        fallback="memory.modules.mission_logger_module.MissionLoggerModule",
+    )
+    if MissionLoggerModule is not None:
+        bp.add(MissionLoggerModule, alias="MissionLoggerModule")
 
     return bp

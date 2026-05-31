@@ -44,6 +44,7 @@ import numpy as np
 from core import In, Module, Out
 from core.msgs.nav import Odometry
 from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat
+from core.registry import register
 
 from .reconstruction_module import _load_cam_body_extrinsic, _pose_to_matrix
 
@@ -64,6 +65,11 @@ def _angle_diff(a: float, b: float) -> float:
     return d
 
 
+@register(
+    "reconstruction",
+    "dataset_recorder",
+    description="RGB-D keyframe dataset recorder",
+)
 class DatasetRecorderModule(Module, layer=3):
     """将机器狗漫游过程录制为本地 RGB-D 关键帧数据集。
 

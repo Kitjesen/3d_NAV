@@ -27,7 +27,7 @@ from typing import Any
 import numpy as np
 
 from core.module import Module
-from core.registry import register
+from core.registry import get, list_plugins, register
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,116 @@ class DetectionResult:
     def __repr__(self):
         return (f"DetectionResult(n={len(self.detections)}, "
                 f"det={self.detector_name}, {self.inference_ms:.1f}ms)")
+
+
+def _module_attr(module: Any, *names: str, default: Any = None) -> Any:
+    for name in names:
+        if hasattr(module, name):
+            return getattr(module, name)
+    return default
+
+
+class _YOLOEDetectorProvider:
+    label = "YOLOEDetector"
+
+    @staticmethod
+    def create(module):
+        from .yoloe_detector import YOLOEDetector
+
+        return YOLOEDetector(
+            model_size=_module_attr(module, "_model_size", "_detector_model_size", default="l"),
+            confidence=_module_attr(module, "_confidence", "_confidence_threshold", default=0.3),
+            iou_threshold=_module_attr(
+                module, "_iou_threshold", "_detector_iou_threshold", default=0.45
+            ),
+            device=_module_attr(module, "_device", "_detector_device", default=""),
+            max_detections=_module_attr(
+                module, "_max_detections", "_detector_max_detections", default=64
+            ),
+        )
+
+
+class _YOLOWorldDetectorProvider:
+    label = "YOLOWorldDetector"
+
+    @staticmethod
+    def create(module):
+        from .yolo_world_detector import YOLOWorldDetector
+
+        return YOLOWorldDetector(
+            model_size=_module_attr(module, "_model_size", "_detector_model_size", default="l"),
+            confidence=_module_attr(module, "_confidence", "_confidence_threshold", default=0.3),
+            iou_threshold=_module_attr(
+                module, "_iou_threshold", "_detector_iou_threshold", default=0.45
+            ),
+            device=_module_attr(module, "_device", "_detector_device", default=""),
+        )
+
+
+class _BPUDetectorProvider:
+    label = "BPUDetector"
+
+    @staticmethod
+    def create(module):
+        from .bpu_detector import BPUDetector
+
+        return BPUDetector(
+            model_path=_module_attr(module, "_model_path", "_detector_model_path", default=""),
+            confidence=_module_attr(module, "_confidence", "_confidence_threshold", default=0.3),
+            iou_threshold=_module_attr(
+                module, "_iou_threshold", "_detector_iou_threshold", default=0.45
+            ),
+            max_detections=_module_attr(
+                module, "_max_detections", "_detector_max_detections", default=64
+            ),
+            min_box_size_px=_module_attr(
+                module, "_min_box_size_px", "_detector_min_box_size_px", default=12
+            ),
+        )
+
+
+class _GroundingDINODetectorProvider:
+    label = "GroundingDINODetector"
+
+    @staticmethod
+    def create(module):
+        from .grounding_dino_detector import GroundingDINODetector
+
+        kwargs = {
+            "box_threshold": _module_attr(
+                module, "_confidence", "_confidence_threshold", default=0.35
+            ),
+        }
+        device = _module_attr(module, "_device", "_detector_device", default="")
+        if device:
+            kwargs["device"] = device
+        return GroundingDINODetector(**kwargs)
+
+
+def _register_builtin_detector_providers() -> None:
+    register(
+        "perception_detector",
+        "yoloe",
+        description="YOLO-E open-vocabulary instance detector",
+    )(_YOLOEDetectorProvider)
+    register(
+        "perception_detector",
+        "yolo_world",
+        description="YOLO-World open-vocabulary detector",
+    )(_YOLOWorldDetectorProvider)
+    register(
+        "perception_detector",
+        "bpu",
+        description="D-Robotics Nash BPU detector",
+    )(_BPUDetectorProvider)
+    register(
+        "perception_detector",
+        "grounding_dino",
+        description="GroundingDINO open-vocabulary detector",
+    )(_GroundingDINODetectorProvider)
+
+
+_register_builtin_detector_providers()
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +207,13 @@ class DetectorModule(Module, layer=3):
         self._model_size = model_size
         self._model_path = model_path
         self._device = device
+        self._detector_model_size = model_size
+        self._confidence_threshold = confidence
+        self._detector_iou_threshold = iou_threshold
+        self._detector_max_detections = max_detections
+        self._detector_min_box_size_px = min_box_size_px
+        self._detector_model_path = model_path
+        self._detector_device = device
         self._backend = None
         self._frame_count = 0
         self._total_inference_ms = 0.0
@@ -114,42 +231,16 @@ class DetectorModule(Module, layer=3):
 
     def _create_backend(self):
         """Factory: instantiate the selected detector backend."""
+        _register_builtin_detector_providers()
         name = self._detector_name.lower()
-
-        if name == "yolo_world":
-            from .yolo_world_detector import YOLOWorldDetector
-            return YOLOWorldDetector(
-                model_size=self._model_size,
-                confidence=self._confidence,
-                iou_threshold=self._iou_threshold,
-                device=self._device,
-            )
-        elif name == "yoloe":
-            from .yoloe_detector import YOLOEDetector
-            return YOLOEDetector(
-                model_size=self._model_size,
-                confidence=self._confidence,
-                iou_threshold=self._iou_threshold,
-                device=self._device,
-                max_detections=self._max_detections,
-            )
-        elif name == "grounding_dino":
-            from .grounding_dino_detector import GroundingDINODetector
-            return GroundingDINODetector(confidence=self._confidence)
-        elif name == "bpu":
-            from .bpu_detector import BPUDetector
-            return BPUDetector(
-                model_path=self._model_path,
-                confidence=self._confidence,
-                iou_threshold=self._iou_threshold,
-                max_detections=self._max_detections,
-                min_box_size_px=self._min_box_size_px,
-            )
-        else:
+        try:
+            provider = get("perception_detector", name)
+        except KeyError:
+            available = ", ".join(list_plugins("perception_detector")) or "<none>"
             raise ValueError(
-                f"Unknown detector '{name}'. "
-                f"Available: yolo_world, yoloe, grounding_dino, bpu"
-            )
+                f"Unknown perception_detector backend '{name}'. Available: {available}"
+            ) from None
+        return provider.create(self)
 
     def _on_image(self, image: np.ndarray):
         """Run detection on incoming image, publish results."""

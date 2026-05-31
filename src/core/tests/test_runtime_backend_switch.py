@@ -24,6 +24,72 @@ class _RuntimeSwitchEncoder:
         return []
 
 
+_PROBE_EVENTS: list[tuple[str, bool]] = []
+_PROBE_CREATED: dict[str, list["_RuntimeSwitchProbeBackend"]] = {
+    "detector": [],
+    "encoder": [],
+}
+_PROBE_FAIL_LOAD = {"detector": False, "encoder": False}
+
+
+class _TrackingLock:
+    def __init__(self) -> None:
+        self.depth = 0
+
+    @property
+    def held(self) -> bool:
+        return self.depth > 0
+
+    def __enter__(self):
+        self.depth += 1
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb) -> None:
+        self.depth -= 1
+
+
+class _DisposableBackend:
+    def __init__(self, name: str, lock: _TrackingLock) -> None:
+        self.name = name
+        self.lock = lock
+        self.dispose_calls: list[str] = []
+
+    def shutdown(self) -> None:
+        _PROBE_EVENTS.append((f"{self.name}.shutdown", self.lock.held))
+        self.dispose_calls.append("shutdown")
+
+
+class _RuntimeSwitchProbeBackend:
+    def __init__(self, kind: str, lock: _TrackingLock) -> None:
+        self.kind = kind
+        self.lock = lock
+        self.fail_load = _PROBE_FAIL_LOAD[kind]
+        self.dispose_calls: list[str] = []
+
+    def load_model(self) -> None:
+        _PROBE_EVENTS.append((f"{self.kind}.load_model", self.lock.held))
+        if self.fail_load:
+            raise RuntimeError(f"{self.kind} load failed")
+
+    def shutdown(self) -> None:
+        _PROBE_EVENTS.append((f"{self.kind}.shutdown", self.lock.held))
+        self.dispose_calls.append("shutdown")
+
+    def detect(self, _image, _prompt):
+        return []
+
+    def encode_text(self, _text):
+        return []
+
+
+def _reset_probe_state() -> None:
+    _PROBE_EVENTS.clear()
+    for created in _PROBE_CREATED.values():
+        created.clear()
+    for kind in _PROBE_FAIL_LOAD:
+        _PROBE_FAIL_LOAD[kind] = False
+
+
 @register("perception_detector", "runtime_switch_test_detector")
 class _RuntimeSwitchDetectorProvider:
     @staticmethod
@@ -36,6 +102,26 @@ class _RuntimeSwitchEncoderProvider:
     @staticmethod
     def create(_module):
         return _RuntimeSwitchEncoder()
+
+
+@register("perception_detector", "runtime_switch_lock_detector")
+class _RuntimeSwitchLockDetectorProvider:
+    @staticmethod
+    def create(module):
+        _PROBE_EVENTS.append(("detector.create", module._backend_lock.held))
+        backend = _RuntimeSwitchProbeBackend("detector", module._backend_lock)
+        _PROBE_CREATED["detector"].append(backend)
+        return backend
+
+
+@register("perception_encoder", "runtime_switch_lock_encoder")
+class _RuntimeSwitchLockEncoderProvider:
+    @staticmethod
+    def create(module):
+        _PROBE_EVENTS.append(("encoder.create", module._backend_lock.held))
+        backend = _RuntimeSwitchProbeBackend("encoder", module._backend_lock)
+        _PROBE_CREATED["encoder"].append(backend)
+        return backend
 
 
 def test_motion_backend_reconfigure_is_unsupported_by_default():
@@ -103,6 +189,54 @@ def test_perception_reconfigure_detector_updates_health_status():
     assert health["detector"]["degraded"] is False
 
 
+def test_perception_reconfigure_detector_preloads_outside_backend_lock_and_disposes_old():
+    _reset_probe_state()
+    mod = PerceptionModule(detector_type="sim_scene", encoder_type="clip")
+    lock = _TrackingLock()
+    old_detector = _DisposableBackend("old_detector", lock)
+    mod._backend_lock = lock
+    mod._detector_type = "sim_scene"
+    mod._detector = old_detector
+    mod._detector_tracker = object()
+    mod._sim_scene_observer = object()
+
+    result = mod.reconfigure_backend("detector", "runtime_switch_lock_detector")
+
+    assert result["ok"] is True
+    assert mod._detector is _PROBE_CREATED["detector"][0]
+    assert old_detector.dispose_calls == ["shutdown"]
+    assert ("detector.create", False) in _PROBE_EVENTS
+    assert ("detector.load_model", False) in _PROBE_EVENTS
+    assert ("old_detector.shutdown", False) in _PROBE_EVENTS
+    assert ("detector.create", True) not in _PROBE_EVENTS
+    assert ("detector.load_model", True) not in _PROBE_EVENTS
+
+
+def test_perception_reconfigure_detector_disposes_failed_candidate_and_keeps_active_backend():
+    _reset_probe_state()
+    _PROBE_FAIL_LOAD["detector"] = True
+    mod = PerceptionModule(detector_type="sim_scene", encoder_type="clip")
+    lock = _TrackingLock()
+    active_detector = _DisposableBackend("active_detector", lock)
+    active_observer = object()
+    mod._backend_lock = lock
+    mod._detector_type = "sim_scene"
+    mod._detector = active_detector
+    mod._detector_tracker = object()
+    mod._sim_scene_observer = active_observer
+
+    result = mod.reconfigure_backend("detector", "runtime_switch_lock_detector")
+
+    assert result["ok"] is False
+    assert result["reason"] == "backend_reconfigure_failed"
+    assert mod._detector_type == "sim_scene"
+    assert mod._detector is active_detector
+    assert mod._sim_scene_observer is active_observer
+    assert active_detector.dispose_calls == []
+    assert _PROBE_CREATED["detector"][0].dispose_calls == ["shutdown"]
+    assert ("detector.shutdown", False) in _PROBE_EVENTS
+
+
 def test_perception_reconfigure_encoder_updates_health_status():
     mod = PerceptionModule(detector_type="sim_scene", encoder_type="clip")
     mod._encoder_type = "clip"
@@ -117,6 +251,48 @@ def test_perception_reconfigure_encoder_updates_health_status():
     assert health["encoder"]["configured_backend"] == "runtime_switch_test_encoder"
     assert health["encoder"]["backend"] == "runtime_switch_test_encoder"
     assert health["encoder"]["degraded"] is False
+
+
+def test_perception_reconfigure_encoder_preloads_outside_backend_lock_and_disposes_old():
+    _reset_probe_state()
+    mod = PerceptionModule(detector_type="sim_scene", encoder_type="clip")
+    lock = _TrackingLock()
+    old_encoder = _DisposableBackend("old_encoder", lock)
+    mod._backend_lock = lock
+    mod._encoder_type = "clip"
+    mod._clip_encoder = old_encoder
+
+    result = mod.reconfigure_backend("encoder", "runtime_switch_lock_encoder")
+
+    assert result["ok"] is True
+    assert mod._clip_encoder is _PROBE_CREATED["encoder"][0]
+    assert old_encoder.dispose_calls == ["shutdown"]
+    assert ("encoder.create", False) in _PROBE_EVENTS
+    assert ("encoder.load_model", False) in _PROBE_EVENTS
+    assert ("old_encoder.shutdown", False) in _PROBE_EVENTS
+    assert ("encoder.create", True) not in _PROBE_EVENTS
+    assert ("encoder.load_model", True) not in _PROBE_EVENTS
+
+
+def test_perception_reconfigure_encoder_disposes_failed_candidate_and_keeps_active_backend():
+    _reset_probe_state()
+    _PROBE_FAIL_LOAD["encoder"] = True
+    mod = PerceptionModule(detector_type="sim_scene", encoder_type="clip")
+    lock = _TrackingLock()
+    active_encoder = _DisposableBackend("active_encoder", lock)
+    mod._backend_lock = lock
+    mod._encoder_type = "clip"
+    mod._clip_encoder = active_encoder
+
+    result = mod.reconfigure_backend("encoder", "runtime_switch_lock_encoder")
+
+    assert result["ok"] is False
+    assert result["reason"] == "backend_reconfigure_failed"
+    assert mod._encoder_type == "clip"
+    assert mod._clip_encoder is active_encoder
+    assert active_encoder.dispose_calls == []
+    assert _PROBE_CREATED["encoder"][0].dispose_calls == ["shutdown"]
+    assert ("encoder.shutdown", False) in _PROBE_EVENTS
 
 
 def test_llm_reconfigure_backend_rejects_unknown_backend():

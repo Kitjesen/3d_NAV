@@ -26,21 +26,22 @@ MONITOR_SEC=${4:-240}
 VIZ=${5:-}       # "viz" 开启 MuJoCo viewer 可视化 (DISPLAY=:0)
 
 # ── 路径 ─────────────────────────────────────────────────────────
-SIM_DIR=/tmp/nova_sim
-BRIDGE_SCRIPT=${SIM_DIR}/bridge/nova_nav_bridge.py
-SCENE_XML=${SIM_DIR}/robot/factory_nova_scene.xml
-MAP_DIR=/tmp/sim_maps
-MAP_FILE=${MAP_DIR}/factory_nova
+REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+SIM_DIR=${LINGTU_SIM_DIR:-${REPO_ROOT}/sim}
+BRIDGE_SCRIPT=${LINGTU_NOVA_BRIDGE_SCRIPT:-${REPO_ROOT}/sim/bridge/nova_nav_bridge.py}
+SCENE_XML=${LINGTU_NOVA_SCENE_XML:-${SIM_DIR}/robots/nova_dog/robot_with_camera.xml}
+MAP_DIR=${LINGTU_SIM_MAP_DIR:-/tmp/sim_maps}
+MAP_FILE=${LINGTU_FACTORY_MAP_FILE:-${MAP_DIR}/factory_nova}
 
 # ── 检查文件 ─────────────────────────────────────────────────────
 if [ ! -f "${BRIDGE_SCRIPT}" ]; then
     echo "ERROR: nova_nav_bridge.py not found at ${BRIDGE_SCRIPT}"
-    echo "Upload files to /tmp/nova_sim/ first"
+    echo "Set LINGTU_NOVA_BRIDGE_SCRIPT or run from the LingTu repository root"
     exit 1
 fi
 
 if [ ! -f "${SCENE_XML}" ]; then
-    echo "ERROR: factory_nova_scene.xml not found: ${SCENE_XML}"
+    echo "ERROR: Nova scene XML not found: ${SCENE_XML}"
     echo "Run: python3 ${SIM_DIR}/scripts/gen_factory_nova_map.py"
     exit 1
 fi

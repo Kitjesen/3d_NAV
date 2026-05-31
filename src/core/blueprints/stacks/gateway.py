@@ -37,7 +37,7 @@ def gateway(
             seed_group="gateway",
             fallback="gateway.gateway_module.GatewayModule",
         )
-        bp.add(GatewayModule, port=port)
+        bp.add(GatewayModule, alias="GatewayModule", port=port)
     except ImportError:
         logger.warning("GatewayModule not available")
 
@@ -48,7 +48,7 @@ def gateway(
         fallback="gateway.mcp_server.MCPServerModule",
     )
     if MCPServerModule is not None:
-        bp.add(MCPServerModule, port=mcp_port)
+        bp.add(MCPServerModule, alias="MCPServerModule", port=mcp_port)
     else:
         logger.warning("MCPServerModule not available")
 
@@ -60,7 +60,11 @@ def gateway(
             fallback="drivers.teleop_module.TeleopModule",
         )
         if TeleopModule is not None:
-            bp.add(TeleopModule, port=port)  # informational — same port as Gateway
+            bp.add(
+                TeleopModule,
+                alias="TeleopModule",
+                port=port,
+            )  # informational — same port as Gateway
         # WebRTC module: shares the camera stream with TeleopModule but
         # encodes it as H.264 and speaks SDP on /api/v1/webrtc/offer for
         # ~100 ms glass-to-glass latency.  Imports are wrapped because
@@ -72,7 +76,7 @@ def gateway(
             fallback="webrtc.webrtc_stream_module.WebRTCStreamModule",
         )
         if WebRTCStreamModule is not None:
-            bp.add(WebRTCStreamModule)
+            bp.add(WebRTCStreamModule, alias="WebRTCStreamModule")
         else:
             logger.info("WebRTCStreamModule unavailable (aiortc not installed)")
 
@@ -84,7 +88,7 @@ def gateway(
             fallback="gateway.rerun_bridge_module.RerunBridgeModule",
         )
         if RerunBridgeModule is not None:
-            bp.add(RerunBridgeModule, web_port=rerun_port)
+            bp.add(RerunBridgeModule, alias="RerunBridgeModule", web_port=rerun_port)
         else:
             logger.warning("RerunBridgeModule not available")
 

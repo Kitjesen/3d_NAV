@@ -159,6 +159,30 @@ def test_command_flow_replay_faces_the_first_path_segment():
     assert _odom_at_path_start(reverse_path).yaw == pytest.approx(-2.35619449)
 
 
+def test_command_flow_reports_requested_and_effective_algorithm_backends():
+    report = run_command_flow(
+        [
+            [0.0, 0.0, 0.0],
+            [0.8, 0.0, 0.0],
+            [1.2, 0.0, 0.0],
+        ],
+        local_planner_backend="simple",
+    )
+
+    assert report["ok"] is True
+    assert report["local_planner_backend"] == "simple"
+    assert report["local_planner_backend_requested"] == "simple"
+    assert report["local_planner_backend_actual"] == "simple"
+    assert report["path_follower_backend_requested"] == "pid"
+    assert report["path_follower_backend_actual"] == "pid"
+    assert report["algorithm_backends"]["local_planner"]["requested"] == "simple"
+    assert report["algorithm_backends"]["local_planner"]["backend_actual"] == "simple"
+    assert report["algorithm_backends"]["local_planner"]["exercised_by"] == "command_flow"
+    assert report["algorithm_backends"]["path_follower"]["requested"] == "pid"
+    assert report["algorithm_backends"]["path_follower"]["backend_actual"] == "pid"
+    assert report["algorithm_backends"]["path_follower"]["exercised_by"] == "command_flow"
+
+
 def test_frontier_loop_gate_rejects_candidate_only_probe(tmp_path):
     candidate_only = run_frontier_exploration_probe()
 
@@ -451,6 +475,84 @@ def test_far_projected_safe_goal_is_not_counted_as_requested_goal(monkeypatch, t
     assert plan["status"] == "fail"
     assert plan["safe_goal_distance_m"] == pytest.approx(2.0)
     assert plan["error"] == "planner safe goal is too far from requested goal"
+
+
+def test_pct_global_plan_reports_effective_planner_after_fallback(monkeypatch, tmp_path):
+    class NativePCTBackend:
+        available = True
+        _load_error = ""
+
+    class AstarFallbackBackend:
+        available = True
+        _load_error = ""
+
+    class FakeGlobalPlannerService:
+        def __init__(self, planner_name: str, **_: object) -> None:
+            self._planner_name = planner_name
+            self._backend = NativePCTBackend()
+            self._fallback_backend = AstarFallbackBackend()
+            self.last_plan_report = {}
+
+        def setup(self) -> None:
+            return None
+
+        def plan(self, start, goal, **_: object) -> tuple[list[np.ndarray], float]:
+            self.last_plan_report = {
+                "primary_planner": self._planner_name,
+                "selected_planner": "astar",
+                "fallback_reason": "pct path_safety failed",
+                "policy": "fallback_astar",
+                "rejected_plans": [
+                    {"planner": self._planner_name, "reason": "unsafe_primary_path"}
+                ],
+                "reached_goal": True,
+                "safe_goal": [float(goal[0]), float(goal[1]), 0.0],
+            }
+            return [
+                np.array([float(start[0]), float(start[1]), 0.0]),
+                np.array([float(goal[0]), float(goal[1]), 0.0]),
+            ], 3.4
+
+    monkeypatch.setattr(
+        "sim.scripts.multifloor_nav_validation.GlobalPlannerService",
+        FakeGlobalPlannerService,
+    )
+    monkeypatch.setattr(
+        multifloor_nav_validation,
+        "_pct_runtime_evidence",
+        lambda: {"ok": True, "missing": []},
+    )
+    tomogram = tmp_path / "diagnostic.tomogram"
+    tomogram.write_bytes(b"diagnostic")
+
+    plan = run_global_planner(
+        planner="pct",
+        tomogram=tomogram,
+        start=(0.0, 0.0, 0.0),
+        goal=(1.0, 0.0, 0.0),
+        downsample_dist=0.5,
+    )
+
+    assert plan["planner"] == "pct"
+    assert plan["planner_requested"] == "pct"
+    assert plan["selected_planner"] == "astar"
+    assert plan["fallback_reason"] == "pct path_safety failed"
+    assert plan["plan_safety_policy"] == "fallback_astar"
+    assert plan["rejected_plans"][0]["planner"] == "pct"
+    assert plan["backend_requested_class"] == "NativePCTBackend"
+    assert plan["backend_class"] == "AstarFallbackBackend"
+    assert plan["native_backend_used"] is False
+
+    gate = _native_pct_gate(
+        planners=["pct"],
+        planning=[{**plan, "path_validation": {"ok": True}}],
+        case=ROUTE_CASES["same_floor"],
+    )
+
+    assert gate["ok"] is False
+    assert gate["planner_requested"] == "pct"
+    assert gate["selected_planner"] == "astar"
+    assert gate["native_backend_used"] is False
 
 
 def test_multifloor_astar_matrix_covers_lower_floor_routes(tmp_path):

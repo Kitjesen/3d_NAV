@@ -16,7 +16,7 @@ def safety() -> Blueprint:
         seed_group="safety",
         fallback="nav.safety_ring_module.SafetyRingModule",
     )
-    bp.add(SafetyRingModule)
+    bp.add(SafetyRingModule, alias="SafetyRingModule")
 
     CmdVelMux = stack_module(
         "safety",
@@ -24,7 +24,7 @@ def safety() -> Blueprint:
         seed_group="safety",
         fallback="nav.cmd_vel_mux_module.CmdVelMux",
     )
-    bp.add(CmdVelMux)
+    bp.add(CmdVelMux, alias="CmdVelMux")
 
     GeofenceManagerModule = optional_stack_module(
         "safety",
@@ -33,6 +33,6 @@ def safety() -> Blueprint:
         fallback="nav.services.nav_services.geofence_manager_module.GeofenceManagerModule",
     )
     if GeofenceManagerModule is not None:
-        bp.add(GeofenceManagerModule)
+        bp.add(GeofenceManagerModule, alias="GeofenceManagerModule")
 
     return bp

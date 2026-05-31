@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from core.blueprint import Blueprint
+from core.blueprints.stacks._registry import optional_stack_module, stack_module
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,12 @@ def navigation(
     bp = Blueprint()
     enable_ros2_bridge = bool(config.get("enable_ros2_bridge", False))
 
-    from nav.navigation_module import NavigationModule
+    NavigationModule = stack_module(
+        "navigation",
+        "default",
+        seed_group="navigation",
+        fallback="nav.navigation_module.NavigationModule",
+    )
     nav_config = {
         key: config[key]
         for key in (
@@ -51,54 +57,73 @@ def navigation(
         )
         if key in config
     }
-    bp.add(NavigationModule,
-           planner=planner_backend,
-           tomogram=tomogram,
-           enable_ros2_bridge=enable_ros2_bridge,
-           **nav_config)
+    bp.add(
+        NavigationModule,
+        alias="NavigationModule",
+        planner=planner_backend,
+        tomogram=tomogram,
+        enable_ros2_bridge=enable_ros2_bridge,
+        **nav_config,
+    )
 
     if config.get("enable_ros2_path_bridge", False):
-        try:
-            from nav.ros2_path_bridge_module import ROS2PathBridgeModule
-
+        ROS2PathBridgeModule = optional_stack_module(
+            "navigation",
+            "ros2_path_bridge",
+            seed_group="navigation",
+            fallback="nav.ros2_path_bridge_module.ROS2PathBridgeModule",
+        )
+        if ROS2PathBridgeModule is not None:
             path_bridge_config = {}
             if "planning_frame_id" in config:
                 path_bridge_config["default_frame_id"] = config["planning_frame_id"]
-            bp.add(ROS2PathBridgeModule, **path_bridge_config)
-        except ImportError as e:
-            logger.warning("ROS2 path bridge not available: %s", e)
+            bp.add(
+                ROS2PathBridgeModule,
+                alias="ROS2PathBridgeModule",
+                **path_bridge_config,
+            )
+        else:
+            logger.warning("ROS2 path bridge not available")
 
     if config.get("enable_frontier", False):
         try:
-            from nav.frontier_explorer_module import WavefrontFrontierExplorer
-            bp.add(WavefrontFrontierExplorer,
-                   min_frontier_size=config.get("frontier_min_size", 5),
-                   safe_distance=config.get("frontier_safe_distance", 1.0),
-                   lookahead_distance=config.get("frontier_lookahead", 5.0),
-                   max_explored_distance=config.get("frontier_max_dist", 15.0),
-                   info_gain_threshold=config.get("frontier_info_gain", 0.03),
-                   goal_timeout=config.get("frontier_goal_timeout", 30.0),
-                   explore_rate=config.get("frontier_rate", 2.0),
-                   blocked_goal_radius=config.get("frontier_blocked_goal_radius", 1.0),
-                   blocked_goal_ttl=config.get("frontier_blocked_goal_ttl", 120.0),
-                   approach_standoff_m=config.get("frontier_approach_standoff_m", 0.8),
-                   approach_max_target_distance_m=config.get(
-                       "frontier_approach_max_target_distance_m",
-                       1.5,
-                   ),
-                   approach_goal_max_distance_m=config.get(
-                       "frontier_approach_goal_max_distance_m",
-                       3.0,
-                   ),
-                   reachable_goal_radius=config.get("frontier_reachable_goal_radius", 0.8),
-                   navigation_failure_grace_s=config.get(
-                       "frontier_navigation_failure_grace_s",
-                       2.0,
-                   ),
-                   cost_obstacle_threshold=config.get(
-                       "frontier_cost_obstacle_threshold",
-                       49.9,
-                   ))
+            WavefrontFrontierExplorer = stack_module(
+                "navigation",
+                "wavefront_frontier",
+                seed_group="navigation",
+                fallback="nav.frontier_explorer_module.WavefrontFrontierExplorer",
+            )
+            bp.add(
+                WavefrontFrontierExplorer,
+                alias="WavefrontFrontierExplorer",
+                min_frontier_size=config.get("frontier_min_size", 5),
+                safe_distance=config.get("frontier_safe_distance", 1.0),
+                lookahead_distance=config.get("frontier_lookahead", 5.0),
+                max_explored_distance=config.get("frontier_max_dist", 15.0),
+                info_gain_threshold=config.get("frontier_info_gain", 0.03),
+                goal_timeout=config.get("frontier_goal_timeout", 30.0),
+                explore_rate=config.get("frontier_rate", 2.0),
+                blocked_goal_radius=config.get("frontier_blocked_goal_radius", 1.0),
+                blocked_goal_ttl=config.get("frontier_blocked_goal_ttl", 120.0),
+                approach_standoff_m=config.get("frontier_approach_standoff_m", 0.8),
+                approach_max_target_distance_m=config.get(
+                    "frontier_approach_max_target_distance_m",
+                    1.5,
+                ),
+                approach_goal_max_distance_m=config.get(
+                    "frontier_approach_goal_max_distance_m",
+                    3.0,
+                ),
+                reachable_goal_radius=config.get("frontier_reachable_goal_radius", 0.8),
+                navigation_failure_grace_s=config.get(
+                    "frontier_navigation_failure_grace_s",
+                    2.0,
+                ),
+                cost_obstacle_threshold=config.get(
+                    "frontier_cost_obstacle_threshold",
+                    49.9,
+                ),
+            )
             bp.wire(
                 "WavefrontFrontierExplorer",
                 "exploration_goal",
@@ -116,10 +141,16 @@ def navigation(
 
     if config.get("enable_traversable_frontier", False):
         try:
-            from nav.traversable_frontier_module import TraversableFrontierModule
+            TraversableFrontierModule = stack_module(
+                "navigation",
+                "traversable_frontier",
+                seed_group="navigation",
+                fallback="nav.traversable_frontier_module.TraversableFrontierModule",
+            )
 
             bp.add(
                 TraversableFrontierModule,
+                alias="TraversableFrontierModule",
                 min_frontier_size=config.get("traversable_frontier_min_size", 5),
                 safe_distance=config.get("traversable_frontier_safe_distance", 1.0),
                 lookahead_distance=config.get("traversable_frontier_lookahead", 5.0),

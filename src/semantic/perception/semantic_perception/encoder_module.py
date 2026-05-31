@@ -18,7 +18,7 @@ from typing import Any
 import numpy as np
 
 from core.module import Module
-from core.registry import register
+from core.registry import get, list_plugins, register
 from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,52 @@ class FeatureResult:
     def __repr__(self):
         return (f"FeatureResult(dim={self.dim}, "
                 f"enc={self.encoder_name}, {self.inference_ms:.1f}ms)")
+
+
+def _module_attr(module: Any, *names: str, default: Any = None) -> Any:
+    for name in names:
+        if hasattr(module, name):
+            return getattr(module, name)
+    return default
+
+
+class _CLIPEncoderProvider:
+    label = "CLIPEncoder"
+
+    @staticmethod
+    def create(module):
+        from .clip_encoder import CLIPEncoder
+
+        return CLIPEncoder(
+            model_name=_module_attr(module, "_model_name", default="ViT-B/32"),
+            device=_module_attr(module, "_device", default="auto"),
+        )
+
+
+class _MobileCLIPEncoderProvider:
+    label = "MobileCLIPEncoder"
+
+    @staticmethod
+    def create(module):
+        from .mobileclip_encoder import MobileCLIPEncoder
+
+        return MobileCLIPEncoder(device=_module_attr(module, "_device", default="auto"))
+
+
+def _register_builtin_encoder_providers() -> None:
+    register(
+        "perception_encoder",
+        "clip",
+        description="CLIP image/text encoder",
+    )(_CLIPEncoderProvider)
+    register(
+        "perception_encoder",
+        "mobileclip",
+        description="MobileCLIP text encoder",
+    )(_MobileCLIPEncoderProvider)
+
+
+_register_builtin_encoder_providers()
 
 
 @register("encoder", "pluggable", description="Pluggable feature encoder module")
@@ -70,6 +116,8 @@ class EncoderModule(Module, layer=3):
         self._encoder_name = encoder
         self._model_name = model_name
         self._device = device
+        self._encoder_model_name = model_name
+        self._encoder_device = device
         self._backend = None
         self._frame_count = 0
         self._total_inference_ms = 0.0
@@ -89,20 +137,16 @@ class EncoderModule(Module, layer=3):
         self.image.set_policy("latest")
 
     def _create_backend(self):
+        _register_builtin_encoder_providers()
         name = self._encoder_name.lower()
-        if name == "clip":
-            from .clip_encoder import CLIPEncoder
-            return CLIPEncoder(
-                model_name=self._model_name,
-                device=self._device,
-            )
-        elif name == "mobileclip":
-            from .mobileclip_encoder import MobileCLIPEncoder
-            return MobileCLIPEncoder(device=self._device)
-        else:
+        try:
+            provider = get("perception_encoder", name)
+        except KeyError:
+            available = ", ".join(list_plugins("perception_encoder")) or "<none>"
             raise ValueError(
-                f"Unknown encoder '{name}'. Available: clip, mobileclip"
-            )
+                f"Unknown perception_encoder backend '{name}'. Available: {available}"
+            ) from None
+        return provider.create(self)
 
     def _on_image(self, image: np.ndarray):
         if self._backend is None:

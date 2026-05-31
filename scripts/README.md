@@ -8,7 +8,7 @@
 |-------|------|
 | 启动导航系统 | `python lingtu.py nav` |
 | 环境自检 | `python lingtu.py doctor` |
-| Shell 统一操作 | `./scripts/lingtu.sh map / save / nav / status` |
+| Shell 兼容入口 | `./scripts/lingtu.sh map / save / nav / status`（新流程优先用 `python lingtu.py` 或机器人端 `scripts/lingtu`） |
 | 部署到 S100P | `bash scripts/deploy_s100p.sh` |
 | 健康检查 | `bash scripts/deploy/health_check.sh` |
 | OTA 打包上机 | `bash scripts/ota/build_nav_package.sh && bash scripts/ota/deploy_to_robot.sh` |
@@ -149,7 +149,7 @@ ROS2 colcon 构建和传统 shell 启动器。
 
 ### legacy/ — 遗留脚本
 
-旧版按服务拆分的 shell 启动脚本。已被 `lingtu.py` + `lingtu.sh` 替代，保留供参考。
+旧版按服务拆分的 shell 启动脚本。已被 `lingtu.py` + 机器人端 `scripts/lingtu` 替代，保留供参考。
 
 包含：`env.sh`, `nav-slam.sh`, `nav-lidar.sh`, `nav-driver.sh`, `nav-planning.sh`, `nav-autonomy.sh`, `nav-semantic.sh`, `nav-grpc.sh`, `nav-monitor.sh`, `ota-daemon.sh`
 
@@ -170,7 +170,7 @@ ROS2 colcon 构建和传统 shell 启动器。
 
 | 脚本 | 用途 |
 |------|------|
-| `lingtu.sh` | Shell 统一入口 (`map` / `save` / `nav` / `status`) |
+| `lingtu.sh` | Shell 兼容入口；`map` / `nav` / `status` 委托 `python lingtu.py` |
 | `deploy_s100p.sh` | S100P 一键部署 |
 | `build_nav_core.sh` | C++ nav_core 独立构建 |
 | `clone_semantic_deps.sh` | 克隆语义导航第三方依赖 |

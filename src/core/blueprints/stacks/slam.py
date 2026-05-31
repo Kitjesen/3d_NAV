@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 
 from core.blueprint import Blueprint
+from core.blueprints.stacks._registry import optional_stack_module, stack_module
 
 logger = logging.getLogger(__name__)
 
@@ -106,21 +107,31 @@ def slam(
 
     # Bridge ROS2 topics into Python Module ports
     try:
-        from slam.slam_bridge_module import SlamBridgeModule
+        SlamBridgeModule = stack_module(
+            "slam_bridge",
+            "default",
+            seed_group="slam",
+            fallback="slam.slam_bridge_module.SlamBridgeModule",
+        )
         bridge_kwargs = _read_gnss_fusion_kwargs()
         bridge_kwargs["backend_profile"] = profile
-        bp.add(SlamBridgeModule, **bridge_kwargs)
+        bp.add(SlamBridgeModule, alias="SlamBridgeModule", **bridge_kwargs)
     except ImportError as e:
         logger.warning("SlamBridgeModule not available: %s", e)
 
     # Depth camera visual odometry for degeneracy fallback
     if enable_visual_backup:
-        try:
-            from slam.depth_visual_odom_module import DepthVisualOdomModule
-            bp.add(DepthVisualOdomModule)
+        DepthVisualOdomModule = optional_stack_module(
+            "visual_odom",
+            "depth",
+            seed_group="slam",
+            fallback="slam.depth_visual_odom_module.DepthVisualOdomModule",
+        )
+        if DepthVisualOdomModule is not None:
+            bp.add(DepthVisualOdomModule, alias="DepthVisualOdomModule")
             logger.info("SLAM stack: DepthVisualOdomModule enabled for degeneracy backup")
-        except ImportError as e:
-            logger.debug("DepthVisualOdomModule not available: %s", e)
+        else:
+            logger.debug("DepthVisualOdomModule not available")
 
     return bp
 

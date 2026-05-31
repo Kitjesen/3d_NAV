@@ -23,14 +23,12 @@ Usage::
 from __future__ import annotations
 
 import logging
+from importlib import import_module
 from typing import Any
 
 from core.blueprint import Blueprint
-from core.registry import register
-
-from .local_planner_module import LocalPlannerModule
-from .path_follower_module import PathFollowerModule
-from .terrain_module import TerrainModule
+from core.plugin_seed import seed_builtin_plugins
+from core.registry import get, register
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +38,29 @@ __all__ = [
     "TerrainModule",
     "add_autonomy_stack",
 ]
+
+
+_EXPORTS = {
+    "TerrainModule": "base_autonomy.modules.terrain_module",
+    "LocalPlannerModule": "base_autonomy.modules.local_planner_module",
+    "PathFollowerModule": "base_autonomy.modules.path_follower_module",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(name)
+    module = import_module(module_name)
+    return getattr(module, name)
+
+
+def _module_for_backend(category: str, backend: str) -> type:
+    try:
+        return get(category, backend)
+    except KeyError:
+        seed_builtin_plugins(groups=("autonomy",), reload_loaded=True)
+        return get(category, backend)
 
 
 def add_autonomy_stack(
@@ -61,7 +82,22 @@ def add_autonomy_stack(
     Returns:
         The same Blueprint (for chaining).
     """
-    bp.add(TerrainModule, backend=terrain_backend or backend)
-    bp.add(LocalPlannerModule, backend=backend, **(local_planner_config or {}))
-    bp.add(PathFollowerModule, backend=path_follower_backend, **kw)
+    terrain_key = terrain_backend or backend
+    TerrainCls = _module_for_backend("terrain", terrain_key)
+    LocalPlannerCls = _module_for_backend("local_planner", backend)
+    PathFollowerCls = _module_for_backend("path_follower", path_follower_backend)
+
+    bp.add(TerrainCls, alias="TerrainModule", backend=terrain_key)
+    bp.add(
+        LocalPlannerCls,
+        alias="LocalPlannerModule",
+        backend=backend,
+        **(local_planner_config or {}),
+    )
+    bp.add(
+        PathFollowerCls,
+        alias="PathFollowerModule",
+        backend=path_follower_backend,
+        **kw,
+    )
     return bp

@@ -40,6 +40,7 @@ from core import In, Module, Out
 from core.msgs.nav import Odometry
 from core.msgs.semantic import SceneGraph
 from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat
+from core.registry import register
 
 from .color_projector import ColorProjector
 from .semantic_labeler import SemanticLabeler
@@ -183,6 +184,7 @@ class TSDFColorVolume:
         return self._volume.extract_triangle_mesh()
 
 
+@register("reconstruction", "default", description="RGB-D reconstruction module")
 class ReconstructionModule(Module, layer=3):
     """Streaming RGB-D voxel reconstruction with dynamic-scene support.
 

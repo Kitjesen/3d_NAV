@@ -17,11 +17,16 @@ import os
 import sys
 from typing import Any
 
-_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _src not in sys.path:
-    sys.path.insert(0, _src)
-
-from core.blueprint import Blueprint
+try:
+    from core.blueprint import Blueprint
+except ModuleNotFoundError as exc:
+    if exc.name != "core":
+        raise
+    _src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    _known_paths = {os.path.normcase(os.path.abspath(path or ".")) for path in sys.path}
+    if os.path.normcase(_src) not in _known_paths:
+        sys.path.insert(0, _src)
+    from core.blueprint import Blueprint
 
 
 def thunder_basic(dog_host: str = "127.0.0.1", dog_port: int = 13145, **kw) -> Blueprint:

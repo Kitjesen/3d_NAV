@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import os
+import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -54,6 +58,21 @@ ROS2_GAZEBO_HOST_REQUIREMENTS = (
     "Gazebo/Ignition runtime available",
     "isolated ROS_DOMAIN_ID and Gazebo partition",
     "no physical robot drivers or hardware command publishers",
+)
+
+HARDWARE_COMMAND_TOPICS = (
+    "/cmd_vel",
+    "/nav/cmd_vel",
+    "/s100p/cmd_vel",
+    "/dog/cmd_vel",
+)
+HARDWARE_SUBSCRIBER_KEYWORDS = (
+    "driver",
+    "hardware",
+    "s100p",
+    "thunder",
+    "nova",
+    "dog",
 )
 
 
@@ -527,6 +546,41 @@ def _require_mid360_pattern(report: dict[str, Any], blockers: list[str], prefix:
     return source
 
 
+def _extract_algorithm_backends(report: dict[str, Any]) -> dict[str, Any]:
+    backends = report.get("algorithm_backends")
+    if isinstance(backends, dict) and backends:
+        return backends
+
+    for key in ("command_flow", "tracking_replay", "native_gate", "native_pct_gate"):
+        nested = report.get(key)
+        if isinstance(nested, dict):
+            nested_backends = _extract_algorithm_backends(nested)
+            if nested_backends:
+                return nested_backends
+
+    combined: dict[str, Any] = {}
+    for case in report.get("cases") or []:
+        if not isinstance(case, dict):
+            continue
+        case_backends = _extract_algorithm_backends(case)
+        for surface, evidence in case_backends.items():
+            combined.setdefault(str(surface), evidence)
+    return combined
+
+
+def _algorithm_backends_from_gates(gates: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    for name in _ordered_gate_names(set(gates)):
+        gate = gates.get(name) or {}
+        evidence = gate.get("evidence") or {}
+        if not isinstance(evidence, dict):
+            continue
+        backends = evidence.get("algorithm_backends")
+        if isinstance(backends, dict) and backends:
+            summary[name] = backends
+    return summary
+
+
 def _eval_large_terrain(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
     blockers: list[str] = []
     if report.get("ok") is not True:
@@ -564,6 +618,7 @@ def _eval_large_terrain(report: dict[str, Any]) -> tuple[bool, list[str], dict[s
         "environment_blockers": report.get("environment_blockers") or [],
         "path_safe": path_safe,
         "routes": [case.get("route") for case in cases],
+        "algorithm_backends": _extract_algorithm_backends(report),
     }
 
 
@@ -820,6 +875,7 @@ def _eval_dynamic_obstacle_local_planner(report: dict[str, Any]) -> tuple[bool, 
             by_name.get("clear_recovered", {}).get("avoidance_side"),
         ],
         "frames": report.get("frames") or {},
+        "algorithm_backends": _extract_algorithm_backends(report),
     }
 
 
@@ -2290,6 +2346,7 @@ def _eval_multifloor_exploration(report: dict[str, Any]) -> tuple[bool, list[str
         "native_pct_blocked_count": report.get("native_pct_blocked_count"),
         "native_pct_runtime_blocked": native_pct_runtime_blocked,
         "validation_level": report.get("validation_level"),
+        "algorithm_backends": _extract_algorithm_backends(report),
     }
 
 
@@ -3107,6 +3164,330 @@ def _next_actions(
     return actions
 
 
+def _python_tag() -> str:
+    return f"py{sys.version_info.major}{sys.version_info.minor}"
+
+
+def _default_module_available(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:
+        return False
+
+
+def _default_path_exists(path: str | Path) -> bool:
+    return Path(path).exists()
+
+
+def _inspect_pct_runtime_for_host(machine: str | None) -> dict[str, Any]:
+    try:
+        from global_planning.PCT_planner_runnable.runtime import inspect_pct_runtime
+
+        return dict(inspect_pct_runtime(ROOT, machine=machine))
+    except Exception as exc:
+        return {
+            "ok": False,
+            "host_platform_supported": platform.system().lower() == "linux",
+            "python_abi_matches_known_good": _python_tag() == "py310",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _ros_hardware_subscribers(env: dict[str, str]) -> list[str] | None:
+    if shutil.which("ros2") is None:
+        return None
+    subscribers: list[str] = []
+    query_env = os.environ.copy()
+    query_env.update(env)
+    for topic in HARDWARE_COMMAND_TOPICS:
+        try:
+            result = subprocess.run(
+                ["ros2", "topic", "info", topic, "--verbose"],
+                cwd=ROOT,
+                env=query_env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=2.0,
+                check=False,
+            )
+        except Exception:
+            continue
+        if result.returncode != 0:
+            continue
+        for line in result.stdout.splitlines():
+            lowered = line.lower()
+            if any(keyword in lowered for keyword in HARDWARE_SUBSCRIBER_KEYWORDS):
+                subscribers.append(f"{topic}: {line.strip()}")
+    return subscribers
+
+
+def _add_check(
+    checks: dict[str, dict[str, Any]],
+    blockers: list[str],
+    name: str,
+    *,
+    ok: bool,
+    blocker: str = "",
+    evidence: dict[str, Any] | None = None,
+) -> None:
+    checks[name] = {
+        "ok": bool(ok),
+        "blocker": "" if ok else blocker,
+        "evidence": evidence or {},
+    }
+    if not ok and blocker:
+        blockers.append(blocker)
+
+
+def host_preflight(
+    *,
+    required: set[str],
+    platform_system: str | None = None,
+    machine: str | None = None,
+    python_tag: str | None = None,
+    env: dict[str, str] | None = None,
+    executable_exists: Callable[[str], bool] | None = None,
+    module_available: Callable[[str], bool] | None = None,
+    path_exists: Callable[[str | Path], bool] | None = None,
+    pct_runtime_report: dict[str, Any] | None = None,
+    hardware_subscribers: Callable[[], list[str] | None] | None = None,
+) -> dict[str, Any]:
+    """Read-only host preflight for server-sim gate execution.
+
+    This does not launch gate commands. It only checks whether the current host
+    satisfies the static requirements attached to selected gate specs.
+    """
+    required_names = required or {spec.name for spec in GATES}
+    specs = {spec.name: spec for spec in GATES}
+    unknown = sorted(required_names - set(specs))
+    if unknown:
+        raise ValueError(f"unknown required gate(s): {', '.join(unknown)}")
+
+    resolved_env = dict(os.environ if env is None else env)
+    resolved_platform = platform_system or platform.system()
+    resolved_machine = machine or platform.machine()
+    resolved_python_tag = python_tag or _python_tag()
+    exists = executable_exists or (lambda name: shutil.which(name) is not None)
+    has_module = module_available or _default_module_available
+    has_path = path_exists or _default_path_exists
+    pct_report = (
+        dict(pct_runtime_report)
+        if pct_runtime_report is not None
+        else _inspect_pct_runtime_for_host(resolved_machine)
+    )
+    subscriber_probe = hardware_subscribers or (
+        lambda: _ros_hardware_subscribers(resolved_env)
+    )
+
+    ros_domain_id = str(resolved_env.get("ROS_DOMAIN_ID") or "")
+    ros_distro = str(resolved_env.get("ROS_DISTRO") or "")
+    mujoco_gl = str(resolved_env.get("MUJOCO_GL") or "")
+    generated_at = time.time()
+
+    gates: dict[str, Any] = {}
+    for name in _ordered_gate_names(required_names):
+        spec = specs[name]
+        requirements = tuple(spec.host_requirements)
+        requirement_text = "\n".join(requirements)
+        checks: dict[str, dict[str, Any]] = {}
+        blockers: list[str] = []
+
+        if "local Python runtime only" in requirement_text:
+            _add_check(
+                checks,
+                blockers,
+                "local_non_motion",
+                ok=True,
+                evidence={"current_python_tag": resolved_python_tag},
+            )
+
+        if "PCT native extension modules" in requirement_text:
+            platform_ok = resolved_platform.lower() == "linux"
+            python_ok = resolved_python_tag == "py310"
+            runtime_ok = bool(pct_report.get("ok"))
+            pct_ok = platform_ok and python_ok and runtime_ok
+            pct_blockers: list[str] = []
+            if not platform_ok:
+                pct_blockers.append(
+                    f"PCT native runtime unavailable on {resolved_platform}; Linux/S100P required"
+                )
+            if not python_ok:
+                pct_blockers.append(
+                    f"PCT native runtime requires CPython 3.10 ABI; current {resolved_python_tag}"
+                )
+            if not runtime_ok:
+                detail = str(pct_report.get("error") or "runtime inspection did not pass")
+                pct_blockers.append(f"PCT native runtime unavailable: {detail}")
+            _add_check(
+                checks,
+                blockers,
+                "pct_native",
+                ok=pct_ok,
+                blocker="; ".join(pct_blockers),
+                evidence=pct_report,
+            )
+
+        if "ROS 2 Humble" in requirement_text:
+            setup_path = Path("/opt/ros/humble/setup.bash")
+            ros_ok = ros_distro == "humble" or bool(has_path(setup_path))
+            _add_check(
+                checks,
+                blockers,
+                "ros2_humble",
+                ok=ros_ok,
+                blocker=(
+                    "ROS 2 Humble environment unavailable; source "
+                    "/opt/ros/humble/setup.bash on the isolated simulation host"
+                ),
+                evidence={
+                    "ROS_DISTRO": ros_distro,
+                    "setup_bash": str(setup_path),
+                    "setup_bash_exists": bool(has_path(setup_path)),
+                    "ros2_executable": bool(exists("ros2")),
+                },
+            )
+
+        if "MuJoCo" in requirement_text:
+            mujoco_ok = bool(has_module("mujoco")) and mujoco_gl.lower() in {
+                "",
+                "egl",
+                "osmesa",
+            }
+            _add_check(
+                checks,
+                blockers,
+                "mujoco_headless",
+                ok=mujoco_ok,
+                blocker="MuJoCo headless runtime unavailable or MUJOCO_GL is not egl/osmesa",
+                evidence={
+                    "module_available": bool(has_module("mujoco")),
+                    "MUJOCO_GL": mujoco_gl,
+                },
+            )
+
+        if "Gazebo" in requirement_text:
+            gazebo_ok = bool(exists("gz") or exists("ign"))
+            _add_check(
+                checks,
+                blockers,
+                "gazebo_runtime",
+                ok=gazebo_ok,
+                blocker="Gazebo/Ignition executable unavailable on this host",
+                evidence={"gz": bool(exists("gz")), "ign": bool(exists("ign"))},
+            )
+
+        needs_isolation = (
+            "isolated" in requirement_text.lower()
+            or "no physical robot drivers" in requirement_text.lower()
+            or "no hardware command" in requirement_text.lower()
+        )
+        if needs_isolation:
+            domain_ok = bool(ros_domain_id) and ros_domain_id != "0"
+            _add_check(
+                checks,
+                blockers,
+                "isolated_ros_domain",
+                ok=domain_ok,
+                blocker=(
+                    "ROS_DOMAIN_ID must be set to a nonzero isolated simulation domain "
+                    "before running this gate"
+                ),
+                evidence={"ROS_DOMAIN_ID": ros_domain_id},
+            )
+
+            subscribers = subscriber_probe()
+            subscriber_ok = subscribers == []
+            if subscribers is None:
+                subscriber_blocker = (
+                    "hardware subscriber audit unavailable; run with ros2 available "
+                    "or provide a zero-subscriber audit before gate execution"
+                )
+            elif subscribers:
+                subscriber_blocker = (
+                    "hardware command subscribers present: " + ", ".join(subscribers)
+                )
+            else:
+                subscriber_blocker = ""
+            _add_check(
+                checks,
+                blockers,
+                "hardware_subscribers",
+                ok=subscriber_ok,
+                blocker=subscriber_blocker,
+                evidence={
+                    "topics": list(HARDWARE_COMMAND_TOPICS),
+                    "subscribers": [] if subscribers is None else list(subscribers),
+                    "audit_available": subscribers is not None,
+                },
+            )
+
+        if "localizer runtime" in requirement_text:
+            localizer_ok = bool((checks.get("ros2_humble") or {}).get("ok"))
+            _add_check(
+                checks,
+                blockers,
+                "localizer_runtime",
+                ok=localizer_ok,
+                blocker="localizer runtime requires the ROS 2 Humble simulation host",
+                evidence={"expected": "ros2 run localizer localizer_node"},
+            )
+
+        ok = not blockers
+        gates[name] = {
+            "ok": ok,
+            "status": "runnable" if ok else "blocked",
+            "description": spec.description,
+            "host_requirements": list(requirements),
+            "checks": checks,
+            "blockers": blockers,
+            "command": spec.command,
+            "expected_report_path": _expected_report_path(spec),
+            "accepted_patterns": list(spec.default_patterns),
+        }
+
+    blocked_gates = [
+        name for name in _ordered_gate_names(required_names) if not gates[name]["ok"]
+    ]
+    runnable_gates = [
+        name for name in _ordered_gate_names(required_names) if gates[name]["ok"]
+    ]
+    return {
+        "schema_version": "lingtu.server_sim_host_preflight.v1",
+        "execution_mode": "host_preflight_only",
+        "ok": not blocked_gates,
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "run_missing": False,
+        "gate_runs": [],
+        "generated_at": generated_at,
+        "required_gate_sequence": _ordered_gate_names(required_names),
+        "current_host": {
+            "platform_system": resolved_platform,
+            "machine": resolved_machine,
+            "python_tag": resolved_python_tag,
+            "ROS_DOMAIN_ID": ros_domain_id,
+            "ROS_DISTRO": ros_distro,
+            "MUJOCO_GL": mujoco_gl,
+        },
+        "runnable_gates": runnable_gates,
+        "blocked_gates": blocked_gates,
+        "gates": gates,
+        "next_actions": [
+            {
+                "gate": name,
+                "action_type": "fix_host_preflight_then_run_gate",
+                "blockers": list(gates[name]["blockers"]),
+                "command": gates[name]["command"],
+                "expected_report_path": gates[name]["expected_report_path"],
+                "host_requirements": list(gates[name]["host_requirements"]),
+            }
+            for name in blocked_gates
+        ],
+    }
+
+
 def _candidate_matches(patterns: tuple[str, ...]) -> list[Path]:
     seen: set[Path] = set()
     candidates: list[Path] = []
@@ -3264,6 +3645,7 @@ def summarize(
         if not bool((gates.get(name) or {}).get("ok"))
     ]
     verified = {name: bool(item.get("ok")) for name, item in gates.items()}
+    algorithm_backends = _algorithm_backends_from_gates(gates)
     algorithm_validation = _algorithm_validation_summary(
         gates,
         required_names,
@@ -3271,6 +3653,10 @@ def summarize(
     )
     return {
         "schema_version": "lingtu.server_sim_closure.v1",
+        "execution_mode": "summary_only",
+        "run_missing": False,
+        "initial_missing_or_failed": [],
+        "gate_runs": [],
         "ok": not missing_or_failed,
         "simulation_only": True,
         "real_robot_motion": False,
@@ -3285,6 +3671,7 @@ def summarize(
         "missing_or_failed": missing_or_failed,
         "missing_required_commands": _missing_required_commands(gates, missing_or_failed),
         "optional_missing_or_failed": optional_missing_or_failed,
+        "algorithm_backends": algorithm_backends,
         "algorithm_validation": algorithm_validation,
         "next_actions": algorithm_validation["next_actions"],
         "gates": gates,
@@ -3362,6 +3749,7 @@ def run_missing_required_gates(
         include_optional=include_optional,
     )
     final_summary["run_missing"] = True
+    final_summary["execution_mode"] = "run_missing"
     final_summary["initial_missing_or_failed"] = list(initial_summary["missing_or_failed"])
     final_summary["gate_runs"] = run_results
     return final_summary
@@ -3370,6 +3758,7 @@ def run_missing_required_gates(
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gateway-runtime-acceptance-report", type=Path, default=None)
+    parser.add_argument("--multifloor-exploration-report", type=Path, default=None)
     parser.add_argument("--large-terrain-report", type=Path, default=None)
     parser.add_argument("--native-pct-mujoco-report", type=Path, default=None)
     parser.add_argument("--dynamic-obstacle-local-planner-report", type=Path, default=None)
@@ -3414,6 +3803,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run missing or stale required gates in preset order, then summarize again.",
     )
     parser.add_argument(
+        "--host-preflight",
+        action="store_true",
+        help=(
+            "Check whether this host can safely run the selected required gates. "
+            "This is read-only and does not launch gate commands."
+        ),
+    )
+    parser.add_argument(
         "--gate-timeout-s",
         type=float,
         default=None,
@@ -3429,7 +3826,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Evaluate only gates listed by --required; useful for setup-safe subset summaries.",
     )
-    parser.add_argument("--json-out", type=Path, default=ROOT / "artifacts/server_sim_closure_summary.json")
+    parser.add_argument(
+        "--json-out",
+        type=Path,
+        default=ROOT / "artifacts/server_sim_closure_summary.json",
+        help="Write the JSON report to this path; use '-' for stdout only.",
+    )
     parser.add_argument("--strict", action="store_true")
     return parser
 
@@ -3446,6 +3848,7 @@ def main() -> int:
     args = _build_parser().parse_args()
     overrides = {
         "gateway_runtime_acceptance": args.gateway_runtime_acceptance_report,
+        "multifloor_exploration": args.multifloor_exploration_report,
         "large_terrain": args.large_terrain_report,
         "native_pct_mujoco": args.native_pct_mujoco_report,
         "dynamic_obstacle_local_planner": args.dynamic_obstacle_local_planner_report,
@@ -3469,6 +3872,8 @@ def main() -> int:
     unknown = sorted(required - valid_names)
     if unknown:
         raise SystemExit(f"unknown required gate(s): {', '.join(unknown)}")
+    if args.host_preflight and args.run_missing:
+        raise SystemExit("--host-preflight cannot be combined with --run-missing")
 
     summary_kwargs = {
         "report_overrides": {key: value for key, value in overrides.items() if value is not None},
@@ -3476,7 +3881,9 @@ def main() -> int:
         "max_report_age_s": args.max_report_age_s,
         "include_optional": not args.required_only,
     }
-    if args.run_missing:
+    if args.host_preflight:
+        summary = host_preflight(required=required)
+    elif args.run_missing:
         summary = run_missing_required_gates(
             **summary_kwargs,
             gate_timeout_s=args.gate_timeout_s,
@@ -3486,7 +3893,7 @@ def main() -> int:
         summary = summarize(**summary_kwargs)
     text = json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True)
     print(text)
-    if args.json_out:
+    if args.json_out and str(args.json_out) != "-":
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
         args.json_out.write_text(text + "\n", encoding="utf-8")
     return 0 if summary.get("ok") or not args.strict else 1
