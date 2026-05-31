@@ -7,9 +7,9 @@ def test_pct_planner_cmake_installs_existing_legacy_scripts() -> None:
     cmake = (package_dir / "CMakeLists.txt").read_text(encoding="utf-8")
 
     expected_scripts = [
-        "planner/scripts/legacy/global_planner.py",
-        "planner/scripts/legacy/pct_planner_astar.py",
-        "planner/scripts/legacy/fake_localization.py",
+        "../../../src/legacy/pct_planner/global_planner.py",
+        "../../../src/legacy/pct_planner/pct_planner_astar.py",
+        "../../../src/legacy/pct_planner/fake_localization.py",
     ]
     for script in expected_scripts:
         assert script in cmake

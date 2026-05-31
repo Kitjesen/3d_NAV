@@ -71,7 +71,7 @@ if(GTSAM_DIR)
 endif()
 
 install(TARGETS hba_node DESTINATION lib/${PROJECT_NAME})
-install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../launch/hba_launch.py DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY rviz DESTINATION share/${PROJECT_NAME})
 

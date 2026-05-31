@@ -65,7 +65,7 @@ echo "[7/7] 验证安装..."
 lingtu version
 python3 -c "
 from semantic_perception.storage import SqliteStore
-from semantic_planner.skill_registry import SkillRegistry, LingTuNavigationSkills
+from src.legacy.semantic.skill_registry import SkillRegistry, LingTuNavigationSkills
 reg = SkillRegistry()
 nav = LingTuNavigationSkills()
 count = reg.register_instance(nav)

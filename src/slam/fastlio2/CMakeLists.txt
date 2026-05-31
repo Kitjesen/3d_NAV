@@ -60,7 +60,7 @@ target_link_libraries(lio_node
 
 
 install(TARGETS lio_node DESTINATION lib/${PROJECT_NAME})
-install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../launch/fastlio2_launch.py DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY rviz DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 

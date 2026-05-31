@@ -169,7 +169,7 @@ def test_pct_wrapper_preserves_optimizer_height_when_converting_xy() -> None:
 
 
 def test_astar_backend_uses_3d_tomogram_fallback_when_ground_slice_is_blocked() -> None:
-    from global_planning.pct_adapters.src.global_planner_module import _AStarBackend
+    from global_planning.pct_adapters.global_planner_module import _AStarBackend
 
     backend = _AStarBackend.__new__(_AStarBackend)
     backend._obstacle_thr = 49.9
@@ -197,7 +197,7 @@ def test_astar_backend_uses_3d_tomogram_fallback_when_ground_slice_is_blocked() 
 
 
 def test_astar_backend_loads_cmu_flat_tomogram_without_axis_transpose(tmp_path: Path) -> None:
-    from global_planning.pct_adapters.src.global_planner_module import _AStarBackend
+    from global_planning.pct_adapters.global_planner_module import _AStarBackend
 
     path = tmp_path / "cmu_flat.pickle"
     data = np.zeros((5, 1, 3, 4), dtype=np.float32)
@@ -224,7 +224,7 @@ def test_astar_backend_loads_cmu_flat_tomogram_without_axis_transpose(tmp_path: 
 
 
 def test_astar_backend_snaps_polluted_start_to_nearby_3d_free_cell() -> None:
-    from global_planning.pct_adapters.src.global_planner_module import _AStarBackend
+    from global_planning.pct_adapters.global_planner_module import _AStarBackend
 
     backend = _AStarBackend.__new__(_AStarBackend)
     backend._obstacle_thr = 49.9
@@ -252,7 +252,7 @@ def test_astar_backend_snaps_polluted_start_to_nearby_3d_free_cell() -> None:
 
 
 def test_pct_backend_rejects_goal_height_that_only_matches_other_floor() -> None:
-    from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+    from global_planning.pct_adapters.global_planner_module import _PCTBackend
 
     class FakePlanner:
         def __init__(self) -> None:
@@ -296,7 +296,7 @@ def test_pct_backend_rejects_goal_height_that_only_matches_other_floor() -> None
 
 
 def test_pct_backend_height_snap_limit_matches_25cm_step_limit() -> None:
-    from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+    from global_planning.pct_adapters.global_planner_module import _PCTBackend
 
     class FakePlanner:
         def __init__(self, height: float) -> None:
@@ -353,7 +353,7 @@ def test_pct_backend_height_snap_limit_matches_25cm_step_limit() -> None:
 
 
 def test_astar_backend_can_return_safe_partial_3d_path_when_goal_unreachable() -> None:
-    from global_planning.pct_adapters.src.global_planner_module import _AStarBackend
+    from global_planning.pct_adapters.global_planner_module import _AStarBackend
 
     backend = _AStarBackend.__new__(_AStarBackend)
     backend._obstacle_thr = 49.9

@@ -16,7 +16,7 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(nav_core REQUIRED)
 
-add_executable(pct_path_adapter src/pct_path_adapter.cpp)
+add_executable(pct_path_adapter pct_path_adapter.cpp)
 ament_target_dependencies(
   pct_path_adapter
   rclcpp
@@ -35,8 +35,8 @@ install(TARGETS
 )
 
 # Python mission_arc 节点
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/mission_arc.py")
-  install(PROGRAMS src/mission_arc.py
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mission_arc.py")
+  install(PROGRAMS mission_arc.py
     DESTINATION lib/${PROJECT_NAME})
 endif()
 

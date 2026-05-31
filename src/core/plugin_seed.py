@@ -52,7 +52,7 @@ BUILTIN_PLUGIN_MODULES: Mapping[str, tuple[str, ...]] = {
         "nav.services.geofence_manager_module",
     ),
     "planner_backend": (
-        "global_planning.pct_adapters.src.global_planner_module",
+        "global_planning.pct_adapters.global_planner_module",
     ),
     "navigation": (
         "nav.navigation_module",

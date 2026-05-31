@@ -108,9 +108,10 @@ install(TARGETS
 )
 
 install(
-  DIRECTORY config launch rviz_cfg
+  DIRECTORY config rviz_cfg
   DESTINATION share/${PROJECT_NAME}
 )
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../launch/pointlio_launch.py DESTINATION share/${PROJECT_NAME})
 
 # Export dependencies
 ament_export_dependencies(

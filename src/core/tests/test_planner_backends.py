@@ -36,12 +36,12 @@ def registry_isolation():
     """Save registry state before each test, restore after to prevent pollution."""
     saved = snapshot()
     # Trigger @register decorators (executed at import time)
-    import global_planning.pct_adapters.src.global_planner_module
+    import global_planning.pct_adapters.global_planner_module
     yield
     restore(saved)
     # Re-register after restore clears the registry
     import importlib
-    importlib.reload(global_planning.pct_adapters.src.global_planner_module)
+    importlib.reload(global_planning.pct_adapters.global_planner_module)
 
 
 def _make_open_grid(rows=50, cols=50, obs_thr=49.9):
@@ -83,11 +83,11 @@ def _make_tomogram_pickle(trav: np.ndarray, resolution: float = 0.2,
 
 class TestPCTBackend:
     def _backend(self, tomogram_path="", obs=49.9):
-        from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+        from global_planning.pct_adapters.global_planner_module import _PCTBackend
         return _PCTBackend(tomogram_path=tomogram_path, obstacle_thr=obs)
 
     def test_registered_as_pct(self):
-        from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+        from global_planning.pct_adapters.global_planner_module import _PCTBackend
         cls = get("planner_backend", "pct")
         assert cls is _PCTBackend
 
@@ -113,7 +113,7 @@ class TestPCTBackend:
         assert len(b._load_error) > 0
 
     def test_near_zero_route_bypasses_native_pct_plan(self, monkeypatch):
-        from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+        from global_planning.pct_adapters.global_planner_module import _PCTBackend
 
         class FakeNativePlanner:
             def __init__(self):
@@ -146,7 +146,7 @@ class TestPCTBackend:
         assert path == [(1.0, 2.0, 0.3), (1.35, 2.0, 0.4)]
 
     def test_near_xy_route_bypasses_native_pct_plan(self, monkeypatch):
-        from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+        from global_planning.pct_adapters.global_planner_module import _PCTBackend
 
         class FakeNativePlanner:
             def __init__(self):
@@ -182,7 +182,7 @@ class TestPCTBackend:
 
 class TestAStarBackend:
     def _backend(self, trav=None, resolution=0.2, center=(0.0, 0.0), obs=49.9):
-        from global_planning.pct_adapters.src.global_planner_module import _AStarBackend
+        from global_planning.pct_adapters.global_planner_module import _AStarBackend
         b = _AStarBackend(obstacle_thr=obs)
         if trav is not None:
             h, w = trav.shape
@@ -194,7 +194,7 @@ class TestAStarBackend:
         return b
 
     def test_registered_as_astar(self):
-        from global_planning.pct_adapters.src.global_planner_module import _AStarBackend
+        from global_planning.pct_adapters.global_planner_module import _AStarBackend
         cls = get("planner_backend", "astar")
         assert cls is _AStarBackend
 
@@ -252,7 +252,7 @@ class TestAStarBackend:
         trav = _make_open_grid(50, 50)
         path = _make_tomogram_pickle(trav, resolution=0.2, center=(0.0, 0.0))
         try:
-            from global_planning.pct_adapters.src.global_planner_module import _AStarBackend
+            from global_planning.pct_adapters.global_planner_module import _AStarBackend
             b = _AStarBackend(tomogram_path=path, obstacle_thr=49.9)
             result = b.plan(np.array([-2.0, -2.0, 0.0]), np.array([2.0, 2.0, 0.0]))
             assert len(result) >= 2, "Should plan path from loaded tomogram"

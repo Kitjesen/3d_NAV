@@ -36,9 +36,9 @@ install(DIRECTORY tomography
 )
 
 install(PROGRAMS
-  planner/scripts/legacy/global_planner.py
-  planner/scripts/legacy/pct_planner_astar.py
-  planner/scripts/legacy/fake_localization.py
+  ../../../src/legacy/pct_planner/global_planner.py
+  ../../../src/legacy/pct_planner/pct_planner_astar.py
+  ../../../src/legacy/pct_planner/fake_localization.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

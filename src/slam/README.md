@@ -97,14 +97,14 @@ sudo make install
 
 ### 1.激光惯性里程计 
 ```shell
-ros2 launch fastlio2 lio_launch.py
+ros2 launch slam/launch/fastlio2_launch.py
 ros2 bag play your_bag_file
 ```
 
 ### 2.里程计加回环
 #### 启动回环节点
 ```shell
-ros2 launch pgo pgo_launch.py
+ros2 launch slam/launch/pgo_launch.py
 ros2 bag play your_bag_file
 ```
 #### 保存地图
@@ -115,7 +115,7 @@ ros2 service call /pgo/save_maps interface/srv/SaveMaps "{file_path: 'your_save_
 ### 3.里程计加重定位
 #### 启动重定位节点
 ```shell
-ros2 launch localizer localizer_launch.py
+ros2 launch slam/launch/localizer_launch.py
 ros2 bag play your_bag_file // 可选
 ```
 #### 设置重定位初始值
@@ -130,7 +130,7 @@ ros2 service call /localizer/relocalize_check interface/srv/IsValid "{"code": 0}
 ### 4.一致性地图优化
 #### 启动一致性地图优化节点
 ```shell
-ros2 launch hba hba_launch.py
+ros2 launch slam/launch/hba_launch.py
 ```
 #### 调用优化服务
 ```shell

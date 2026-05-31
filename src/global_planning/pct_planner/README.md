@@ -38,8 +38,8 @@ cp /path/to/save_dir/map.pcd rsc/pcd/my_map.pcd
 ```bash
 # 1. 鍒嗗埆鍚姩鍚勪釜鑺傜偣
 ros2 launch livox_ros_driver2 msg_MID360_launch.py
-ros2 launch fastlio2 lio_launch.py
-ros2 launch pgo pgo_launch.py
+ros2 launch slam/launch/fastlio2_launch.py
+ros2 launch slam/launch/pgo_launch.py
 
 # 2. 淇濆瓨鍦板浘锛堝悓涓婏級
 ros2 service call /pgo/save_maps interface/srv/SaveMaps \
@@ -254,8 +254,8 @@ ros2 launch pct_planner mapping_launch.py
 
 # 鏂瑰紡2: 鎴栧垎鍒惎鍔紙濡傛灉鏄繍琛岄樁娈碉級
 ros2 launch livox_ros_driver2 msg_MID360_launch.py
-ros2 launch fastlio2 lio_launch.py
-ros2 launch localizer localizer_launch.py
+ros2 launch slam/launch/fastlio2_launch.py
+ros2 launch slam/launch/localizer_launch.py
 
 # 閲嶅畾浣嶅埌棰勫缓鍦板浘锛堜娇鐢?PGO 淇濆瓨鐨勫湴鍥撅級
 ros2 service call /relocalize interface/srv/Relocalize \

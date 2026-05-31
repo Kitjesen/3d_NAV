@@ -63,7 +63,7 @@ if("$ENV{ROS_VERSION}" STREQUAL "1")
   target_include_directories(odometry_node PUBLIC include ${catkin_INCLUDE_DIRS})
   target_link_libraries(odometry_node genz_icp::pipeline ${catkin_LIBRARIES})
   install(TARGETS odometry_node RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
-  install(DIRECTORY launch DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
+  install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../launch/genz_icp.launch ${CMAKE_CURRENT_SOURCE_DIR}/../../launch/genz_icp_launch.py DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
 elseif("$ENV{ROS_VERSION}" STREQUAL "2")
   message(STATUS "GenZ-ICP ROS 2 wrapper will be compiled")
 
@@ -97,7 +97,8 @@ elseif("$ENV{ROS_VERSION}" STREQUAL "2")
   rclcpp_components_register_node(odometry_component PLUGIN "genz_icp_ros::OdometryServer" EXECUTABLE odometry_node)
 
   install(TARGETS odometry_component LIBRARY DESTINATION lib RUNTIME DESTINATION lib/${PROJECT_NAME})
-  install(DIRECTORY launch rviz config DESTINATION share/${PROJECT_NAME}/)
+  install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../launch/genz_icp_launch.py DESTINATION share/${PROJECT_NAME}/)
+  install(DIRECTORY rviz config DESTINATION share/${PROJECT_NAME}/)
 
   ament_package()
 

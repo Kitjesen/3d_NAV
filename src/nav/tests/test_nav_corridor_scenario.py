@@ -77,7 +77,7 @@ def test_astar_transposes_official_builder_tomogram_axes():
         path = fh.name
 
     try:
-        from global_planning.pct_adapters.src.global_planner_module import _AStarBackend
+        from global_planning.pct_adapters.global_planner_module import _AStarBackend
 
         backend = _AStarBackend(tomogram_path=path)
         assert backend._grid.shape == (4, 6)

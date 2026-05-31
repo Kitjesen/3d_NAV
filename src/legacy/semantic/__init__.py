@@ -1,0 +1,1 @@
+"""Legacy skill registry module."""

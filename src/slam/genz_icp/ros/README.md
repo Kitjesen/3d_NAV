@@ -24,7 +24,7 @@ source ~/catkin_ws/devel/setup.bash
 If you want to use a pre-tuned parameter set, you need to provide the **config file** with the **topic name** as arguments:
 
 ```sh
-roslaunch genz_icp odometry.launch topic:=<topic_name> config_file:=<config_file_name>.yaml
+roslaunch genz_icp genz_icp.launch topic:=<topic_name> config_file:=<config_file_name>.yaml
 ```
 ```sh
 rosbag play <rosbag_file_name>.bag
@@ -35,7 +35,7 @@ For example,
 1. **Long_Corridor** sequence of SubT-MRS dataset
 
 ```sh
-roslaunch genz_icp odometry.launch topic:=/velodyne_points config_file:=long_corridor.yaml
+roslaunch genz_icp genz_icp.launch topic:=/velodyne_points config_file:=long_corridor.yaml
 ```
 ```sh
 rosbag play subt_mrs_long_corridor.bag
@@ -57,7 +57,7 @@ wget https://postechackr-my.sharepoint.com/:u:/g/personal/daehanlee_postech_ac_k
 2. **Exp07** Long Corridor sequence of HILTI-Oxford dataset
 
 ```sh
-roslaunch genz_icp odometry.launch topic:=/hesai/pandar config_file:=exp07.yaml
+roslaunch genz_icp genz_icp.launch topic:=/hesai/pandar config_file:=exp07.yaml
 ```
 ```sh
 rosbag play exp07_long_corridor.bag
@@ -70,7 +70,7 @@ The bagfile for the **Exp07** Long Corridor sequence of HILTI-Oxford dataset can
 3. **Corridor1** and **Corridor2** sequences of Ground-Challenge dataset
 
 ```sh
-roslaunch genz_icp odometry.launch topic:=/velodyne_points config_file:=corridor.yaml
+roslaunch genz_icp genz_icp.launch topic:=/velodyne_points config_file:=corridor.yaml
 ```
 ```sh
 rosbag play corridor1.bag && rosbag play corridor2.bag
@@ -83,7 +83,7 @@ The bagfile for the **Corridor1** and **Corridor2** sequences of Ground-Challeng
 4. **short experiment** sequence of Newer-College dataset
 
 ```sh
-roslaunch genz_icp odometry.launch topic:=/os1_cloud_node/points config_file:=newer_college.yaml
+roslaunch genz_icp genz_icp.launch topic:=/os1_cloud_node/points config_file:=newer_college.yaml
 ```
 ```sh
 rosbag play rooster_2020-03-10-10-36-30_0.bag && rosbag play rooster_2020-03-10-10-39-18_1.bag && rosbag play rooster_2020-03-10-10-42-05_2.bag && rosbag play rooster_2020-03-10-10-44-52_3.bag && rosbag play rooster_2020-03-10-10-47-39_4.bag && rosbag play rooster_2020-03-10-10-50-26_5.bag && rosbag play rooster_2020-03-10-10-53-13_6.bag && rosbag play rooster_2020-03-10-10-56-00_7.bag && rosbag play rooster_2020-03-10-10-58-47_8.bag && rosbag play rooster_2020-03-10-11-01-34_9.bag
@@ -96,7 +96,7 @@ The bagfile for the **short experiment** sequence of Newer-College dataset can b
 5. **Seq. 00** of KITTI odometry dataset
 
 ```sh
-roslaunch genz_icp odometry.launch topic:=/velodyne_points config_file:=kitti.yaml
+roslaunch genz_icp genz_icp.launch topic:=/velodyne_points config_file:=kitti.yaml
 ```
 ```sh
 rosbag play 00.bag
@@ -122,7 +122,7 @@ If you need bag files for other sequences, you can download the original files f
 Otherwise, the only required argument to provide is the **topic name**:
 
 ```sh
-roslaunch genz_icp odometry.launch topic:=<topic_name>
+roslaunch genz_icp genz_icp.launch topic:=<topic_name>
 ```
 ```sh
 rosbag play <rosbag_file_name>.bag
@@ -170,7 +170,7 @@ The generated <rosbag_file_name> folder will contain a `.db3` (SQLite) file and 
 If you want to use a pre-tuned parameter set, you need to provide the **config file** with the **topic name** as arguments:
 
 ```sh
-ros2 launch genz_icp odometry.launch.py topic:=<topic_name> config_file:=<config_file_name>.yaml
+ros2 launch genz_icp genz_icp_launch.py topic:=<topic_name> config_file:=<config_file_name>.yaml
 ```
 ```sh
 ros2 bag play <rosbag_file_name>.db3
@@ -181,7 +181,7 @@ ros2 bag play <rosbag_file_name>.db3
 Otherwise, the only required argument to provide is the **topic name**:
 
 ```sh
-ros2 launch genz_icp odometry.launch.py topic:=<topic_name>
+ros2 launch genz_icp genz_icp_launch.py topic:=<topic_name>
 ```
 ```sh
 ros2 bag play <rosbag_file_name>.db3

@@ -52,7 +52,7 @@ source ~/catkin_ws/devel/setup.bash
 If you want to use a pre-tuned parameter set, you need to provide the **config file** with the **topic name** as arguments:
 
 ```sh
-roslaunch genz_icp odometry.launch topic:=<topic_name> config_file:=<config_file_name>.yaml
+roslaunch genz_icp genz_icp.launch topic:=<topic_name> config_file:=<config_file_name>.yaml
 ```
 ```sh
 rosbag play <rosbag_file_name>.bag
@@ -67,7 +67,7 @@ Examples and download links for **demo datasets** can be found [here][ros_readme
 Otherwise, the only required argument to provide is the **topic name**:
 
 ```sh
-roslaunch genz_icp odometry.launch topic:=<topic_name>
+roslaunch genz_icp genz_icp.launch topic:=<topic_name>
 ```
 ```sh
 rosbag play <rosbag_file_name>.bag
@@ -99,7 +99,7 @@ source ~/colcon_ws/install/setup.bash
 If you want to use a pre-tuned parameter set, you need to provide the **config file** with the **topic name** as arguments:
 
 ```sh
-ros2 launch genz_icp odometry.launch.py topic:=<topic_name> config_file:=<config_file_name>.yaml
+ros2 launch genz_icp genz_icp_launch.py topic:=<topic_name> config_file:=<config_file_name>.yaml
 ```
 ```sh
 ros2 bag play <rosbag_file_name>.db3
@@ -114,7 +114,7 @@ Examples and download links for **demo datasets** can be found [here][ros_readme
 Otherwise, the only required argument to provide is the **topic name**:
 
 ```sh
-ros2 launch genz_icp odometry.launch.py topic:=<topic_name>
+ros2 launch genz_icp genz_icp_launch.py topic:=<topic_name>
 ```
 ```sh
 ros2 bag play <rosbag_file_name>.db3

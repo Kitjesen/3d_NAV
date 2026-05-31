@@ -35,7 +35,7 @@ echo "使用 rosbag: $ROSBAG_DIR"
 
 # 启动 SLAM 节点（后台）
 echo "启动 SLAM 节点..."
-ros2 launch slam/fastlio2/launch/lio_launch.py > /dev/null 2>&1 &
+ros2 launch slam/launch/fastlio2_launch.py > /dev/null 2>&1 &
 SLAM_PID=$!
 
 # 等待节点启动

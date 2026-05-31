@@ -691,7 +691,7 @@ Daemon uses Unix double-fork (`setsid`), writes PID to `.lingtu/run.pid`, state 
 | ----------------------------------------------- | ----------------------------------------------------------------------------------- |
 | `src/slam/localizer/`                           | C++ ICP localizer node                                                              |
 | `src/slam/localizer/config/localizer.yaml`      | `static_map_path`, ICP resolutions, `update_hz`                                     |
-| `src/slam/localizer/launch/localizer_launch.py` | Launches Fast-LIO2 + localizer + RViz                                               |
+| `src/slam/launch/localizer_launch.py` | Launches Fast-LIO2 + localizer + RViz                                               |
 | `src/slam/slam_module.py`                       | Python `SLAMModule` 鈥?`_setup_localizer()` starts LIO + localizer via NativeModule  |
 | `src/slam/slam_bridge_module.py`                | `SlamBridgeModule` 鈥?subscribes to `/nav/odometry` + `/nav/map_cloud` via DDS/rclpy |
 | `src/core/blueprints/stacks/slam.py`            | `slam("localizer")` 鈥?ensures systemd services, adds `SlamBridgeModule`             |
@@ -765,7 +765,7 @@ Livox LiDAR 鈫?Fast-LIO2 (/cloud_map + /Odometry)
 | Framework smoke     | `python -m pytest src/core/tests/test_new_modules.py::TestSLAMModule -q`                                                                                          | Nothing      |
 | Profile `map` check | `python -c "from core.blueprints.full_stack import full_stack_blueprint; bp = full_stack_blueprint(slam_profile='fastlio2', enable_semantic=False); print('OK')"` | Nothing      |
 | Map REPL            | `python lingtu.py map` then `map save test_map`                                                                                                                   | ROS2 + LiDAR |
-| ROS2 direct         | `ros2 launch fastlio2 lio_launch.py` + `ros2 service call /save_map ...`                                                                                          | ROS2 + LiDAR |
+| ROS2 direct         | `ros2 launch fastlio2_launch.py` + `ros2 service call /save_map ...`                                                                                          | ROS2 + LiDAR |
 | Tomogram generation | `cd src/global_planning/pct_planner && python3 tomography/scripts/tomography.py --scene Common`                                                                   | Saved PCD    |
 
 

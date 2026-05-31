@@ -166,7 +166,7 @@ class TestPCTGridExtraction(unittest.TestCase):
 
     def _make_pct_backend(self):
         """Create a _PCTBackend without the C++ .so (won't be available)."""
-        from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+        from global_planning.pct_adapters.global_planner_module import _PCTBackend
         # Constructor will fail to import TomogramPlanner — that's OK.
         # We manually call _extract_grid() to test grid extraction.
         backend = _PCTBackend.__new__(_PCTBackend)
@@ -274,7 +274,7 @@ class TestPCTCostmapOverlay(unittest.TestCase):
     """Test live costmap merging into PCT's _grid."""
 
     def _make_backend_with_grid(self, grid_shape=(50, 50)):
-        from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+        from global_planning.pct_adapters.global_planner_module import _PCTBackend
         backend = _PCTBackend.__new__(_PCTBackend)
         backend._planner = None
         backend._obstacle_thr = 49.9
@@ -385,7 +385,7 @@ class TestGlobalPlannerServiceCostmap(unittest.TestCase):
 
     def test_update_map_pct_has_method(self):
         """PCT backend now has update_map method."""
-        from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+        from global_planning.pct_adapters.global_planner_module import _PCTBackend
         self.assertTrue(hasattr(_PCTBackend, "update_map"))
 
     def test_find_safe_goal_without_grid_returns_none(self):
@@ -442,7 +442,7 @@ class TestPCTFindSafeGoalIntegration(unittest.TestCase):
             obstacle_cells=obstacles,
         )
 
-        from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+        from global_planning.pct_adapters.global_planner_module import _PCTBackend
         backend = _PCTBackend.__new__(_PCTBackend)
         backend._planner = None
         backend._obstacle_thr = 49.9
@@ -478,7 +478,7 @@ class TestPCTFindSafeGoalIntegration(unittest.TestCase):
         # Clean tomogram — no static obstacles
         path = _make_tomogram_pickle(shape=(50, 50), resolution=0.2, center=(0, 0))
 
-        from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+        from global_planning.pct_adapters.global_planner_module import _PCTBackend
         backend = _PCTBackend.__new__(_PCTBackend)
         backend._planner = None
         backend._obstacle_thr = 49.9
