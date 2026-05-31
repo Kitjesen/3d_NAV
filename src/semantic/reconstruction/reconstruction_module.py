@@ -227,8 +227,8 @@ class ReconstructionModule(Module, layer=3):
             frozenset(dyn_labels) if dyn_labels else _DYNAMIC_LABELS
         )
 
-        # Extrinsic: body → camera (loaded from robot_config)
-        self._body_to_cam: np.ndarray = _load_cam_body_extrinsic()
+        # Extrinsic: camera pose in body frame (loaded from robot_config)
+        self._camera_pose_in_body: np.ndarray = _load_cam_body_extrinsic()
         self._depth_scale: float      = _load_depth_scale()
 
         # Buffered inputs (latest-wins)
@@ -339,7 +339,7 @@ class ReconstructionModule(Module, layer=3):
 
         # Build camera-to-world: T_world_cam = T_world_body @ T_body_cam
         body_to_world   = _pose_to_matrix(odom)
-        camera_to_world = body_to_world @ self._body_to_cam
+        camera_to_world = body_to_world @ self._camera_pose_in_body
 
         # Prepare depth array (normalise to mm uint16 equivalent)
         depth_arr = depth.data

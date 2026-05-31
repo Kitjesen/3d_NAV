@@ -189,9 +189,12 @@ class BBoxNavigator:
         self._lock = threading.Lock()
         # Last depth confidence from compute_3d_from_bbox (1.0 = high trust)
         self.depth_confidence: float = 0.0
-        # Camera→body rotation from factory calibration
+        # Camera→body transform from factory calibration
         cam_cfg = get_config().camera
-        self._R_body_camera = cam_cfg.T_body_camera[:3, :3]
+        self._R_body_camera = cam_cfg.T_camera_body[:3, :3]
+        # Camera translation in body frame (mounting offset).
+        # Defaults: position_x=0.15, position_y=0.0, position_z=0.45
+        self._t_camera_body = cam_cfg.T_camera_body[:3, 3]
         # Auto-tuner (W3-4) — instantiated on demand via tune_bbox_gains skill
         self._gain_tuner = GainAutoTuner()
         # Load persisted gains (overrides config defaults if file exists)
@@ -442,9 +445,9 @@ class BBoxNavigator:
         cos_y = np.cos(yaw)
         sin_y = np.sin(yaw)
 
-        # Camera optical → body frame via calibrated rotation
+        # Camera optical → body frame via calibrated rotation + translation
         cam_pt = np.array([X_c, Y_c, Z_c])
-        body_pt = self._R_body_camera @ cam_pt
+        body_pt = self._R_body_camera @ cam_pt + self._t_camera_body
 
         wx = rx + cos_y * body_pt[0] - sin_y * body_pt[1]
         wy = ry + sin_y * body_pt[0] + cos_y * body_pt[1]

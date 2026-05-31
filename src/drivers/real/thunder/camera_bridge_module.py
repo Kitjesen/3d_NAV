@@ -609,6 +609,60 @@ class CameraBridgeModule(Module, layer=1):
         map1 = self._undistort_maps[0]
         return tuple(map1.shape[:2]) == tuple(arr.shape[:2])
 
+    def _rotate_intrinsics(self, intrinsics: CameraIntrinsics) -> CameraIntrinsics:
+        """Transform camera intrinsics to match image rotation.
+
+        When the image is rotated (e.g. camera mounted sideways), pixel
+        coordinates are remapped. The intrinsics matrix K must be updated
+        so downstream 3D projection (fx/fy/cx/cy/width/height) remains
+        consistent with the rotated image.
+
+        Rotation formulas (pixel coordinates):
+          - 90° CW  (rotate=90):   cx' = H-1-cy,  cy' = cx,   fx'=fy, fy'=fx, w'=h, h'=w
+          - 180°    (rotate=180):  cx' = W-1-cx,  cy' = H-1-cy,        kept,  kept
+          - 270° CW (rotate=270, i.e. 90° CCW): cx' = cy, cy' = W-cx, fx'=fy, fy'=fx, w'=h, h'=w
+        """
+        rot = self._rotate
+        if rot == 0:
+            return intrinsics
+
+        w, h = intrinsics.width, intrinsics.height
+        fx, fy = intrinsics.fx, intrinsics.fy
+        cx, cy = intrinsics.cx, intrinsics.cy
+
+        if rot == 90:
+            return CameraIntrinsics(
+                fx=fy, fy=fx,
+                cx=float(h - 1 - cy), cy=float(cx),
+                width=h, height=w,
+                dist_k1=intrinsics.dist_k1, dist_k2=intrinsics.dist_k2,
+                dist_p1=intrinsics.dist_p1, dist_p2=intrinsics.dist_p2,
+                dist_k3=intrinsics.dist_k3,
+                depth_scale=intrinsics.depth_scale,
+            )
+        if rot == 180:
+            return CameraIntrinsics(
+                fx=fx, fy=fy,
+                cx=float(w - 1 - cx), cy=float(h - 1 - cy),
+                width=w, height=h,
+                dist_k1=intrinsics.dist_k1, dist_k2=intrinsics.dist_k2,
+                dist_p1=intrinsics.dist_p1, dist_p2=intrinsics.dist_p2,
+                dist_k3=intrinsics.dist_k3,
+                depth_scale=intrinsics.depth_scale,
+            )
+        if rot == 270:
+            return CameraIntrinsics(
+                fx=fy, fy=fx,
+                cx=float(cy), cy=float(w - cx),
+                width=h, height=w,
+                dist_k1=intrinsics.dist_k1, dist_k2=intrinsics.dist_k2,
+                dist_p1=intrinsics.dist_p1, dist_p2=intrinsics.dist_p2,
+                dist_k3=intrinsics.dist_k3,
+                depth_scale=intrinsics.depth_scale,
+            )
+        logger.warning("CameraBridge: unsupported rotate=%d, skipping intrinsics swap", rot)
+        return intrinsics
+
     def _on_ros2_info(self, msg, topic: str | None = None) -> None:
         try:
             topic = topic or self._info_topic
@@ -642,12 +696,30 @@ class CameraBridgeModule(Module, layer=1):
                 self._K = None
                 logger.info("CameraBridge: using camera_info topic %s", topic)
 
-            # Build undistortion maps once (idempotent)
+            # Build undistortion maps using ORIGINAL intrinsics — undistortion
+            # is applied BEFORE rotation in the image pipeline (see _on_ros2_color).
             if self._undistort_maps is None and any(
                 abs(v) > 1e-12 for v in (dk1, dk2, dp1, dp2, dk3)
             ):
                 self._init_undistort_maps(fx, fy, cx, cy, w, h,
                                           dk1, dk2, dp1, dp2, dk3)
+
+            # Apply rotation to published intrinsics so they match the
+            # image after cv2.rotate() in _on_ros2_color.
+            if self._rotate:
+                intrinsics = self._rotate_intrinsics(intrinsics)
+                if self._undistorted_intrinsics is not None:
+                    self._undistorted_intrinsics = self._rotate_intrinsics(
+                        self._undistorted_intrinsics
+                    )
+                logger.info(
+                    "CameraBridge: rotate=%d applied to intrinsics "
+                    "(fx=%.1f, fy=%.1f, cx=%.1f, cy=%.1f, %dx%d)",
+                    self._rotate,
+                    intrinsics.fx, intrinsics.fy,
+                    intrinsics.cx, intrinsics.cy,
+                    intrinsics.width, intrinsics.height,
+                )
 
             # Publish intrinsics — with zero distortion since images are pre-undistorted
             if self._undistorted_intrinsics is not None:

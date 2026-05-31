@@ -107,7 +107,7 @@ class DatasetRecorderModule(Module, layer=3):
         self._max_frames = int(config.get("max_frames", 0))
         self.recording   = bool(config.get("recording", True))
 
-        self._body_to_cam = _load_cam_body_extrinsic()
+        self._camera_pose_in_body = _load_cam_body_extrinsic()
 
         # 缓冲（最新帧优先）
         self._latest_color:  Image | None            = None
@@ -241,7 +241,7 @@ class DatasetRecorderModule(Module, layer=3):
 
         # ── 计算相机到世界变换 ──────────────────────────────────────────────
         body_to_world   = _pose_to_matrix(odom)
-        cam_to_world_cv = body_to_world @ self._body_to_cam   # OpenCV 约定
+        cam_to_world_cv = body_to_world @ self._camera_pose_in_body   # OpenCV 约定
         # nerfstudio / transforms.json 使用 OpenGL 约定（Y 朝上，Z 朝后）
         cam_to_world_gl = cam_to_world_cv @ np.diag([1., -1., -1., 1.])
 

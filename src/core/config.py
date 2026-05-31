@@ -91,6 +91,11 @@ class CameraConfig:
     width: int = 640
     height: int = 480
     depth_scale: float = 0.001
+    # Image rotation to apply (degrees: 0, 90, 180, 270).
+    # When the camera is mounted sideways the image is rotated to upright
+    # and intrinsics (fx/fy/cx/cy/width/height) are swapped accordingly
+    # so downstream 3D projection stays correct. Default 0 = no rotation.
+    rotate: int = 0
     # Distortion coefficients (Brown-Conrady / plumb_bob)
     dist_k1: float = 0.0
     dist_k2: float = 0.0
@@ -99,27 +104,23 @@ class CameraConfig:
     dist_k3: float = 0.0
 
     @property
-    def T_body_camera(self) -> np.ndarray:
-        """4x4 body→camera static transform from factory calibration.
+    def T_camera_body(self) -> np.ndarray:
+        """4x4 camera→body static transform from factory calibration.
 
-        Uses cv2.Rodrigues for rotation (falls back to numpy if cv2 unavailable).
-        Rotation is specified as ZYX Euler angles (yaw, pitch, roll) in radians.
+        Builds rotation from ZYX Euler angles (yaw, pitch, roll in radians).
+        Translation is the camera position in body frame.
+        Pure numpy — no cv2 dependency.
         """
         import numpy as np
-        rvec = np.array([self.roll, self.pitch, self.yaw], dtype=np.float64)
-        try:
-            import cv2
-            R, _ = cv2.Rodrigues(rvec)
-        except ImportError:
-            # Fallback: if angles are all zero, R is identity (common case)
-            if np.allclose(rvec, 0):
-                R = np.eye(3)
-            else:
-                # Rodrigues formula: R = I + sin(θ)·K + (1-cos(θ))·K²
-                theta = np.linalg.norm(rvec)
-                k = rvec / theta
-                K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
-                R = np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * (K @ K)
+        cr, sr = np.cos(self.roll), np.sin(self.roll)
+        cp, sp = np.cos(self.pitch), np.sin(self.pitch)
+        cy, sy = np.cos(self.yaw),   np.sin(self.yaw)
+        # ZYX extrinsic convention: R = Rz(yaw) @ Ry(pitch) @ Rx(roll)
+        R = np.array([
+            [cy * cp,  cy * sp * sr - sy * cr,  cy * sp * cr + sy * sr],
+            [sy * cp,  sy * sp * sr + cy * cr,  sy * sp * cr - cy * sr],
+            [-sp,      cp * sr,                  cp * cr],
+        ], dtype=np.float64)
         T = np.eye(4)
         T[:3, :3] = R
         T[:3, 3] = [self.position_x, self.position_y, self.position_z]

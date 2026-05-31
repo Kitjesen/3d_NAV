@@ -27,7 +27,7 @@ def _make_bbox_navigator():
     """Return a BBoxNavigator with get_config mocked out."""
     identity = np.eye(4)
     mock_cam = mock.MagicMock()
-    mock_cam.T_body_camera = identity
+    mock_cam.T_camera_body = identity
 
     mock_cfg = mock.MagicMock()
     mock_cfg.camera = mock_cam

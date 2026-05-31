@@ -230,7 +230,7 @@ class TestGainAutoTuner(unittest.TestCase):
         # bbox_navigator imports core.config at module level; mock get_config
         stubs = _stub_modules("cv2")
         config_mock = MagicMock()
-        config_mock.camera.T_body_camera = np.eye(4)
+        config_mock.camera.T_camera_body = np.eye(4)
         with patch.dict(sys.modules, stubs):
             with patch("core.config.get_config", return_value=config_mock):
                 sys.modules.pop("semantic.planner.bbox_navigator", None)
@@ -287,7 +287,7 @@ class TestBBoxNavigatorGainPersistence(unittest.TestCase):
     def _make_navigator(self, gains_path: Path):
         stubs = _stub_modules("cv2")
         config_mock = MagicMock()
-        config_mock.camera.T_body_camera = np.eye(4)
+        config_mock.camera.T_camera_body = np.eye(4)
         with patch.dict(sys.modules, stubs):
             with patch("core.config.get_config", return_value=config_mock):
                 sys.modules.pop("semantic.planner.bbox_navigator", None)
@@ -309,7 +309,7 @@ class TestBBoxNavigatorGainPersistence(unittest.TestCase):
 
             stubs = _stub_modules("cv2")
             config_mock = MagicMock()
-            config_mock.camera.T_body_camera = np.eye(4)
+            config_mock.camera.T_camera_body = np.eye(4)
 
             with patch.dict(sys.modules, stubs):
                 with patch("core.config.get_config", return_value=config_mock):
@@ -358,7 +358,7 @@ class TestBBoxNavigatorGainPersistence(unittest.TestCase):
 
             stubs = _stub_modules("cv2")
             config_mock = MagicMock()
-            config_mock.camera.T_body_camera = np.eye(4)
+            config_mock.camera.T_camera_body = np.eye(4)
 
             with patch.dict(sys.modules, stubs):
                 with patch("core.config.get_config", return_value=config_mock):
@@ -391,7 +391,7 @@ class TestTuneBboxGainsSkillWired(unittest.TestCase):
             "qp_perception.selection", "qp_perception.selection.person_following",
         )
         config_mock = MagicMock()
-        config_mock.camera.T_body_camera = np.eye(4)
+        config_mock.camera.T_camera_body = np.eye(4)
 
         with patch.dict(sys.modules, stubs):
             with patch("core.config.get_config", return_value=config_mock):

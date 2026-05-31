@@ -87,6 +87,31 @@ class Test3DProjection:
         # 结果应仍接近 3 m (中值滤波掉了噪声)
         assert abs(pt[2] - 3.0) < 0.3
 
+    def test_camera_translation_applied(self):
+        """相机平移偏移在 body→world 投影中应正确添加。
+
+        camera origin (0,0,1) 在 body 坐标系中应为 t = [t_x, t_y, t_z]，
+        因为 body_pt = R @ cam_pt + t。
+        """
+        nav = BBoxNavigator()
+        # 覆盖 transform 为已知值以独立测试
+        nav._R_body_camera = np.eye(3, dtype=np.float64)
+        nav._t_camera_body = np.array([0.15, 0.0, 0.45], dtype=np.float64)
+
+        # bbox 在图像中心 → (cx, cy) → X_c ≈ 0, Y_c ≈ 0, Z_c ≈ 1.0
+        half = 20
+        bbox = [self.cx - half, self.cy - half, self.cx + half, self.cy + half]
+        depth = _make_depth_image(self.H, self.W, 1000.0)  # 1 m
+        robot_pose = (0.0, 0.0, 0.0)
+        pt = nav.compute_3d_from_bbox(
+            bbox, depth, self.fx, self.fy, self.cx, self.cy, robot_pose
+        )
+        assert pt is not None
+        # body_pt = I @ (0, 0, 1) + (0.15, 0, 0.45) = (0.15, 0, 1.45)
+        assert abs(pt[0] - 0.15) < 0.05, f"Expected X≈0.15, got {pt[0]}"
+        assert abs(pt[1]) < 0.05, f"Expected Y≈0.0, got {pt[1]}"
+        assert abs(pt[2] - 1.45) < 0.1, f"Expected Z≈1.45, got {pt[2]}"
+
 
 # ---------------------------------------------------------------------------
 # PD 控制器测试
@@ -175,10 +200,16 @@ class TestStateMachine:
         assert out["angular_z"] == 0.0
 
     def test_tracking_at_normal_distance(self):
-        """正常距离 → state=tracking，有控制输出。"""
+        """正常距离 → state=tracking，有控制输出。
+
+        注意: 相机安装在 body 前方 0.15m，因此图像正前方的目标
+        在 body XY 平面有 0.15m 偏移。使用偏右 bbox 使 XY 总
+        偏移 > arrived_threshold=0.3 以确保触发 tracking 而非 arrived。
+        """
         depth = _make_depth_image(self.H, self.W, 3000.0)  # 3 m
         robot_pose = (0.0, 0.0, 0.0)
-        bbox = self._center_bbox()
+        # bbox 偏右: u≈400, v≈240 → X_c≈0.43 → 总 XY 距离 ≈ 0.58 > 0.3
+        bbox = [380.0, 220.0, 420.0, 260.0]
         out = self.nav.update(bbox, depth, self.intrinsics, robot_pose)
         assert out["state"] == STATE_TRACKING
         assert out["linear_x"] != 0.0 or out["angular_z"] != 0.0

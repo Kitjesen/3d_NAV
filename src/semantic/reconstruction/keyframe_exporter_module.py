@@ -92,7 +92,7 @@ class ReconKeyframeExporterModule(Module, layer=3):
         self._max_depth_m  = float(config.get("max_depth_m", 6.0))
         self._enabled      = bool(config.get("enabled", True))
 
-        self._body_to_cam: np.ndarray = _load_cam_body_extrinsic()
+        self._camera_pose_in_body: np.ndarray = _load_cam_body_extrinsic()
 
         # Latest buffers (latest-wins)
         self._latest_color:  Image | None            = None
@@ -216,7 +216,7 @@ class ReconKeyframeExporterModule(Module, layer=3):
 
             # Build pose JSON (camera-to-world)
             body_to_world   = _pose_to_matrix(odom)
-            cam_to_world    = body_to_world @ self._body_to_cam
+            cam_to_world    = body_to_world @ self._camera_pose_in_body
             pose_json = json.dumps({
                 "tx": float(cam_to_world[0, 3]),
                 "ty": float(cam_to_world[1, 3]),

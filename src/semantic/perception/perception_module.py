@@ -245,7 +245,7 @@ class PerceptionModule(Module, layer=3):
 
         # Camera extrinsics from factory calibration
         cam_cfg = get_config().camera
-        self._T_body_camera = cam_cfg.T_body_camera
+        self._T_camera_body = cam_cfg.T_camera_body
 
         # runtime state (populated during setup)
         self._tracker = None
@@ -462,10 +462,10 @@ class PerceptionModule(Module, layer=3):
         tf_body_world = self._latest_odom_matrix
         if tf_body_world is None:
             # Static fallback when no SLAM/TF — use camera extrinsics as world pose
-            tf_camera_world = self._T_body_camera.copy()
+            tf_camera_world = self._T_camera_body.copy()
         else:
-            # Correct transform chain: T_camera_world = T_body_world @ T_body_camera
-            tf_camera_world = tf_body_world @ self._T_body_camera
+            # Correct transform chain: T_camera_world = T_body_world @ T_camera_body
+            tf_camera_world = tf_body_world @ self._T_camera_body
 
         with self._backend_lock:
             try:

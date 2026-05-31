@@ -23,7 +23,7 @@ def _make_perception_module(**kw):
     with patch("core.config.get_config") as mock_cfg:
         # Minimal camera config
         cam = MagicMock()
-        cam.T_body_camera = np.eye(4)
+        cam.T_camera_body = np.eye(4)
         cam.position_x = cam.position_y = cam.position_z = 0.0
         cam.fx = cam.fy = 600.0
         lidar = MagicMock()
