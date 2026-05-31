@@ -101,7 +101,7 @@ testpaths = [
     "sim/tests",
     "src/slam/tests",
     "src/semantic/perception/tests",
-    "src/semantic/planner/test",
+    "src/semantic/planner/tests",
 ]
 # tests/ directory has root-level integration tests run separately:
 #   python -m pytest tests/ -q

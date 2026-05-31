@@ -1366,12 +1366,6 @@ def adapter_relay_aliases(surface: str) -> tuple[AdapterTopicAlias, ...]:
         raise ValueError(f"unknown adapter relay surface {surface!r}; available: {available}") from exc
 
 
-def adapter_relay_remappings(surface: str) -> dict[str, str]:
-    """Return source->target relays for a simulation bridge surface."""
-
-    return {alias.source: alias.target for alias in adapter_relay_aliases(surface)}
-
-
 def topic_formats(topic: str) -> tuple[str, ...]:
     """Return the declared message format names or ROS types for a topic."""
 

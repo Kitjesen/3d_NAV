@@ -1,4 +1,4 @@
-﻿"""Tests for PerceptionModule -- core Module wrapper around semantic_perception.
+"""Tests for PerceptionModule -- core Module wrapper around semantic_perception.
 
 Covers:
 - Port declarations (4 In, 2 Out)

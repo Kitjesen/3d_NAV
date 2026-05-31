@@ -56,6 +56,7 @@ BUILTIN_PLUGIN_MODULES: Mapping[str, tuple[str, ...]] = {
     ),
     "navigation": (
         "nav.navigation_module",
+        "nav.ros2_waypoint_bridge_module",
         "nav.ros2_path_bridge_module",
         "nav.frontier_explorer_module",
         "nav.traversable_frontier_module",
@@ -78,6 +79,7 @@ BUILTIN_PLUGIN_MODULES: Mapping[str, tuple[str, ...]] = {
     ),
     "exploration": (
         "exploration.tare_explorer_module",
+        "exploration.tare_ros2_bridge_module",
         "exploration.exploration_supervisor_module",
     ),
     "perception": (

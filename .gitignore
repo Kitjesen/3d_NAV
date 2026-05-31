@@ -74,8 +74,8 @@ assets/media/*.mp4
 
 # ── Maps & 3D assets (keep example files) ──
 maps/*.pcd
-tools/videos/*.mp4
-tools/videos/*.gif
+docs/media/videos/*.mp4
+docs/media/videos/*.gif
 !src/global_planning/PCT_planner/rsc/PCD/example.pcd
 !src/global_planning/PCT_planner/rsc/tomogram/example.pickle
 

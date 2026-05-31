@@ -9,8 +9,8 @@ existing modules; they are not aspirational.
 ## 1. Module is the only runtime unit
 
 ```
-Right:  Module (algorithm + In/Out ports) â†’ Blueprint orchestration â†’ lingtu.py
-Wrong:  Module + ROS2 Node adapter + launch file â†’ three layers to maintain
+Right:  Module (algorithm + In/Out ports) â†?Blueprint orchestration â†?lingtu.py
+Wrong:  Module + ROS2 Node adapter + launch file â†?three layers to maintain
 ```
 
 Each capability has exactly one implementation, living in a Module.
@@ -19,7 +19,7 @@ There must not be paired files like `xxx.py` (ROS2 Node) plus
 
 ## 2. Blueprint is the only orchestration
 
-LingTu is a library. The entry script (`lingtu.py` â†’ `cli.main.main`) just
+LingTu is a library. The entry script (`lingtu.py` â†?`cli.main.main`) just
 parses CLI flags and calls `full_stack_blueprint(**cfg).build()`. Any
 script can do the same:
 
@@ -51,12 +51,12 @@ used either.
 ## 3. Communication uses In/Out + Transport
 
 ```
-Module A â”€â”€Out[Odometry]â”€â”€wireâ”€â”€In[Odometry]â”€â”€â†’ Module B
+Module A â”€â”€Out[Odometry]â”€â”€wireâ”€â”€In[Odometry]â”€â”€â†?Module B
 
 transport options (per-wire, see core.blueprint._resolve_transport):
-  None / "local"  â€” direct callback, zero latency (default)
-  "dds"           â€” CycloneDDS for cross-process decoupling
-  "shm"           â€” shared memory for high-bandwidth payloads
+  None / "local"  â€?direct callback, zero latency (default)
+  "dds"           â€?CycloneDDS for cross-process decoupling
+  "shm"           â€?shared memory for high-bandwidth payloads
 ```
 
 Modules don't `import rclpy.publisher` or `rclpy.subscription`. ROS2 QoS
@@ -80,16 +80,16 @@ class AutonomyModule(Module, layer=2):
 ```
 
 C++ binaries stay first-class executables, but they are launched and
-restarted from Python â€” not from a `launch.py` file.
+restarted from Python â€?not from a `launch.py` file.
 
 ## 5. Sensors connect directly, no ROS2 driver in the middle
 
 ```
-Right:  Module calls SDK directly â†’ publishes Out[Image]
-        ThunderDriver â†’ gRPC â†’ brainstem
-        CameraBridgeModule â†’ SDK â†’ Out[color_image]/Out[depth_image]
+Right:  Module calls SDK directly â†?publishes Out[Image]
+        ThunderDriver â†?gRPC â†?brainstem
+        CameraBridgeModule â†?SDK â†?Out[color_image]/Out[depth_image]
 
-Wrong:  ros2 run livox_driver â†’ /livox/lidar topic â†’ rclpy subscriber
+Wrong:  ros2 run livox_driver â†?/livox/lidar topic â†?rclpy subscriber
 ```
 
 If a sensor has a Python SDK, the Module talks to it directly. If only a
@@ -112,13 +112,13 @@ ROS2 message types only appear inside the C++ subprocess of a
 ## 7. Configuration is constructor parameters, not ROS2 parameters
 
 ```python
-# Right â€” Blueprint config
+# Right â€?Blueprint config
 bp.add(DetectorModule, detector="bpu", confidence=0.5)
 
-# Right â€” CLI override
+# Right â€?CLI override
 python lingtu.py nav --detector bpu
 
-# Wrong â€” ROS2 parameters
+# Wrong â€?ROS2 parameters
 self.declare_parameter("detector", "yoloe")
 ```
 
@@ -147,9 +147,9 @@ Modules do not contain `if name == "bpu": from ... import BPU`.
 
 ```
 src/nav/
-  navigation_module.py        # Module â€” the only implementation
-  safety_ring_module.py       # Module â€” the only implementation
-  cmd_vel_mux_module.py       # Module â€” the only implementation
+  navigation_module.py        # Module â€?the only implementation
+  safety_ring_module.py       # Module â€?the only implementation
+  cmd_vel_mux_module.py       # Module â€?the only implementation
 
 src/semantic/perception/semantic_perception/
   perception_module.py        # Module
@@ -157,7 +157,7 @@ src/semantic/perception/semantic_perception/
   instance_tracker.py         # pure algorithm called by the Module
 
 src/drivers/thunder/
-  thunder_driver.py / han_dog_module.py   # Module â€” gRPC client
+  thunder_driver.py / han_dog_module.py   # Module â€?gRPC client
 ```
 
 Patterns that no longer exist in this repo:
@@ -172,7 +172,7 @@ The single exception is the SLAM stack: Fast-LIO2 / Point-LIO / Localizer
 are kept as ROS2 C++ nodes because they are deeply coupled to TF and PCL.
 They are launched and supervised from `slam.SLAMModule` /
 `slam.SlamBridgeModule` via `NativeModule`. Their algorithm-side launch
-files live under `launch/profiles/` and are loaded by the Module â€” not by
+files live under `launch/profiles/` and are loaded by the Module â€?not by
 a human running `ros2 launch`.
 
 ## Verification checklist

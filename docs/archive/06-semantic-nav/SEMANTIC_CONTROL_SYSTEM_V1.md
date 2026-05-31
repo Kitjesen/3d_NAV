@@ -174,7 +174,7 @@ Full table is in `chinese_tokenizer.py` and `task_rules.py`.
 
 ## 8. Tests
 
-Located in `src/semantic/planner/test/`:
+Located in `src/semantic/planner/tests/`:
 
 | Test | Focus |
 |------|-------|

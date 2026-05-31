@@ -269,10 +269,6 @@ class NavigationModule(Module, layer=5):
         self._patrol_index = 0
         self._patrol_loop = False
 
-        # Optional ROS2 bridge (set in setup)
-        self._ros2_node = None
-        self._ros2_wp_pub = None
-
         # W2-8: latest terrain class from TerrainModule — defaults to "unknown"
         # which triggers the conservative backup+rotate recovery strategy.
         self._latest_traversability_class: str = "unknown"
@@ -292,29 +288,15 @@ class NavigationModule(Module, layer=5):
         self.traversability.subscribe(self._on_traversability)
         self.map_frame_jump_event.subscribe(self._on_map_frame_jump)
 
+        # DEPRECATED: ROS2 waypoint bridge is now a separate module
+        # (nav.ros2_waypoint_bridge_module.ROS2WaypointBridgeModule).
+        # The enable_ros2_bridge parameter is kept as a no-op for backward
+        # compatibility; set it at the blueprint level instead.
         if self._enable_ros2_bridge:
-            try:
-                from geometry_msgs.msg import PointStamped
-                from rclpy.node import Node
-                from rclpy.qos import QoSProfile, ReliabilityPolicy
-
-                from core.ros2_context import ensure_rclpy, get_shared_executor
-
-                ensure_rclpy()
-                self._ros2_node = Node("nav_waypoint_bridge")
-                qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
-                self._ros2_wp_pub = self._ros2_node.create_publisher(
-                    PointStamped, TOPICS.nav_way_point, qos
-                )
-                get_shared_executor().add_node(self._ros2_node)
-                logger.info(
-                    "NavigationModule: ROS2 waypoint bridge enabled -> %s",
-                    TOPICS.nav_way_point,
-                )
-            except (ImportError, Exception) as e:
-                logger.debug("NavigationModule: ROS2 not available: %s", e)
-        else:
-            logger.info("NavigationModule: ROS2 bridge disabled (Python autonomy stack active)")
+            logger.info(
+                "NavigationModule: enable_ros2_bridge is deprecated — "
+                "use ROS2WaypointBridgeModule in the blueprint stack instead"
+            )
 
         self._set_state(MissionState.IDLE)
 
@@ -2092,17 +2074,8 @@ class NavigationModule(Module, layer=5):
             ts=time.time(),
         )
         self.waypoint.publish(pose)
-        if self._ros2_wp_pub is not None:
-            try:
-                from geometry_msgs.msg import PointStamped
-                pt = PointStamped()
-                pt.header.frame_id = self._planning_frame_id
-                pt.point.x = float(wp[0])
-                pt.point.y = float(wp[1])
-                pt.point.z = float(wp[2]) if len(wp) > 2 else 0.0
-                self._ros2_wp_pub.publish(pt)
-            except Exception:
-                pass
+        # ROS2 waypoint publishing moved to ROS2WaypointBridgeModule
+        # (nav.ros2_waypoint_bridge_module).  Subscribe to self.waypoint.
 
     # ── Skills (auto-discovered by MCPServerModule) ───────────────────────
 
@@ -2237,9 +2210,6 @@ class NavigationModule(Module, layer=5):
 
     def stop(self) -> None:
         self._request_recovery_stop()
-        if self._ros2_node is not None:
-            self._ros2_node.destroy_node()
-            self._ros2_node = None
         self._preview_executor.shutdown(wait=False, cancel_futures=True)
         super().stop()
 

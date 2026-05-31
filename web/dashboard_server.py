@@ -8,7 +8,7 @@ Two connection methods:
   2. gRPC direct to robot:50051 - proto services (System, Control, Telemetry, Data)
 
 Usage:
-    python tools/dashboard_server.py
+    python web/dashboard_server.py
     # Open http://localhost:8066
 """
 import asyncio

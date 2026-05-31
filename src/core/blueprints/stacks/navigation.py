@@ -66,6 +66,31 @@ def navigation(
         **nav_config,
     )
 
+    if config.get("enable_ros2_bridge", False):
+        ROS2WaypointBridgeModule = optional_stack_module(
+            "navigation",
+            "ros2_waypoint_bridge",
+            seed_group="navigation",
+            fallback="nav.ros2_waypoint_bridge_module.ROS2WaypointBridgeModule",
+        )
+        if ROS2WaypointBridgeModule is not None:
+            waypoint_bridge_config = {}
+            if "planning_frame_id" in config:
+                waypoint_bridge_config["default_frame_id"] = config["planning_frame_id"]
+            bp.add(
+                ROS2WaypointBridgeModule,
+                alias="ROS2WaypointBridgeModule",
+                **waypoint_bridge_config,
+            )
+            bp.wire(
+                "NavigationModule",
+                "waypoint",
+                "ROS2WaypointBridgeModule",
+                "waypoint",
+            )
+        else:
+            logger.warning("ROS2 waypoint bridge not available")
+
     if config.get("enable_ros2_path_bridge", False):
         ROS2PathBridgeModule = optional_stack_module(
             "navigation",

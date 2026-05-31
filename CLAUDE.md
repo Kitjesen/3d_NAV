@@ -156,7 +156,7 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 | `slam/` | SLAMModule (Fast-LIO2/Point-LIO/Localizer), SlamBridgeModule, C++ SLAM nodes |
 | `global_planning/` | PCT_planner (C++ ele_planner.so) + _AStarBackend / _PCTBackend (via Registry) |
 
-Note: `calibration/` lives at repo root (not under `src/`). See [Sensor Calibration](#sensor-calibration-calibration) section.
+Note: `calibration/` and `sim/` live at repo root (not under `src/`). See [Sensor Calibration](#sensor-calibration-calibration) section. For `sim/`, see the `sim/engine/` documentation below.
 
 ## Key Files
 
@@ -193,12 +193,16 @@ Note: `calibration/` lives at repo root (not under `src/`). See [Sensor Calibrat
 | `config/robot_config.yaml` | Robot physical parameters (single source of truth) |
 | `config/dufomap.toml` | Lingtu-tuned DUFOMap config (Livox Mid-360 thresholds) |
 | `docs/05-specialized/dynamic_obstacle_removal.md` | DUFOMap Phase 2 design + roadmap |
+| `sim/engine/README.md` | Simulation platform core — SimEngine, MuJoCo, bridge, scenarios, worlds |
 
 ## Build and Test Commands
 
 ```bash
 # Framework tests (primary, no ROS2 needed)
 python -m pytest src/core/tests/ -q                    # 1226 tests, ~5s
+
+# Simulation tests (MuJoCo/Gazebo contract validation, no robot needed)
+python -m pytest sim/tests/ -q                         # ~20 scenario-level tests
 
 # C++ nav_core tests (standalone, no ROS2)
 cd src/nav/core && mkdir -p build && cd build
@@ -246,7 +250,7 @@ CMakeLists.txt 确保 ROS2 ament_cmake 和 standalone 两个路径都启用 xsim
 - `src/core/stream.py` — In[T]/Out[T] ports (data flow backbone)
 - `src/core/registry.py` — Plugin registry (all backends depend on it)
 - `src/core/utils/` — Cross-layer utilities (18+ files import from here)
-- `src/semantic/perception/.../instance_tracker.py` — Scene graph builder
+- `src/semantic/perception/semantic_perception/.../instance_tracker.py` — Scene graph builder
 - `src/semantic/planner/.../goal_resolver.py` — 5-level resolution chain
 - `config/robot_config.yaml` — Robot physical parameters
 

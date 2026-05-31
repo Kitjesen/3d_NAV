@@ -147,6 +147,11 @@ class TAREExplorerModule(Module, layer=5):
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
+    # ROS2_BRIDGE: The preflight rclpy check is for the legacy fallback path
+    # (``_try_rclpy``).  New deployments should use cyclonedds OR add the
+    # separate ``TAREROS2BridgeModule`` (exploration.tare_ros2_bridge_module).
+    # Revisit when the cyclonedds path is proven stable on all target hardware.
+
     def preflight(self) -> str | None:
         """Verify that at least one DDS backend is reachable before the system starts."""
         has_cyclonedds = False
@@ -210,6 +215,7 @@ class TAREExplorerModule(Module, layer=5):
             except Exception:
                 pass
             self._reader = None
+        # ROS2_BRIDGE: rclpy node cleanup (legacy fallback).
         if self._rclpy_node is not None:
             try:
                 self._rclpy_node.destroy_node()
@@ -265,6 +271,11 @@ class TAREExplorerModule(Module, layer=5):
         except Exception as e:
             logger.warning("TAREExplorerModule: cyclonedds init failed: %s", e)
             return False
+
+    # ROS2_BRIDGE: ``_try_rclpy`` is the legacy rclpy fallback.  The
+    # extracted ``TAREROS2BridgeModule`` (exploration/tare_ros2_bridge_module.py)
+    # provides equivalent functionality as a standalone Module.  Remove this
+    # path when cyclonedds is confirmed on all target robots.
 
     def _try_rclpy(self) -> bool:
         """Fallback: rclpy subscribe + publish via shared executor."""
@@ -420,7 +431,8 @@ class TAREExplorerModule(Module, layer=5):
         except Exception:
             pass
 
-    # ── Callbacks: rclpy path ────────────────────────────────────────────
+    # ROS2_BRIDGE: rclpy callbacks (legacy fallback).  The extracted
+    # ``TAREROS2BridgeModule`` handles these equivalently.
 
     def _on_rclpy_waypoint(self, msg) -> None:
         try:
@@ -616,6 +628,8 @@ class TAREExplorerModule(Module, layer=5):
             for x, y in self._last_goal_candidates
         )
 
+    # ROS2_BRIDGE: rclpy runtime/finish callbacks.
+
     def _on_rclpy_runtime(self, msg) -> None:
         self._last_runtime_ms = float(msg.data)
 
@@ -694,6 +708,7 @@ class TAREExplorerModule(Module, layer=5):
                 msg = self._cyclonedds_bool_type(data=bool(enable))
                 self._cyclonedds_publisher.write(msg)
                 return
+            # ROS2_BRIDGE: rclpy start-signal publish (legacy fallback).
             if self._publisher is not None:
                 msg = self._rclpy_bool_type()
                 msg.data = bool(enable)

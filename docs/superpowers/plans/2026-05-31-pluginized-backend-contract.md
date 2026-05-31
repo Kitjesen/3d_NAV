@@ -214,7 +214,7 @@ Existing aliases in `_BACKEND_ALIASES` must continue resolving to the same clien
 Run:
 
 ```bash
-python -m pytest src/core/tests/test_llm_client_registry.py src/semantic/planner/test/test_planner_node_init.py::TestSemanticPlannerInit -q
+python -m pytest src/core/tests/test_llm_client_registry.py src/semantic/planner/tests/test_planner_node_init.py::TestSemanticPlannerInit -q
 ```
 
 ---
