@@ -22,7 +22,7 @@ from core.devices.drivers.serial_nmea0183 import (
     SerialNmea0183Device,
     driver_registry,
 )
-from core.devices.spec import DeviceSpec, TopicSpec, UdevMatch
+from core.devices.spec import DeviceSpec
 from core.msgs.gnss import GnssFixType
 
 # ═══════════════════════════════════════════════════════════════════

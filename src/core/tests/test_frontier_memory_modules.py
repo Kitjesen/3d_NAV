@@ -5,8 +5,8 @@ TaggedLocationsModule -- frontier exploration and memory Module conversions.
 import numpy as np
 import pytest
 
-from core import Blueprint, In, Module, Out, autoconnect
-from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
+from core import Module, Out, autoconnect
+from core.msgs.geometry import Pose, PoseStamped, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.semantic import Detection3D, SceneGraph
 from memory.modules.episodic_module import EpisodicMemoryModule

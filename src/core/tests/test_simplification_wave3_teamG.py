@@ -81,7 +81,6 @@ class TestTSDFColorVolumeInterface:
         sys.modules["open3d.pipelines.integration"] = self._o3d_mock.pipelines.integration
 
         # Fresh import of the module under test
-        import importlib
         if "semantic.reconstruction.reconstruction_module" in sys.modules:
             del sys.modules["semantic.reconstruction.reconstruction_module"]
         from semantic.reconstruction.reconstruction_module import TSDFColorVolume
@@ -152,7 +151,6 @@ class TestSemanticScoringWeightsConfig:
 
     def _reset_module_globals(self) -> None:
         """Reset loaded flags so tests are independent."""
-        import importlib
 
         # fast_path
         if "semantic.planner.fast_path" in sys.modules:

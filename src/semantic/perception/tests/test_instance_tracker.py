@@ -9,16 +9,12 @@ test_instance_tracker.py — 实例追踪器单元测试
 """
 
 import json
-import time
 import unittest
 
 import numpy as np
-import pytest
 
 from semantic.perception.instance_tracker import (
-    RELATION_NEAR_THRESHOLD,
     InstanceTracker,
-    RoomNode,
     TrackedObject,
     infer_room_type,
 )

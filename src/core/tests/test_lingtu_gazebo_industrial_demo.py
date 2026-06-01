@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_lingtu_gazebo_industrial_demo_has_single_visible_entrypoint():
     script = ROOT / "sim/scripts/launch_lingtu_gazebo_industrial_demo.sh"
-    rviz = ROOT / "tests/planning/lingtu_industrial_demo.rviz"
+    rviz = ROOT / "sim/planning/lingtu_industrial_demo.rviz"
     world = ROOT / "sim/worlds/gazebo/lingtu_gazebo_industrial_park.sdf"
 
     text = script.read_text(encoding="utf-8")

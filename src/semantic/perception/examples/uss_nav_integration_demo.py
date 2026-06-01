@@ -17,7 +17,6 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.spatial.topology_graph import TopologySemGraph
 from semantic.perception.geometry_extractor import GeometryExtractor
 from semantic.perception.hybrid_planner import HybridPlanner
 from semantic.perception.leiden_segmentation import (
@@ -79,6 +78,8 @@ def create_mock_environment():
 
 def demo_geometry_enhanced_topology(tomogram):
     """演示几何增强拓扑图。"""
+    from memory.spatial.topology_graph import TopologySemGraph
+
     print("=" * 60)
     print("1. 几何增强拓扑图")
     print("=" * 60)

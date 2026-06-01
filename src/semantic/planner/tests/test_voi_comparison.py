@@ -4,7 +4,6 @@
 PYTHONPATH: src/semantic_planner
 """
 
-import math
 import sys
 import time
 

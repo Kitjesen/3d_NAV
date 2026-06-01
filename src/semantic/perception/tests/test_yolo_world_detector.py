@@ -14,13 +14,12 @@ YOLO-World检测器单元测试 (与实际 yolo_world_detector.py API 对齐)
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock
 
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from semantic.perception.detector_base import Detection2D
 from semantic.perception.yolo_world_detector import YOLOWorldDetector
 
 

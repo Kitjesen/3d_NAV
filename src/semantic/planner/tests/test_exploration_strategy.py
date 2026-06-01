@@ -6,7 +6,6 @@ import json
 import unittest
 
 import numpy as np
-import pytest
 
 from semantic.planner.exploration_strategy import (
     extract_frontier_scene_data,

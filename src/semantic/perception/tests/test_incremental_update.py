@@ -12,7 +12,6 @@ import sys
 import time
 
 import numpy as np
-import pytest
 
 # 把 src 路径加入 sys.path, 使 import 不依赖 ROS2 安装
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -20,7 +19,7 @@ _SRC_DIR = os.path.join(_REPO_ROOT, "src", "semantic_perception")
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-from semantic.perception.instance_tracker import InstanceTracker, TrackedObject
+from semantic.perception.instance_tracker import InstanceTracker
 from semantic.perception.projection import Detection3D
 
 # ─────────────────────────────────────────────

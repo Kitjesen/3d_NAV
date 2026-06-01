@@ -8,7 +8,6 @@ Items covered:
 from __future__ import annotations
 
 import asyncio
-import time
 import unittest
 from unittest import mock
 
@@ -33,9 +32,9 @@ def _make_bbox_navigator():
     mock_cfg.camera = mock_cam
 
     with mock.patch(
-        "semantic_planner.bbox_navigator.get_config", return_value=mock_cfg
+        "semantic.planner.bbox_navigator.get_config", return_value=mock_cfg
     ):
-        from semantic_planner.bbox_navigator import BBoxNavConfig, BBoxNavigator
+        from semantic.planner.bbox_navigator import BBoxNavConfig, BBoxNavigator
         nav = BBoxNavigator(BBoxNavConfig())
     return nav
 
@@ -103,7 +102,7 @@ class TestW211VlmBboxQueryRetryCache(unittest.TestCase):
 
     def setUp(self):
         # Reset module-level cache before each test
-        import semantic_planner.vlm_bbox_query as mod
+        import semantic.planner.vlm_bbox_query as mod
         mod._bbox_cache.clear()
         self.mod = mod
 
@@ -210,7 +209,7 @@ class _AsyncMockLLM:
 class TestW212AgentLoopValidation(unittest.TestCase):
 
     def _make_loop(self, llm):
-        from semantic_planner.agent_loop import AgentLoop
+        from semantic.planner.agent_loop import AgentLoop
         return AgentLoop(
             llm_client=llm,
             tool_registry={},

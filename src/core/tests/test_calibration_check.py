@@ -2,9 +2,8 @@
 
 import unittest
 from dataclasses import dataclass
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import numpy as np
 
 
 # Minimal config stubs for testing (avoid importing real config)

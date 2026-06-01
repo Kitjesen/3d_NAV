@@ -4,15 +4,9 @@ Pure unit tests -- no ROS2, no hardware, no LLM API calls.
 Follows the patterns established in test_llm_module.py.
 """
 
-import importlib
 import json
-import math
-import threading
-import time
 import unittest
-from unittest.mock import MagicMock, PropertyMock, patch
 
-import numpy as np
 
 # ---------------------------------------------------------------------------
 # 1. VisualServoModule
@@ -478,7 +472,7 @@ class TestFrontierModuleOdomFiltering(unittest.TestCase):
         return FrontierModule()
 
     def _odom(self, x, y):
-        from core.msgs.geometry import Pose, Vector3
+        from core.msgs.geometry import Pose
         from core.msgs.nav import Odometry
         return Odometry(pose=Pose(x, y, 0.0))
 

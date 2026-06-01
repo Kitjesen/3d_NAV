@@ -5,7 +5,6 @@
     cd src/semantic_planner && python -m pytest test/test_vlm_bbox_query.py -v
 """
 
-import pytest
 
 from semantic.planner.vlm_bbox_query import (
     _build_bbox_prompt,

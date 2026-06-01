@@ -39,7 +39,7 @@ for _p in [_repo, _src]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+from core.msgs.geometry import Pose, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.semantic import SafetyState, SceneGraph
 from core.stream import In, Out

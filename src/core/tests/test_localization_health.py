@@ -18,10 +18,12 @@ import time
 import unittest
 from types import SimpleNamespace
 
+import pytest
+
 # Ensure src/ is on path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from core.msgs.geometry import Pose, Quaternion, Vector3
+from core.msgs.geometry import Pose, Vector3
 from core.msgs.nav import Odometry
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1520,6 +1522,7 @@ def _make_successful_recovery_bridge(*, backend_profile):
     return m
 
 
+@pytest.mark.skipif(os.name == "nt", reason="systemd service manager not available on Windows")
 def test_bridge_recovery_does_not_claim_external_localization_services(monkeypatch):
     import core.service_manager as service_manager
 
@@ -1533,6 +1536,7 @@ def test_bridge_recovery_does_not_claim_external_localization_services(monkeypat
     assert fake.ensures == [(("slam",), False), (("localizer",), False)]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="systemd service manager not available on Windows")
 def test_managed_localizer_recovery_keeps_service_ownership(monkeypatch):
     import core.service_manager as service_manager
 

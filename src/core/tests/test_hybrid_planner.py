@@ -16,7 +16,6 @@ import numpy as np
 import pytest
 
 from semantic.perception.hybrid_planner import (
-    HybridPath,
     HybridPlanner,
     _astar_on_grid,
     _downsample_cells,

@@ -16,7 +16,6 @@ import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 
 from semantic.planner.goal_resolver import GoalResolver
 from semantic.planner.llm_client import LLMConfig

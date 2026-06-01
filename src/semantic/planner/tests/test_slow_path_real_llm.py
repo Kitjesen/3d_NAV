@@ -21,7 +21,6 @@ import json
 import os
 import unittest
 
-import pytest
 
 from semantic.planner.goal_resolver import GoalResolver
 from semantic.planner.llm_client import LLMConfig

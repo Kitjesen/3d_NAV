@@ -704,7 +704,7 @@ def test_robot_fastlio2_service_matches_adapter_alias_contract():
 
     for source, target in adapter_remappings("fastlio2").items():
         assert f"-r {source}:={target}" in text
-    assert f"-r /path:=/lio_path" in text
+    assert "-r /path:=/lio_path" in text
 
 
 def test_s100p_lidar_service_normalizes_livox_topics_at_adapter_boundary():

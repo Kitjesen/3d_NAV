@@ -12,9 +12,8 @@ test_topological_memory.py — 拓扑记忆单元测试
 import unittest
 
 import numpy as np
-import pytest
 
-from semantic.planner.topological_memory import TopologicalMemory, TopoNode
+from semantic.planner.topological_memory import TopologicalMemory
 
 
 class TestNodeCreation(unittest.TestCase):

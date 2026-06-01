@@ -10,13 +10,9 @@ import yaml
 from drivers.robot_profile import (
     STUB_PROFILE,
     THUNDER_V3_PROFILE,
-    ConnectionConfig,
-    ControlLimits,
     MountSpec,
-    PowerSpec,
     RobotKinematics,
     RobotProfile,
-    SafetyLimits,
     get_profile,
     list_profiles,
     load_profiles_from_yaml,

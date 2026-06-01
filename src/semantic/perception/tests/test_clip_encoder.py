@@ -14,7 +14,7 @@ CLIP编码器单元测试 (与实际 clip_encoder.py API 对齐)
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock
 
 import numpy as np
 import pytest

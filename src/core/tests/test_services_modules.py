@@ -10,9 +10,8 @@ import json
 import os
 import tempfile
 
-import pytest
 
-from core import In, Module, Out
+from core import In, Out
 from core.msgs.nav import Odometry
 from core.msgs.semantic import SceneGraph
 from core.msgs.sensor import CameraIntrinsics, Image

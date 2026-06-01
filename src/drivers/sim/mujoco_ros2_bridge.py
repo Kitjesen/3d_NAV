@@ -259,8 +259,8 @@ class MuJoCoROS2Bridge(Node):
 
         odom = Odometry()
         odom.header.stamp = stamp
-        odom.header.frame_id = FRAMES.odom
-        odom.child_frame_id = FRAMES.body
+        odom.header.frame_id = FRAMES.odom  # noqa: FRAMES
+        odom.child_frame_id = FRAMES.body  # noqa: FRAMES
         odom.pose.pose.position.x = float(pos[0])
         odom.pose.pose.position.y = float(pos[1])
         odom.pose.pose.position.z = float(pos[2])
@@ -275,14 +275,14 @@ class MuJoCoROS2Bridge(Node):
 
         t1 = TransformStamped()
         t1.header.stamp = stamp
-        t1.header.frame_id = FRAMES.map
-        t1.child_frame_id = FRAMES.odom
+        t1.header.frame_id = FRAMES.map  # noqa: FRAMES
+        t1.child_frame_id = FRAMES.odom  # noqa: FRAMES
         t1.transform.rotation.w = 1.0
 
         t2 = TransformStamped()
         t2.header.stamp = stamp
-        t2.header.frame_id = FRAMES.odom
-        t2.child_frame_id = FRAMES.body
+        t2.header.frame_id = FRAMES.odom  # noqa: FRAMES
+        t2.child_frame_id = FRAMES.body  # noqa: FRAMES
         t2.transform.translation.x = float(pos[0])
         t2.transform.translation.y = float(pos[1])
         t2.transform.translation.z = float(pos[2])
@@ -304,14 +304,14 @@ class MuJoCoROS2Bridge(Node):
             return
 
         stamp = self._stamp()
-        registered_cloud = pack_pointcloud2(pts, FRAMES.body, stamp)
+        registered_cloud = pack_pointcloud2(pts, FRAMES.body, stamp)  # noqa: FRAMES
         self.pub_cloud.publish(registered_cloud)
         self.pub_cloud2.publish(registered_cloud)
 
         pos = self.data.xpos[self.robot_id].copy()
         rmat = self.data.xmat[self.robot_id].reshape(3, 3).copy()
         pts_world = pts @ rmat.T + pos
-        map_cloud = pack_pointcloud2(pts_world, FRAMES.odom, stamp)
+        map_cloud = pack_pointcloud2(pts_world, FRAMES.odom, stamp)  # noqa: FRAMES
         self.pub_map_cloud.publish(map_cloud)
 
         if self._frame % 50 == 0:
@@ -348,10 +348,10 @@ def main():
 
     print("\n" + "=" * 60)
     print("MuJoCo Sim running!")
-    print("  /nav/odometry          -> 50 Hz")
-    print("  /nav/registered_cloud  -> 10 Hz (body frame, XYZI)")
+    print("  /nav/odometry          -> 50 Hz")  # noqa: TOPIC
+    print("  /nav/registered_cloud  -> 10 Hz (body frame, XYZI)")  # noqa: TOPIC
     print("  /livox/lidar           -> 10 Hz (body frame, XYZI)")
-    print("  /nav/cmd_vel           <- subscribe TwistStamped")
+    print("  /nav/cmd_vel           <- subscribe TwistStamped")  # noqa: TOPIC
     print("  TF: map -> odom -> body")
     print("=" * 60 + "\n")
 

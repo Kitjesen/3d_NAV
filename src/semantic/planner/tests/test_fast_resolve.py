@@ -12,7 +12,6 @@ test_fast_resolve.py — 目标解析器 Fast Path + 选择性 Grounding 测试
 import json
 import unittest
 
-import pytest
 
 from semantic.planner.goal_resolver import GoalResolver
 from semantic.planner.llm_client import LLMConfig

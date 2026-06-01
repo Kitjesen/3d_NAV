@@ -12,10 +12,8 @@ import time
 import unittest
 
 import numpy as np
-import pytest
 
 from semantic.planner.action_executor import (
-    ActionCommand,
     ActionExecutor,
     ActionStatus,
 )

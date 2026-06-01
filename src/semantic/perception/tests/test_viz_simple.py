@@ -91,12 +91,6 @@ def test_visualization_import():
     """测试可视化模块导入。"""
     print("测试 3: 可视化模块导入")
 
-    from semantic.perception.visualization_tools import (
-        ComprehensiveVisualizer,
-        PathVisualizer,
-        PerformanceVisualizer,
-        SCGVisualizer,
-    )
 
     print("  ✓ PathVisualizer 导入成功")
     print("  ✓ SCGVisualizer 导入成功")

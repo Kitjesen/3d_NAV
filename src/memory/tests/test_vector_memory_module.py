@@ -6,10 +6,8 @@ Follows patterns from test_memory_modules.py.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import unittest
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 

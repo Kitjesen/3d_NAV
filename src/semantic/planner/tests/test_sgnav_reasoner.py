@@ -7,7 +7,6 @@ import json
 import unittest
 
 import numpy as np
-import pytest
 
 from semantic.planner.frontier_scorer import Frontier
 from semantic.planner.sgnav_reasoner import SGNavReasoner

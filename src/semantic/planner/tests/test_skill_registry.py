@@ -4,7 +4,6 @@
     cd src/semantic_planner && python -m pytest test/test_skill_registry.py -v
 """
 
-import pytest
 from src.legacy.semantic.skill_registry import (
     LingTuNavigationSkills,
     SkillRegistry,
@@ -302,7 +301,7 @@ class TestToLangchainTools:
     def test_langchain_tools_count_if_available(self):
         """如果 langchain_core 可用，tools 数量应等于已注册 skill 数量。"""
         try:
-            import langchain_core
+            import langchain_core  # noqa: F401 -- availability check
             tools = self.registry.to_langchain_tools()
             assert len(tools) == 11
         except ImportError:

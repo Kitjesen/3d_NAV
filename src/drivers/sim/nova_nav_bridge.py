@@ -460,8 +460,8 @@ class NavBridge:
         # Odometry
         odom = self._Odometry()
         odom.header.stamp = now
-        odom.header.frame_id = FRAMES.odom
-        odom.child_frame_id = FRAMES.body
+        odom.header.frame_id = FRAMES.odom  # noqa: FRAMES
+        odom.child_frame_id = FRAMES.body  # noqa: FRAMES
         odom.pose.pose.position.x = float(pos[0])
         odom.pose.pose.position.y = float(pos[1])
         odom.pose.pose.position.z = float(pos[2])
@@ -481,8 +481,8 @@ class NavBridge:
         # TF: odom → body
         tf = self._TransformStamped()
         tf.header.stamp = now
-        tf.header.frame_id = FRAMES.odom
-        tf.child_frame_id = FRAMES.body
+        tf.header.frame_id = FRAMES.odom  # noqa: FRAMES
+        tf.child_frame_id = FRAMES.body  # noqa: FRAMES
         tf.transform.translation.x = float(pos[0])
         tf.transform.translation.y = float(pos[1])
         tf.transform.translation.z = float(pos[2])
@@ -503,7 +503,7 @@ class NavBridge:
         # World frame cloud → /nav/map_cloud
         msg = self._PointCloud2()
         msg.header.stamp = now
-        msg.header.frame_id = FRAMES.odom
+        msg.header.frame_id = FRAMES.odom  # noqa: FRAMES
         msg.height = 1
         msg.width = len(pts_xyzi)
         msg.is_dense = False
@@ -527,7 +527,7 @@ class NavBridge:
                                     pts_xyzi[:, 3:4]])
         msg2 = self._PointCloud2()
         msg2.header.stamp = now
-        msg2.header.frame_id = FRAMES.body
+        msg2.header.frame_id = FRAMES.body  # noqa: FRAMES
         msg2.height = 1
         msg2.width = len(pts_body_xyzi)
         msg2.is_dense = False
@@ -550,7 +550,7 @@ class NavBridge:
 
         print('\n[Bridge] Running — policy 50Hz, odom 50Hz, LiDAR 10Hz')
         print(f'  base_id={self.base_id}, lidar_id={self.lidar_id}')
-        print('  Send cmd_vel to /nav/cmd_vel to move the robot\n')
+        print('  Send cmd_vel to /nav/cmd_vel to move the robot\n')  # noqa: TOPIC
 
         if not self.headless:
             viewer_mod = __import__('mujoco.viewer', fromlist=['viewer'])

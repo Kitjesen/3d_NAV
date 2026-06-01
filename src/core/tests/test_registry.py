@@ -1,6 +1,5 @@
 """Tests for core.registry — plugin registration and lookup."""
 
-import copy
 
 import pytest
 

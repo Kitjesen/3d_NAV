@@ -12,14 +12,12 @@ test_topology_graph.py — 拓扑语义图单元测试
   - to_prompt_context()
 """
 
-import time
 import unittest
 
 import numpy as np
 
 from memory.spatial.topology_graph import (
     ExplorationTarget,
-    TopoEdge,
     TopologySemGraph,
     TopoNode,
 )

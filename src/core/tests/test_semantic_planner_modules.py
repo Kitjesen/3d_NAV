@@ -11,10 +11,9 @@ Covers:
 import json
 import math
 
-import pytest
 
-from core import Blueprint, In, Module, Out, autoconnect
-from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+from core import Module, Out, autoconnect
+from core.msgs.geometry import Pose, PoseStamped, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.semantic import Detection3D, SceneGraph
 from core.msgs.semantic import GoalResult as MsgGoalResult

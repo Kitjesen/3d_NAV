@@ -10,7 +10,6 @@ internal implementation details or algorithmic correctness.
 """
 from __future__ import annotations
 
-import pytest
 
 
 # =============================================================================

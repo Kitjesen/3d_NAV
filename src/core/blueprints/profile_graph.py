@@ -82,6 +82,9 @@ class WireEdge:
 @dataclass(frozen=True)
 class ProfileGraph:
     """DAG representation of a runtime profile: which modules and explicit wires it includes."""
+    profile: str
+    modules: tuple[str, ...]
+    explicit_wires: tuple[WireEdge, ...]
 
     def as_snapshot(self) -> dict[str, list[str]]:
         return {

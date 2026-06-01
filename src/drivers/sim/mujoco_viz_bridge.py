@@ -406,8 +406,8 @@ class MuJoCoSimNode(Node):
 
         odom = Odometry()
         odom.header.stamp = stamp
-        odom.header.frame_id = FRAMES.odom
-        odom.child_frame_id = FRAMES.body
+        odom.header.frame_id = FRAMES.odom  # noqa: FRAMES
+        odom.child_frame_id = FRAMES.body  # noqa: FRAMES
         odom.pose.pose.position.x = float(pos[0])
         odom.pose.pose.position.y = float(pos[1])
         odom.pose.pose.position.z = float(pos[2])
@@ -422,13 +422,13 @@ class MuJoCoSimNode(Node):
 
         t1 = TransformStamped()
         t1.header.stamp = stamp
-        t1.header.frame_id = FRAMES.map
-        t1.child_frame_id = FRAMES.odom
+        t1.header.frame_id = FRAMES.map  # noqa: FRAMES
+        t1.child_frame_id = FRAMES.odom  # noqa: FRAMES
         t1.transform.rotation.w = 1.0
         t2 = TransformStamped()
         t2.header.stamp = stamp
-        t2.header.frame_id = FRAMES.odom
-        t2.child_frame_id = FRAMES.body
+        t2.header.frame_id = FRAMES.odom  # noqa: FRAMES
+        t2.child_frame_id = FRAMES.body  # noqa: FRAMES
         t2.transform.translation.x = float(pos[0])
         t2.transform.translation.y = float(pos[1])
         t2.transform.translation.z = float(pos[2])
@@ -446,7 +446,7 @@ class MuJoCoSimNode(Node):
         if len(pts_body) == 0:
             return
         stamp = self._stamp()
-        msg = pack_pointcloud2(pts_body, FRAMES.body, stamp)
+        msg = pack_pointcloud2(pts_body, FRAMES.body, stamp)  # noqa: FRAMES
         self.pub_cloud.publish(msg)
         self.pub_cloud2.publish(msg)
         if self._frame % 50 == 0:

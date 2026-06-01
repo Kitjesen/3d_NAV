@@ -8,7 +8,6 @@
 import time
 
 import numpy as np
-import pytest
 
 from semantic.planner.bbox_navigator import (
     STATE_ARRIVED,

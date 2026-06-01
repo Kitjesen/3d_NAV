@@ -19,7 +19,6 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from semantic.perception.global_coverage_mask import (
-    CoverageCell,
     GlobalCoverageMask,
 )
 from semantic.perception.polyhedron_expansion import (

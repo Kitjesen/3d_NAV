@@ -1,10 +1,8 @@
 """PersonTracker 单元测试。"""
-import math
 import time
 
-import pytest
 
-from semantic.planner.person_tracker import PersonTracker, TrackedPerson
+from semantic.planner.person_tracker import PersonTracker
 
 # ── helpers ──
 

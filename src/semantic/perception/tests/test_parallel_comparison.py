@@ -22,9 +22,8 @@
 import sys
 import time
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -393,9 +392,6 @@ class HybridPlannerWrapper:
     def __init__(self):
         self._available = False
         try:
-            from semantic.perception.hybrid_planner import (
-                HybridPlanner,
-            )
             self._available = True
         except Exception as exc:
             self._error = str(exc)
@@ -471,10 +467,6 @@ class SCGPlannerWrapper:
     def __init__(self):
         self._available = False
         try:
-            from semantic.perception.scg_builder import SCGBuilder
-            from semantic.perception.scg_path_planner import (
-                SCGPathPlanner,
-            )
             self._available = True
         except Exception as exc:
             self._error = str(exc)

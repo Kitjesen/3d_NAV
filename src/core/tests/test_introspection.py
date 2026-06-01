@@ -1,10 +1,9 @@
 """Tests for core.introspection and core.resource_monitor."""
 
-import pytest
 
 from core.blueprint import Blueprint, autoconnect
 from core.module import Module
-from core.msgs.geometry import PoseStamped, Vector3
+from core.msgs.geometry import PoseStamped
 from core.msgs.semantic import SceneGraph
 from core.stream import In, Out
 

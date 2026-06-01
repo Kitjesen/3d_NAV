@@ -13,14 +13,22 @@ from dataclasses import dataclass, field
 import numpy as np
 
 # Re-export all shared data types and constants from core.msgs.scene
-from core.msgs.scene import (
+from core.msgs.scene import (  # noqa: F401
     BELIEF_FRESHNESS_TAU,
     BELIEF_NEG_EVIDENCE_WEIGHT,
     BELIEF_SIGMA_BASE,
     BELIEF_SIGMA_DEPTH_COEFF,
+    REGION_CLUSTER_RADIUS,
+    RELATION_NEAR_THRESHOLD,
     SAFETY_PRIOR_ALPHA_SCALE,
     SAFETY_THRESHOLDS_INTERACTION,
     SAFETY_THRESHOLDS_NAVIGATION,
+    BeliefMessage,
+    FloorNode,
+    PhantomNode,
+    RoomNode,
+    RoomTypePosterior,
+    ViewNode,
 )
 
 

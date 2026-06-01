@@ -9,10 +9,9 @@ TODO: Replace time.sleep with threading.Event for watchdog detection
 
 import os
 import sys
-import threading
 import time
 import unittest
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 
 from core.blueprint import Blueprint
 from core.native_module import NativeModule, NativeModuleConfig

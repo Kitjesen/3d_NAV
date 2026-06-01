@@ -9,7 +9,6 @@ import json
 import os
 import tempfile
 
-import pytest
 
 from semantic.planner.tagged_locations import TaggedLocationStore
 

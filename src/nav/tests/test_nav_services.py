@@ -19,17 +19,16 @@ import math
 import os
 import shutil
 import tempfile
-import threading
 import time
 import unittest
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from core.msgs.geometry import Pose, Twist, Vector3
+from core.msgs.geometry import Pose
 from core.msgs.nav import Odometry
 from core.msgs.sensor import Image, ImageFormat, PointCloud2
 
@@ -190,7 +189,7 @@ class TestMapManagerModule(unittest.TestCase):
         self.assertFalse(resp["success"])
 
     def test_delete_active_clears_symlink(self):
-        d = self._write_valid_saved_map_artifacts("todel")
+        self._write_valid_saved_map_artifacts("todel")  # side effect: creates map dir
         self._cmd({"action": "set_active", "name": "todel"})
         resp = self._cmd({"action": "delete", "name": "todel"})
         self.assertTrue(resp["success"])

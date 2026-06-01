@@ -3,7 +3,6 @@
 import math
 
 import numpy as np
-import pytest
 
 from core.msgs.geometry import (
     Pose,

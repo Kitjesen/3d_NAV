@@ -3,12 +3,11 @@
 不需要 gRPC/brainstem — 纯端口测试。
 """
 
-import math
 import time
 import unittest
 
-from core import In, Module, Out, autoconnect
-from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
+from core import Module, Out, autoconnect
+from core.msgs.geometry import Pose, Twist, Vector3
 from core.msgs.nav import Odometry
 from drivers.real.thunder.han_dog_module import ThunderDriver
 

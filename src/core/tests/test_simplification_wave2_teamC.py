@@ -5,7 +5,6 @@ W2-3: BPUDetector._generate_masks — proper proto decoding with missing-proto g
 """
 from __future__ import annotations
 
-import logging
 import types
 import unittest
 from unittest.mock import MagicMock, patch

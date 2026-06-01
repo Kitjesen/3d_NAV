@@ -35,7 +35,6 @@ class TestAdaptivePurePursuit(unittest.TestCase):
 
     def test_variable_lookahead_scales_with_speed(self):
         """Lookahead grows with speed and is clamped to [L_min, L_max]."""
-        from base_autonomy.modules.path_follower_module import PathFollowerModule
 
         m = self._make_module()
         k_v = m._pp_k_v
@@ -57,7 +56,6 @@ class TestAdaptivePurePursuit(unittest.TestCase):
 
     def test_acceleration_ramp_limits_delta_v(self):
         """v_cmd change per step must not exceed a_max * dt."""
-        from base_autonomy.modules.path_follower_module import PathFollowerModule
 
         m = self._make_module(max_speed=1.0)
         a_max = m._pp_a_max  # 1.0 m/s^2

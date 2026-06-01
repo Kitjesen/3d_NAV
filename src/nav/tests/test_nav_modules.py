@@ -19,13 +19,12 @@ import pytest
 
 _scipy_available = True
 try:
-    import scipy.ndimage
+    import scipy.ndimage  # noqa: F401 -- availability check for skipUnless
 except ImportError:
     _scipy_available = False
 
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import OccupancyGrid, Odometry, Path
-from core.msgs.semantic import ExecutionEval, SafetyState
 from core.msgs.sensor import PointCloud2
 from core.runtime_interface import TOPICS, topic_default_frame_id
 

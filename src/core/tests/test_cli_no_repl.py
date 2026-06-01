@@ -892,11 +892,11 @@ def test_runtime_audit_writes_json_out(monkeypatch, tmp_path, capsys):
         in payload["checks"]["source_frame_contracts"]["checked_files"]
     )
     assert (
-        "src/semantic/planner/semantic_planner/semantic_planner_module.py"
+        "src/semantic/planner/semantic_planner_module.py"
         in payload["checks"]["source_frame_contracts"]["checked_files"]
     )
     assert (
-        "src/semantic/perception/semantic_perception/perception_module.py"
+        "src/semantic/perception/perception_module.py"
         in payload["checks"]["source_frame_contracts"]["checked_files"]
     )
     assert (

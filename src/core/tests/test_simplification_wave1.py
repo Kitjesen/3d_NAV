@@ -8,13 +8,11 @@ to the old "looks-fine-but-wrong" state.
 from __future__ import annotations
 
 import asyncio
-import math
 import unittest
 from unittest import mock
 
 import numpy as np
 
-from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 
 # ---------------------------------------------------------------------------
 # W1-1  LocalPlannerModule — no silent fallback to straight-line paths
@@ -146,7 +144,7 @@ class TestW1NavigationDefaultSafe(unittest.TestCase):
 
 _scipy_available = True
 try:
-    import scipy.ndimage
+    import scipy.ndimage  # noqa: F401 -- availability check for skipUnless
 except ImportError:
     _scipy_available = False
 

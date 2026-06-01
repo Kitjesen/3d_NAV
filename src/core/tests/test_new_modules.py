@@ -12,10 +12,8 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from core import In, Module, Out
-from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
-from core.msgs.nav import Odometry, Path
-from core.msgs.semantic import SafetyState, SceneGraph
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
+from core.msgs.nav import Odometry
 
 # ============================================================================
 # NavigationModule
@@ -315,7 +313,11 @@ class TestNavigationModule(unittest.TestCase):
             {"x": 3.0, "y": 0.0, "z": 0.0},
         ])
         m._plan = MagicMock()
-        m._execute_recovery_motion = MagicMock()
+        # Mock _execute_recovery_motion to call _finish_recovery_motion directly
+        # (which publishes the event), instead of starting a long-running thread.
+        m._execute_recovery_motion = MagicMock(
+            side_effect=lambda post_action: m._finish_recovery_motion(post_action, "stuck")
+        )
         m._tracker.update = MagicMock(
             return_value=TrackerStatus(0, 3, event=EV_STUCK)
         )
@@ -1054,7 +1056,7 @@ class TestMCPServerModule(unittest.TestCase):
         # Built-in MCP tools + navigation skills when NavigationModule is present
         self.assertGreaterEqual(len(m._tool_list), 12)
         names = [t["name"] for t in m._tool_list]
-        self.assertIn("stop", names)
+        self.assertIn("emergency_stop", names)
         self.assertIn("navigate_to", names)
         self.assertIn("get_health", names)
         self.assertIn("get_config", names)
@@ -1064,8 +1066,8 @@ class TestMCPServerModule(unittest.TestCase):
         m = self._make()
         stops = []
         m.stop_cmd._add_callback(stops.append)
-        result = json.loads(m.stop())
-        self.assertEqual(result["status"], "stopped")
+        result = json.loads(m.emergency_stop())
+        self.assertEqual(result["status"], "emergency_stopped")
         self.assertEqual(stops, [2])
 
     def test_get_position_no_odom(self):
@@ -1244,7 +1246,6 @@ class TestSLAMModule(unittest.TestCase):
 
     def test_backends_registered(self):
         from core.registry import list_plugins
-        from slam.slam_module import SLAMModule  # trigger @register
         backends = list_plugins("slam")
         self.assertIn("fastlio2", backends)
         self.assertIn("pointlio", backends)
@@ -1618,7 +1619,6 @@ class TestSemanticPlannerModule(unittest.TestCase):
 
     def test_scene_graph_stored_as_object(self):
         """_on_scene_graph must persist the SceneGraph object, not just JSON."""
-        from core.msgs.geometry import Vector3
         from core.msgs.semantic import Detection3D, SceneGraph
         m = self._make()
         sg = SceneGraph(objects=[Detection3D(label="chair", confidence=0.9)])
@@ -1670,7 +1670,6 @@ class TestMissionLoggerModule(unittest.TestCase):
         self.assertEqual(s["total"], 0)
 
     def test_mission_lifecycle_saved(self):
-        import os
         import tempfile
         tmp = tempfile.mkdtemp(prefix="lingtu_test_missions_")
         m = self._make(tmp_path=tmp)
@@ -1679,7 +1678,7 @@ class TestMissionLoggerModule(unittest.TestCase):
         self.assertIsNotNone(m._current)
         self.assertEqual(m._current["goal"], "kitchen")
 
-        from core.msgs.geometry import Pose, Quaternion, Vector3
+        from core.msgs.geometry import Pose, Vector3
         def _odom(x, y):
             return Odometry(pose=Pose(position=Vector3(x=x, y=y, z=0.0)))
         m._on_odom(_odom(1.0, 2.0))

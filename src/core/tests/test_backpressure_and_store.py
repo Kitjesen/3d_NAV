@@ -5,13 +5,10 @@
 """
 from __future__ import annotations
 
-import tempfile
 import threading
 import time
-from pathlib import Path
 
 import numpy as np
-import pytest
 
 from core.stream import In, Out
 

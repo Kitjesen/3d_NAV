@@ -100,9 +100,9 @@ def test_32_vector_memory_numpy():
     # Store a snapshot with labels directly (bypass throttle)
     mod._store_snapshot(["backpack", "bench", "tree"])
 
-    # Verify numpy entries > 0
-    n_entries = len(mod._np_embeddings)
-    assert n_entries > 0, f"Expected numpy entries > 0, got {n_entries}"
+    # Verify entries were stored (either numpy fallback or ChromaDB)
+    n_entries = mod._entry_count()
+    assert n_entries > 0, f"Expected entries > 0, got {n_entries}"
 
     # Verify query works and returns correct position
     result = mod._query("backpack")

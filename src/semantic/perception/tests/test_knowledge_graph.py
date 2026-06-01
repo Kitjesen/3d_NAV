@@ -16,7 +16,6 @@ import unittest
 from semantic.perception.knowledge_graph import (
     AffordanceType,
     IndustrialKnowledgeGraph,
-    KGRelation,
     ObjectConcept,
     RelationType,
     SafetyConstraint,

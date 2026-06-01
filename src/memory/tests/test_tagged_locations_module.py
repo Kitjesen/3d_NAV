@@ -10,11 +10,8 @@ import json
 import os
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
 
-from core.msgs.geometry import Vector3, Quaternion
 from core.msgs.nav import Odometry, Pose
-from core.msgs.semantic import SceneGraph
 
 # ---------------------------------------------------------------------------
 # Helpers

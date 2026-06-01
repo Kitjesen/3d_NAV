@@ -643,7 +643,9 @@ class SemanticPlannerModule(Module, layer=4):
             return False
 
         try:
-            stats = stats_fn()
+            raw = stats_fn()
+            # get_memory_stats is a @skill method returning JSON string
+            stats = _json.loads(raw) if isinstance(raw, str) else raw
         except Exception as exc:
             logger.debug("Vector memory stats unavailable: %s", exc)
             return False
@@ -660,7 +662,9 @@ class SemanticPlannerModule(Module, layer=4):
         if self._vector_memory is None:
             return False
         try:
-            result = self._vector_memory.query_location(instruction)
+            raw = self._vector_memory.query_location(instruction)
+            # query_location is a @skill method returning JSON string
+            result = _json.loads(raw) if isinstance(raw, str) else raw
             if not result.get("found"):
                 return False
             if not self._vector_memory_allows_navigation(result):
@@ -859,7 +863,8 @@ class SemanticPlannerModule(Module, layer=4):
     def _tool_query_memory(self, text: str) -> str:
         if self._vector_memory is None:
             return "Vector memory not available"
-        result = self._vector_memory.query_location(text)
+        raw = self._vector_memory.query_location(text)
+        result = _json.loads(raw) if isinstance(raw, str) else raw
         if not result.get("found"):
             return f"No memory match for '{text}'"
         if not self._vector_memory_allows_navigation(result):

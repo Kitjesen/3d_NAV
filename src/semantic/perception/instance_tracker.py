@@ -33,8 +33,6 @@ import numpy as np
 
 from core.runtime_interface import map_frame_id
 from core.utils.sanitize import safe_json_dump, safe_json_dumps, sanitize_position
-from memory.knowledge.belief.propagation import BeliefPropagationMixin
-
 from .projection import Detection3D
 from .room_manager import RoomManagerMixin
 
@@ -57,6 +55,34 @@ from .tracked_objects import (  # noqa: E402
 )
 
 logger = logging.getLogger(__name__)
+
+
+class BeliefPropagationMixin:
+    """Lazy proxy for memory.knowledge.belief.propagation.BeliefPropagationMixin.
+
+    Uses __getattr__ to defer importing the real mixin until a method is
+    first accessed.  This avoids eager cross-package (semantic -> memory)
+    imports at module load time.
+    """
+
+    _real_cls = None
+
+    @classmethod
+    def _resolve(cls):
+        if cls._real_cls is None:
+            from memory.knowledge.belief.propagation import (
+                BeliefPropagationMixin as _Real,
+            )
+            cls._real_cls = _Real
+        return cls._real_cls
+
+    def __getattr__(self, name):
+        real = self._resolve()
+        attr = getattr(real, name)
+        if callable(attr):
+            import functools
+            return functools.partial(attr, self)
+        return attr
 
 
 class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):

@@ -21,14 +21,14 @@ import pytest
 
 _scipy_available = True
 try:
-    import scipy.ndimage
+    import scipy.ndimage  # noqa: F401 -- availability check for skipUnless
 except ImportError:
     _scipy_available = False
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 _SCENE = os.path.normpath(os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "sim", "worlds", "building_scene.xml"
+    os.path.dirname(__file__), "..", "..", "..", "sim", "worlds", "mujoco", "building_scene.xml"
 ))
 
 

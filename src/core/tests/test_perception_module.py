@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from core import Blueprint, In, Module, Out, autoconnect
+from core import Blueprint, In, Module
 from core.msgs.geometry import Pose, Quaternion, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.semantic import Detection3D as CoreDetection3D

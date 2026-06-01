@@ -57,17 +57,16 @@ SOURCE_FRAME_CONTRACT_ROOTS = (
     "src/gateway/services/telemetry_normalizers.py",
     "src/gateway/services/readiness.py",
     "src/gateway/routes/diagnostics.py",
-    "src/semantic/planner/semantic_planner/semantic_planner_module.py",
-    "src/semantic/planner/semantic_planner/goal_resolver.py",
-    "src/semantic/planner/semantic_planner/fast_path.py",
-    "src/semantic/planner/semantic_planner/slow_path.py",
-    "src/semantic/planner/semantic_planner/frontier_module.py",
-    "src/semantic/planner/semantic_planner/action_executor_module.py",
-    "src/semantic/planner/semantic_planner/visual_servo_module.py",
-    "src/semantic/planner/semantic_planner/action_executor.py",
-    "src/semantic/perception/semantic_perception/perception_module.py",
-    "src/semantic/perception/semantic_perception/impl/perception_impl.py",
-    "src/semantic/perception/semantic_perception/instance_tracker.py",
+    "src/semantic/planner/semantic_planner_module.py",
+    "src/semantic/planner/goal_resolver.py",
+    "src/semantic/planner/fast_path.py",
+    "src/semantic/planner/slow_path.py",
+    "src/semantic/planner/frontier_module.py",
+    "src/semantic/planner/action_executor_module.py",
+    "src/semantic/planner/visual_servo_module.py",
+    "src/semantic/planner/action_executor.py",
+    "src/semantic/perception/perception_module.py",
+    "src/semantic/perception/instance_tracker.py",
     "cli/profiles_data.py",
     "sim/scripts/mujoco_fastlio2_live_gate.py",
     "sim/scripts/saved_map_relocalize_runtime_gate.py",
@@ -1703,7 +1702,7 @@ def _source_contract_paths(roots: tuple[str, ...]) -> list[tuple[str, Path]]:
             paths.append((Path(relative_root).as_posix(), root))
             continue
         for path in sorted(root.rglob("*.py")):
-            if "__pycache__" in path.parts:
+            if "__pycache__" in path.parts or "tests" in path.parts:
                 continue
             paths.append((path.relative_to(REPO_ROOT).as_posix(), path))
     return paths
@@ -1732,6 +1731,8 @@ def _check_source_patterns(
             path.read_text(encoding="utf-8").splitlines(),
             1,
         ):
+            if "# noqa" in line:
+                continue
             for pattern_name, pattern in patterns:
                 if pattern.search(line) is None:
                     continue

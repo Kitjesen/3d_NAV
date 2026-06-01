@@ -12,13 +12,10 @@ import math
 import unittest
 
 import numpy as np
-import pytest
 
 from semantic.planner.frontier_scorer import (
     FREE_CELL,
-    OCCUPIED_CELL,
     UNKNOWN_CELL,
-    Frontier,
     FrontierScorer,
 )
 from semantic.planner.frontier_types import (

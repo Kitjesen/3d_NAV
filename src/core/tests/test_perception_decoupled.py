@@ -7,13 +7,13 @@ No GPU required — uses mock backends.
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from core import Blueprint, In, Module, Out, autoconnect
+from core import Blueprint, In, Module, Out
 from core.registry import register
 from semantic.perception.detector_module import (
     DetectionResult,
@@ -28,7 +28,7 @@ from semantic.perception.encoder_module import (
 # Mock backends (no GPU needed) — imported from shared test utilities
 # ---------------------------------------------------------------------------
 
-from core.tests._test_utils import (_MockDetection, _MockDetectorBackend,
+from core.tests._test_utils import (_MockDetectorBackend,
                                     _MockEncoderBackend)
 
 

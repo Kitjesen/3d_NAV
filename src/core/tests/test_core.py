@@ -15,11 +15,10 @@
 
 import json
 import logging
-import time
 
 import pytest
 
-from core.blueprint import Blueprint, SystemHandle, autoconnect
+from core.blueprint import Blueprint, autoconnect
 from core.module import Module, rpc, skill
 from core.msgs.geometry import PoseStamped, Vector3
 from core.msgs.semantic import Detection3D, GoalResult, SceneGraph

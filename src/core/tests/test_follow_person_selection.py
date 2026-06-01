@@ -10,7 +10,6 @@ Covers the "person in red" selection path added across:
 import asyncio
 
 import numpy as np
-import pytest
 
 from semantic.planner.person_tracker import PersonTracker
 from semantic.planner.semantic_planner_module import SemanticPlannerModule

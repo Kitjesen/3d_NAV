@@ -26,7 +26,7 @@ def T(name, ok):
     results.append((name, ok))
     print(f'  {"PASS" if ok else "FAIL"} {name}')
 
-from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
+from core.msgs.geometry import Pose, Vector3
 from core.msgs.nav import OccupancyGrid, Odometry
 from core.msgs.semantic import Detection3D, Region, SceneGraph
 from core.msgs.sensor import PointCloud2
@@ -230,7 +230,7 @@ vmem2._robot_xy = (20, 10)
 vmem2._store_snapshot(["fire extinguisher", "hose"])
 prev = nav.goal_pose.msg_count
 planner.instruction._deliver("find fire extinguisher")
-time.sleep(0.1)
+time.sleep(0.5)  # longer wait for vector memory + goal resolve chain
 T(
     "27.VectorMem->Nav",
     nav.goal_pose.msg_count - prev > 0

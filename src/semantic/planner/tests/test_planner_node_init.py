@@ -30,12 +30,11 @@ for _p in [_repo, _src,
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import pytest
 
 from core.module import Module, skill
-from core.msgs.geometry import PoseStamped, Vector3
+from core.msgs.geometry import Vector3
 from core.msgs.nav import Odometry
-from core.msgs.semantic import Detection3D, Region, SceneGraph
+from core.msgs.semantic import Detection3D, SceneGraph
 from core.stream import In, Out
 from semantic.planner.agent_loop import AGENT_TOOLS, AgentLoop
 from semantic.planner.semantic_planner_module import SemanticPlannerModule

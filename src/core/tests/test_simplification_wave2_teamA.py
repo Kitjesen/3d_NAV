@@ -109,7 +109,7 @@ class TestLocalPlannerGridParams(unittest.TestCase):
 
 _scipy_available = True
 try:
-    import scipy.ndimage
+    import scipy.ndimage  # noqa: F401 -- availability check for skipUnless
 except ImportError:
     _scipy_available = False
 
@@ -212,7 +212,6 @@ class TestSlamBridgeDofMaskPreference(unittest.TestCase):
         # Construct without calling Module.__init__ wiring
         obj = object.__new__(SlamBridgeModule)
         # Populate just what _fuse_odometry touches
-        import numpy as np
         obj._visual_odom_fusion = True
         obj._degen_level = "SEVERE"        # triggers fusion path
         obj._last_visual_odom = None        # will be set per-test
