@@ -23,4 +23,4 @@ def build_sim_robot_state() -> dict[str, Any]:
     }
 
 
-from .stub import StubConnection
+from .stub import StubConnection  # noqa: E402

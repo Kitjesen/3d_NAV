@@ -1,1 +1,1 @@
-
+"""Perception usage examples."""

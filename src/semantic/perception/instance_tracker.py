@@ -41,7 +41,7 @@ from .room_manager import RoomManagerMixin
 INSTANCE_TRACKER_MAP_FRAME_ID = map_frame_id()
 
 # ── 从子模块导入所有公开符号 (向后兼容: 外部 from .instance_tracker import X 继续有效) ──
-from .tracked_objects import (
+from .tracked_objects import (  # noqa: E402
     REGION_CLUSTER_RADIUS,
     RELATION_NEAR_THRESHOLD,
     SAFETY_PRIOR_ALPHA_SCALE,

@@ -1,1 +1,1 @@
-# gateway: HTTP/WS/SSE API gateway and MCP server modules
+"""Gateway: HTTP/WS/SSE API gateway and MCP server modules."""

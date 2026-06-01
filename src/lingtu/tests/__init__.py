@@ -1,1 +1,1 @@
-# LingTu import-ready package contract tests
+"""LingTu import-ready package contract tests."""

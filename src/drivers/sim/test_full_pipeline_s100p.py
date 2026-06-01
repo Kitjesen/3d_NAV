@@ -46,7 +46,7 @@ def _mujoco_version(module) -> str:
 
 
 _remove_script_dir_from_syspath()
-import mujoco
+import mujoco  # noqa: E402
 
 _prepend_path(SRC_ROOT)
 _prepend_path(REPO_ROOT)
@@ -57,7 +57,7 @@ print("Step 1: Component check")
 print("=" * 60)
 
 print("  nanobind...", end=" ")
-import _nav_core
+import _nav_core  # noqa: E402
 
 print("OK (%d functions)" % len([x for x in dir(_nav_core) if not x.startswith("_")]))
 
@@ -65,11 +65,11 @@ print("  MuJoCo...", end=" ")
 print("OK (v%s)" % _mujoco_version(mujoco))
 
 print("  sim engine...", end=" ")
-from sim.engine.core.engine import VelocityCommand
-from sim.engine.core.robot import RobotConfig
-from sim.engine.core.sensor import LidarConfig
-from sim.engine.core.world import ObstacleConfig, WorldConfig
-from sim.engine.mujoco.engine import MuJoCoEngine
+from sim.engine.core.engine import VelocityCommand  # noqa: E402
+from sim.engine.core.robot import RobotConfig  # noqa: E402
+from sim.engine.core.sensor import LidarConfig  # noqa: E402
+from sim.engine.core.world import ObstacleConfig, WorldConfig  # noqa: E402
+from sim.engine.mujoco.engine import MuJoCoEngine  # noqa: E402
 
 print("OK")
 
@@ -161,16 +161,16 @@ print("=" * 60)
 print("Step 3: Full MuJoCo navigation (cmu_py + nav_core + A*)")
 print("=" * 60)
 
-from base_autonomy.modules import LocalPlannerModule, PathFollowerModule, TerrainModule
-from core.blueprint import Blueprint
-from core.module import Module
-from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
-from core.msgs.nav import Odometry
-from core.msgs.sensor import PointCloud2
-from core.runtime_interface import runtime_fixed_path_frame_ids
-from core.stream import In, Out
-from drivers.sim.mujoco_driver_module import MujocoDriverModule
-from nav.navigation_module import NavigationModule
+from base_autonomy.modules import LocalPlannerModule, PathFollowerModule, TerrainModule  # noqa: E402
+from core.blueprint import Blueprint  # noqa: E402
+from core.module import Module  # noqa: E402
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3  # noqa: E402
+from core.msgs.nav import Odometry  # noqa: E402
+from core.msgs.sensor import PointCloud2  # noqa: E402
+from core.runtime_interface import runtime_fixed_path_frame_ids  # noqa: E402
+from core.stream import In, Out  # noqa: E402
+from drivers.sim.mujoco_driver_module import MujocoDriverModule  # noqa: E402
+from nav.navigation_module import NavigationModule  # noqa: E402
 
 FULL_PIPELINE_GOAL_FRAME_ID = runtime_fixed_path_frame_ids()[0]
 

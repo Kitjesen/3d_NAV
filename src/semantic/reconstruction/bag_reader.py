@@ -544,8 +544,10 @@ def _quat_to_R_np(qx, qy, qz, qw) -> np.ndarray:
 
 def _angle_diff(a: float, b: float) -> float:
     d = a - b
-    while d >  math.pi: d -= 2 * math.pi
-    while d < -math.pi: d += 2 * math.pi
+    while d > math.pi:
+        d -= 2 * math.pi
+    while d < -math.pi:
+        d += 2 * math.pi
     return d
 
 

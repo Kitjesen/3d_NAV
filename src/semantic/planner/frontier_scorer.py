@@ -74,7 +74,7 @@ def _load_frontier_weights() -> None:
     except Exception as exc:
         logger.warning("Failed to load frontier_scorer weights from config: %s", exc)
 
-from .frontier_types import (
+from .frontier_types import (  # noqa: E402
     # 辅助常量
     FREE_CELL,
     UNKNOWN_CELL,

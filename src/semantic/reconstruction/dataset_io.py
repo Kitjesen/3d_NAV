@@ -202,11 +202,15 @@ def _load_colmap(base: Path) -> list[Keyframe]:
             # SIMPLE_RADIAL: f, cx, cy, k
             # PINHOLE:       fx, fy, cx, cy
             if model == "SIMPLE_RADIAL" and len(params) >= 3:
-                fx = fy = params[0]; cx = params[1]; cy = params[2]
+                fx = fy = params[0]
+                cx = params[1]
+                cy = params[2]
             elif model == "PINHOLE" and len(params) >= 4:
                 fx, fy, cx, cy = params[0], params[1], params[2], params[3]
             else:
-                fx = fy = width * 0.9; cx = width / 2; cy = height / 2
+                fx = fy = width * 0.9
+                cx = width / 2
+                cy = height / 2
             cameras[cam_id] = {"fx": fx, "fy": fy, "cx": cx, "cy": cy,
                                 "w": width, "h": height}
 

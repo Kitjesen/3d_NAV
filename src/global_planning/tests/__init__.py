@@ -1,1 +1,1 @@
-# Global planning package contract tests
+"""Global planning package contract tests."""

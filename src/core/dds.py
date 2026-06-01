@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # ── ROS2 message types as cyclonedds IDL structs ────────────────────────────
 # typename must match ROS2 DDS type name exactly for subscription to work.
 
-import os as _os
+import os as _os  # noqa: E402
 
 # Kill switch: LINGTU_DISABLE_DDS=1 forces the rclpy fallback everywhere.
 # Use this when cyclonedds segfaults during Topic() init — typically a

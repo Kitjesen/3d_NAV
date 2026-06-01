@@ -29,7 +29,7 @@ SRC_DIR = SCRIPT_DIR.parents[2] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from core.runtime_interface import FRAMES, TOPICS
+from core.runtime_interface import FRAMES, TOPICS  # noqa: E402
 
 ROBOT_XML = SIM_DIR / "robots" / "nova_dog" / "robot_with_camera.xml"
 POLICY_ONNX = SIM_DIR / "robots" / "nova_dog" / "policy.onnx"

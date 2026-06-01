@@ -68,10 +68,10 @@ def skill(fn):
     return fn
 
 
-import inspect as _inspect
-import json as _json
-import types as _types
-from dataclasses import dataclass as _dataclass
+import inspect as _inspect  # noqa: E402
+import json as _json  # noqa: E402
+import types as _types  # noqa: E402
+from dataclasses import dataclass as _dataclass  # noqa: E402
 
 
 @_dataclass

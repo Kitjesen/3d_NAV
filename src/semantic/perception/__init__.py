@@ -1,5 +1,4 @@
-# semantic_perception — VLN 语义感知 ROS2 包
-# 模块归属详见同目录 MODULES.md
+"""VLN semantic perception package. See MODULES.md for full module descriptions."""
 
 # --- 根节点 ---
 # perception_node.py        ROS2 主节点，驱动完整感知流水线

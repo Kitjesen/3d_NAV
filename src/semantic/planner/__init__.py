@@ -1,5 +1,4 @@
-# semantic_planner — semantic planning and LLM reasoning package
-# See MODULES.md for full module descriptions.
+"""Semantic planning and LLM reasoning package. See MODULES.md for full module descriptions."""
 
 # --- Core Module ---
 # semantic_planner_module.py  SemanticPlannerModule (Layer 4)

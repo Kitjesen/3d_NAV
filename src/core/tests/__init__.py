@@ -1,1 +1,1 @@
-# Core framework unit tests
+"""Core framework unit tests."""

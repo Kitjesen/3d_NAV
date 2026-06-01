@@ -1,1 +1,1 @@
-# global_planning: A* and PCT global planners
+"""Global planning: A* and PCT global planners."""

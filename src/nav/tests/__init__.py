@@ -1,1 +1,1 @@
-
+"""Navigation package tests."""

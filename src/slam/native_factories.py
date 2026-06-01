@@ -22,10 +22,11 @@ import platform
 from core.config import RobotConfig, get_config
 from core.native_install import DDS_ENV, exe, share
 
-_IS_AARCH64 = platform.machine() in ("aarch64", "arm64")
 from core.native_module import NativeModule, NativeModuleConfig
 from core.runtime_interface import TOPICS, adapter_remappings, topic_default_frame_id
 from core.utils.livox_config import ensure_mid360_config_file
+
+_IS_AARCH64 = platform.machine() in ("aarch64", "arm64")
 
 
 GENZ_ODOM_FRAME_ID = topic_default_frame_id(TOPICS.odometry)

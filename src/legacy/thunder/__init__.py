@@ -1,2 +1,1 @@
-# Legacy ROS2 node files — replaced by Module-First equivalents.
-# Kept for reference only. Do not import.
+"""Legacy Thunder ROS2 bridge files -- kept for reference only."""

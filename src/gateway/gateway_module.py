@@ -929,7 +929,8 @@ class GatewayModule(Module, layer=6):
                     pts = []
                     for ln in f.read().decode(errors="ignore").splitlines():
                         parts = ln.split()
-                        if len(parts) < len(fields): continue
+                        if len(parts) < len(fields):
+                            continue
                         try:
                             x, y = float(parts[xi]), float(parts[yi])
                             z = float(parts[zi]) if zi >= 0 else 0.0
@@ -938,7 +939,8 @@ class GatewayModule(Module, layer=6):
                             pass
                     return np.array(pts, dtype=np.float32) if pts else None
                 if fmt == "binary":
-                    if not sizes: sizes = [4] * len(fields)
+                    if not sizes:
+                        sizes = [4] * len(fields)
                     stride = sum(sizes)
                     raw = np.frombuffer(f.read(), dtype=np.uint8)
                     n = count or (len(raw) // stride)

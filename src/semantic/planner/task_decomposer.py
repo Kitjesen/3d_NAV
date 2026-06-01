@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # TaskRulesMixin is imported lazily at class definition time (below) to avoid
 # circular imports — task_rules itself does a deferred import of the dataclasses
 # defined in this module.
-from .task_rules import TaskRulesMixin
+from .task_rules import TaskRulesMixin  # noqa: E402
 
 
 class SubGoalAction(Enum):

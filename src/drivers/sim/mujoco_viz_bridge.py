@@ -36,7 +36,7 @@ SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from core.runtime_interface import FRAMES, TOPICS
+from core.runtime_interface import FRAMES, TOPICS  # noqa: E402
 
 # ── 3D 建筑场景 ──────────────────────────────────────────────────
 SCENE_XML = """

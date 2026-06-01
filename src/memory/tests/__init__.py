@@ -1,1 +1,1 @@
-# Memory module unit tests
+"""Memory module unit tests."""

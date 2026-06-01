@@ -1,1 +1,1 @@
-# Top-level semantic package import tests
+"""Top-level semantic package import tests."""

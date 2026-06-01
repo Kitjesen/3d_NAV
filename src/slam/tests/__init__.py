@@ -1,1 +1,1 @@
-
+"""SLAM package tests."""
