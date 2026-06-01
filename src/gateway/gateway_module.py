@@ -2801,13 +2801,21 @@ class GatewayModule(Module, layer=6):
                 self._map_points = pts
             return self._generate_viewer_html(robot_pos=self._odom)
         else:
-            return "<html><body style='background:#0a0a0f;color:#fff;font-family:monospace;padding:40px'><h2>暂无地图数据</h2><p>开始建图并移动机器人后刷新。</p></body></html>"
+            return (
+                "<html><body style='background:#0a0a0f;color:#fff;"
+                "font-family:monospace;padding:40px'><h2>暂无地图数据</h2>"
+                "<p>开始建图并移动机器人后刷新。</p></body></html>"
+            )
 
     def _generate_viewer_from_pcd(self, map_name: str) -> str:
         """Load a saved PCD file and generate viewer HTML (does NOT touch live data)."""
         pcd_path = str(map_dir_for(map_name) / "map.pcd")
         if not os.path.isfile(pcd_path):
-            return f"<html><body style='background:#0a0a0f;color:#fff;font-family:monospace;padding:40px'><h2>地图不存在: {map_name}</h2><p>找不到 {pcd_path}</p></body></html>"
+            return (
+                f"<html><body style='background:#0a0a0f;color:#fff;"
+                f"font-family:monospace;padding:40px'><h2>地图不存在: {map_name}</h2>"
+                f"<p>找不到 {pcd_path}</p></body></html>"
+            )
 
         # Parse PCD binary
         with open(pcd_path, "rb") as f:

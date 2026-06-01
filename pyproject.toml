@@ -48,10 +48,7 @@ target-version = "py310"
 line-length = 120
 src = ["src", "cli"]
 exclude = [
-    "src/global_planning/pct_planner/planner/lib/3rdparty",
-    "src/global_planning/pct_planner/planner/scripts",
-    "src/global_planning/pct_planner/tomography",
-    "src/global_planning/pct_planner/launch",
+    "src/global_planning/pct_planner/**",
     "**/legacy/*",
 ]
 
@@ -95,7 +92,7 @@ known-first-party = ["core", "nav", "semantic", "drivers", "gateway", "memory", 
 "__init__.py" = ["F401"]
 "src/core/tests/*" = ["F811", "E402", "D"]
 "src/semantic/*/test*" = ["F811", "E402", "D"]
-"src/*/tests/*" = ["D"]
+"src/*/tests/*" = ["D", "E402"]
 "sim/tests/*" = ["D"]
 "scripts/*" = ["D"]
 "third_party/*" = ["D", "B", "S"]

@@ -1,3 +1,5 @@
+"""Tomogram builder — 2.5D cost map generation from point cloud data."""
+
 import numpy as np
 import time
 

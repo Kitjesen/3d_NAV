@@ -821,7 +821,7 @@ class MapManagerModule(Module, layer=6):
             return {"action": "build_occupancy_snapshot", "success": False,
                     "message": str(exc)}
 
-    # 鈹€鈹€ Occupancy algorithms 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    # ----- Occupancy algorithms -------------------------------------------------
 
     def _build_occupancy_raycasting(
         self, poses_path: Path, patches_dir: Path,
@@ -942,7 +942,7 @@ class MapManagerModule(Module, layer=6):
 
         return grid, resolution, origin
 
-    # 鈹€鈹€ Output helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    # ----- Output helpers --------------------------------------------------------
 
     def _save_occupancy_pgm_yaml(
         self, grid: np.ndarray, resolution: float, origin: np.ndarray,

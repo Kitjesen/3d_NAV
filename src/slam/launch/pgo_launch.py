@@ -1,3 +1,5 @@
+"""ROS2 launch file for PGO (Pose Graph Optimization) node."""
+
 import launch
 import launch_ros.actions
 from launch.substitutions import PathJoinSubstitution

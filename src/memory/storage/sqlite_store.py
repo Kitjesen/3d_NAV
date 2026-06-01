@@ -1,3 +1,11 @@
+"""SQLite-backed persistent storage for episodic and tagged memory data.
+
+SQLite backend adapted for the LingTu navigation system.
+No DimOS dimos.utils.data dependency. Paths can be absolute, relative, or ``:memory:``.
+"""
+
+from __future__ import annotations
+
 # Copyright 2025-2026 穹沛科技 (Qiongpei Technology)
 # Adapted from DimOS (dimensionalOS/dimos), Apache 2.0 License
 #
@@ -12,12 +20,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""SQLite 后端 — 适配 LingTu 导航系统。
-
-无 DimOS dimos.utils.data 依赖，路径直接传绝对路径、相对路径或 ":memory:"。
-"""
-
-from __future__ import annotations
 
 import pickle
 import re

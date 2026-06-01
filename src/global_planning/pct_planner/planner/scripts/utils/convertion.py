@@ -1,3 +1,5 @@
+"""Coordinate conversion utilities between grid and map frames."""
+
 import numpy as np
 
 

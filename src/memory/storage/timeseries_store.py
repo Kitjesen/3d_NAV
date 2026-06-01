@@ -1,3 +1,13 @@
+"""Time-series storage for robot telemetry and sensor history.
+
+Port from DimOS, adapted for the LingTu navigation system.
+Removed RxPy/reactivex dependency (stream, pipe_save, consume_stream).
+All other functionality retained, including seek/duration/loop iteration
+and relative-time queries.
+"""
+
+from __future__ import annotations
+
 # Copyright 2025-2026 穹沛科技 (Qiongpei Technology)
 # Adapted from DimOS (dimensionalOS/dimos), Apache 2.0 License
 #
@@ -12,13 +22,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""时序存储抽象基类 — 移植自 DimOS，适配 LingTu 导航系统。
-
-去除了 RxPy/reactivex 依赖 (stream, pipe_save, consume_stream)，
-其余功能完整保留，包括 seek/duration/loop 迭代和相对时间查询。
-"""
-
-from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod

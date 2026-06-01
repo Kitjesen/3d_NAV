@@ -1,3 +1,5 @@
+"""Open3D point cloud filtering utilities for PCT planner."""
+
 import open3d as o3d
 
 # 加载点云数据

@@ -109,6 +109,12 @@ class SpatialRelation:
 @dataclass
 class Region:
     """A clustered region in space grouping nearby objects (SG-Nav clustering unit)."""
+    region_id: int = -1
+    center: np.ndarray | None = None
+    object_ids: list = field(default_factory=list)
+    name: str = ""
+    node_ids: list[int] = field(default_factory=list)
+    region_type: str = "unknown"
 
 
 @dataclass

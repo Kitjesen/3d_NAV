@@ -1,3 +1,5 @@
+"""ROS2 launch file for ICP localizer (pre-built map relocalization)."""
+
 import launch
 import launch_ros.actions
 from launch.substitutions import PathJoinSubstitution

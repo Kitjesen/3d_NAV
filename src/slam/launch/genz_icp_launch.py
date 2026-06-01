@@ -1,3 +1,5 @@
+"""ROS2 launch file for GenZ ICP localization node."""
+
 # MIT License
 #
 # Copyright (c) 2022 Ignacio Vizzo, Tiziano Guadagnino, Benedikt Mersch, Cyrill Stachniss.

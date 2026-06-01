@@ -1,14 +1,13 @@
-# DEPRECATED: Use StubDogModule from core/blueprints/stub.py instead.
-# StubDogModule is the canonical stub driver registered as ("driver", "stub")
-# in the registry, with periodic odom publishing and health reporting.
-# This file is kept for backward compatibility.
-# TODO: Remove once all consumers are migrated.
-"""Stub connection -- no hardware, dead-reckoning odometry for CI/testing.
+"""Legacy stub driver module — kept for backward compatibility.
 
-DEPRECATED: Superseded by StubDogModule in core/blueprints/stub.py, which is
-registered in the plugin registry and used by all current profiles/blueprints.
+DEPRECATED: Use StubDogModule from core/blueprints/stub.py instead.
+StubDogModule is the canonical stub driver registered as (``driver``, ``stub``)
+in the registry, with periodic odom publishing and health reporting.
 
+This is a stub connection -- no hardware, dead-reckoning odometry for CI/testing.
 Same port interface as ThunderDriver so it drops into any blueprint.
+
+TODO: Remove once all consumers are migrated.
 """
 
 from __future__ import annotations

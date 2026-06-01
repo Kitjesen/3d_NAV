@@ -1692,7 +1692,10 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
             t = evt.get("type", "")
             if t == "object_added":
                 pos = evt.get("position", [0, 0, 0])
-                pos_dict = {"x": pos[0], "y": pos[1], "z": pos[2]} if isinstance(pos, (list, tuple)) and len(pos) >= 3 else {"x": 0.0, "y": 0.0, "z": 0.0}
+                if isinstance(pos, (list, tuple)) and len(pos) >= 3:
+                    pos_dict = {"x": pos[0], "y": pos[1], "z": pos[2]}
+                else:
+                    pos_dict = {"x": 0.0, "y": 0.0, "z": 0.0}
                 obj = self._objects.get(evt["object_id"])
                 added.append({"id": evt["object_id"], "label": evt.get("label", ""),
                                "position": pos_dict,

@@ -1,3 +1,5 @@
+"""Numba-accelerated tomography kernels for PCT planner cost computation."""
+
 from numba import jit, prange
 
 

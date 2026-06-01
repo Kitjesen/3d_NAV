@@ -1,3 +1,5 @@
+"""ROS visualization utilities for the PCT planner (path and trajectory markers)."""
+
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Header

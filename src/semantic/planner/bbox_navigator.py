@@ -1,4 +1,17 @@
-# Adapted from DimOS DetectionNavigation, Apache 2.0 License
+"""BBox-based visual servoing — PD tracking of detected objects.
+
+Adapted from DimOS DetectionNavigation (Apache 2.0 License).
+
+Pipeline:
+  1. Receive target bbox [x1,y1,x2,y2] from VLM or detector
+  2. bbox center + depth map -> 3D world coordinates
+  3. PD controller: angle error -> angular_z, distance error -> linear_x
+  4. Continuous tracking: update bbox per frame -> update 3D -> update cmd_vel
+  5. Arrival/loss determination
+
+No DimOS framework dependency. Pure Python + numpy. Output TwistStamped-compatible dict.
+"""
+
 # Original: dimos/navigation/visual_servoing/detection_navigation.py
 # Original: dimos/navigation/bbox_navigation.py
 # Copyright 2025-2026 Dimensional Inc.
@@ -14,21 +27,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-"""
-BBox 视觉伺服导航 — 看到目标就追
-
-借鉴 DimOS BBoxNavigationModule + DetectionNavigation
-
-链路:
-  1. 收到目标 bbox [x1,y1,x2,y2] (来自 VLM 或检测器)
-  2. bbox 中心 + 深度图 → 3D 世界坐标
-  3. PD 控制器: 角度误差 → angular_z, 距离误差 → linear_x
-  4. 持续跟踪: 每帧更新 bbox → 更新 3D → 更新 cmd_vel
-  5. 到达/丢失判定
-
-不依赖 DimOS 框架，纯 Python + numpy，输出 TwistStamped 兼容 dict。
-"""
 
 import json
 import logging

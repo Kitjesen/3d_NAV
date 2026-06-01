@@ -1,3 +1,5 @@
+"""Python wrapper for the C++ PCT global planner backend."""
+
 import os
 import sys
 import pickle

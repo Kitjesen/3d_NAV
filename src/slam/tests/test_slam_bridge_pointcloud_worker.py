@@ -33,7 +33,7 @@ def _dds_pointcloud_msg():
 
 
 def _odom_msg():
-    vec = lambda x=0.0, y=0.0, z=0.0: SimpleNamespace(x=x, y=y, z=z)
+    def vec(x=0.0, y=0.0, z=0.0): return SimpleNamespace(x=x, y=y, z=z)
     quat = SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)
     pose = SimpleNamespace(position=vec(1.0, 2.0, 0.0), orientation=quat)
     twist = SimpleNamespace(linear=vec(), angular=vec())
